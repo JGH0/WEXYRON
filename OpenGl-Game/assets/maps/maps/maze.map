@@ -1,0 +1,31 @@
+# Maze Map
+name MazeMap
+dimensions 30.0 5.0 30.0
+
+# Outer walls
+block -15.0 0.0 -15.0 30.0 3.0 1.0 1 1 true
+block -15.0 0.0 15.0 30.0 3.0 1.0 1 1 true
+block -15.0 0.0 -15.0 1.0 3.0 30.0 1 1 true
+block 15.0 0.0 -15.0 1.0 3.0 30.0 1 1 true
+
+# Inner maze walls
+block -10.0 0.0 -10.0 10.0 3.0 1.0 1 1 true
+block 0.0 0.0 -10.0 10.0 3.0 1.0 1 1 true
+block -10.0 0.0 0.0 1.0 3.0 10.0 1 1 true
+block 10.0 0.0 0.0 1.0 3.0 10.0 1 1 true
+
+# Additional maze blocks
+block -5.0 0.0 -5.0 5.0 3.0 1.0 2 2 true
+block 5.0 0.0 -5.0 5.0 3.0 1.0 2 2 true
+block -5.0 0.0 5.0 5.0 3.0 1.0 2 2 true
+block 5.0 0.0 5.0 5.0 3.0 1.0 2 2 true
+
+# Floor
+block 0.0 -1.0 0.0 30.0 0.2 30.0 0 0 true
+
+# Decorative elements
+block 0.0 0.5 0.0 1.0 1.0 1.0 3 3 false
+block -12.0 0.3 -12.0 0.6 0.6 0.6 4 4 false
+block 12.0 0.3 -12.0 0.6 0.6 0.6 4 4 false
+block -12.0 0.3 12.0 0.6 0.6 0.6 4 4 false
+block 12.0 0.3 12.0 0.6 0.6 0.6 4 4 false

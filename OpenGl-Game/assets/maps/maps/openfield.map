@@ -1,0 +1,28 @@
+# Open Field Map
+name OpenField
+dimensions 50.0 5.0 50.0
+
+# Large floor
+block 0.0 -1.0 0.0 50.0 0.2 50.0 0 0 true
+
+# Scattered obstacles
+block -10.0 0.0 -10.0 2.0 3.0 2.0 1 1 true
+block 10.0 0.0 -10.0 2.0 3.0 2.0 1 1 true
+block -10.0 0.0 10.0 2.0 3.0 2.0 1 1 true
+block 10.0 0.0 10.0 2.0 3.0 2.0 1 1 true
+
+# Central structure
+block 0.0 0.0 0.0 4.0 4.0 4.0 2 2 true
+block 0.0 2.0 0.0 2.0 2.0 2.0 3 3 false
+
+# Decorative elements
+block -20.0 0.3 0.0 1.0 0.6 1.0 4 4 false
+block 20.0 0.3 0.0 1.0 0.6 1.0 4 4 false
+block 0.0 0.3 -20.0 1.0 0.6 1.0 4 4 false
+block 0.0 0.3 20.0 1.0 0.6 1.0 4 4 false
+
+# Small walls
+block -25.0 0.0 -25.0 50.0 1.0 1.0 1 1 true
+block -25.0 0.0 25.0 50.0 1.0 1.0 1 1 true
+block -25.0 0.0 -25.0 1.0 1.0 50.0 1 1 true
+block 25.0 0.0 -25.0 1.0 1.0 50.0 1 1 true

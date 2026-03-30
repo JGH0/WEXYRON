@@ -1,0 +1,39 @@
+# Sniper - Long range combat map with elevated positions
+name Sniper
+dimensions 60.0 15.0 30.0
+
+# Main valley floor - thick
+block 0.0 -2.0 0.0 60.0 2.0 30.0 0 1 0
+
+# Team 1 elevated sniper position - left side
+block -25.0 3.0 -10.0 12.0 4.0 8.0 2 1 1
+block -25.0 5.0 -10.0 8.0 0.5 6.0 3 1 1
+
+# Team 2 elevated sniper position - right side  
+block 25.0 3.0 10.0 12.0 4.0 8.0 4 1 1
+block 25.0 5.0 10.0 8.0 0.5 6.0 5 1 1
+
+# Ramps up to sniper positions
+block -18.0 1.0 -10.0 2.0 3.0 4.0 1 1 1
+block 18.0 1.0 10.0 2.0 3.0 4.0 1 1 1
+
+# Central elevated observation deck
+block 0.0 2.0 0.0 10.0 2.0 10.0 6 1 1
+
+# Long sightline blockers/cover
+block -10.0 0.0 0.0 3.0 2.0 3.0 1 1 1
+block 10.0 0.0 0.0 3.0 2.0 3.0 1 1 1
+block -10.0 0.0 -8.0 3.0 2.0 3.0 1 1 1
+block 10.0 0.0 8.0 3.0 2.0 3.0 1 1 1
+block 0.0 0.0 -12.0 3.0 2.0 3.0 1 1 1
+block 0.0 0.0 12.0 3.0 2.0 3.0 1 1 1
+
+# Mid-ground sniper nests
+block -15.0 1.0 0.0 4.0 1.0 4.0 3 1 1
+block 15.0 1.0 0.0 4.0 1.0 4.0 3 1 1
+
+# Outer walls
+block 0.0 5.0 15.0 62.0 10.0 1.0 6 1 1
+block 0.0 5.0 -15.0 62.0 10.0 1.0 6 1 1
+block 30.0 5.0 0.0 1.0 10.0 32.0 6 1 1
+block -30.0 5.0 0.0 1.0 10.0 32.0 6 1 1

@@ -1,0 +1,30 @@
+# Large Open Map
+name Large
+dimensions 40.0 10.0 40.0
+
+# Format: block x y z sx sy sz textureId blockType solid r g b
+
+# Large floor area - thick green
+block 0.0 -1.0 0.0 30.0 1.0 30.0 0 0 1 0.2 0.7 0.2
+
+# Outer walls - dark gray concrete
+block 0.0 1.0 15.0 32.0 3.0 1.0 1 1 1 0.3 0.3 0.3
+block 0.0 1.0 -15.0 32.0 3.0 1.0 1 1 1 0.3 0.3 0.3
+block 15.0 1.0 0.0 1.0 3.0 32.0 1 1 1 0.3 0.3 0.3
+block -15.0 1.0 0.0 1.0 3.0 32.0 1 1 1 0.3 0.3 0.3
+
+# Some obstacles with colors
+# Red brick towers
+block 8.0 -0.5 8.0 2.0 1.0 2.0 2 2 1 0.8 0.3 0.2
+block -8.0 -0.5 -8.0 2.0 1.0 2.0 2 2 1 0.8 0.3 0.2
+
+# Blue-gray cover blocks
+block 5.0 -0.5 -5.0 1.5 1.0 1.5 4 4 1 0.4 0.4 0.7
+block -5.0 -0.5 5.0 1.5 1.0 1.5 4 4 1 0.4 0.4 0.7
+
+# Wood/brown platforms
+block 10.0 -0.5 0.0 2.0 1.0 2.0 5 5 1 0.6 0.5 0.3
+block -10.0 -0.5 0.0 2.0 1.0 2.0 5 5 1 0.6 0.5 0.3
+
+# Cyan central platform
+block 0.0 -0.5 0.0 4.0 1.0 4.0 6 6 1 0.3 0.7 0.8

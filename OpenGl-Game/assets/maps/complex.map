@@ -1,0 +1,52 @@
+# Complex - Multi-level combat map with verticality
+name Complex
+dimensions 50.0 20.0 50.0
+
+# Lower level floor - dark
+block 0.0 -3.0 0.0 50.0 2.0 50.0 0 1 0
+
+# Upper level floor - elevated center
+block 0.0 2.0 0.0 30.0 2.0 30.0 1 1 1
+
+# Main building structure
+block 0.0 6.0 0.0 20.0 6.0 20.0 6 1 1
+
+# Side wings
+block -20.0 3.0 0.0 10.0 3.0 15.0 2 1 1
+block 20.0 3.0 0.0 10.0 3.0 15.0 4 1 1
+
+# Connecting corridors
+block -12.0 3.0 0.0 6.0 2.5 4.0 1 1 1
+block 12.0 3.0 0.0 6.0 2.5 4.0 1 1 1
+
+# Rooftop platforms
+block -10.0 8.0 -10.0 6.0 0.5 6.0 3 1 1
+block 10.0 8.0 10.0 6.0 0.5 6.0 3 1 1
+
+# Stairs/ramps between levels
+block -15.0 -0.5 15.0 3.0 2.0 2.0 5 1 1
+block 15.0 -0.5 -15.0 3.0 2.0 2.0 5 1 1
+block 0.0 0.0 15.0 3.0 2.5 2.0 5 1 1
+block 0.0 0.0 -15.0 3.0 2.5 2.0 5 1 1
+
+# Interior cover - ground floor
+block 0.0 0.0 0.0 4.0 2.0 4.0 1 1 1
+block -8.0 0.0 0.0 2.0 2.0 2.0 1 1 1
+block 8.0 0.0 0.0 2.0 2.0 2.0 1 1 1
+
+# Second floor cover
+block 0.0 5.0 0.0 3.0 2.0 3.0 1 1 1
+block -8.0 5.0 -8.0 2.0 2.0 2.0 1 1 1
+block 8.0 5.0 8.0 2.0 2.0 2.0 1 1 1
+
+# Corner pillars
+block -20.0 0.0 -20.0 3.0 6.0 3.0 2 1 1
+block 20.0 0.0 20.0 3.0 6.0 3.0 4 1 1
+block -20.0 0.0 20.0 3.0 6.0 3.0 2 1 1
+block 20.0 0.0 -20.0 3.0 6.0 3.0 4 1 1
+
+# Boundary walls
+block 0.0 8.0 25.0 52.0 16.0 1.0 6 1 1
+block 0.0 8.0 -25.0 52.0 16.0 1.0 6 1 1
+block 25.0 8.0 0.0 1.0 16.0 52.0 6 1 1
+block -25.0 8.0 0.0 1.0 16.0 52.0 6 1 1
