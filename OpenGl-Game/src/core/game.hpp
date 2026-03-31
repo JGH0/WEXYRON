@@ -19,6 +19,7 @@
 #include "../systems/physics.hpp"
 #include "../systems/input.hpp"
 #include "../systems/enemy.hpp"
+#include "../network/network.hpp"
 
 /**
  * @brief Main game class managing the application lifecycle
@@ -92,6 +93,34 @@ public:
      */
     bool shouldClose() const;
 
+    /**
+     * @brief Connect to multiplayer server
+     * @param address Server IP address (e.g., "127.0.0.1" or "192.168.1.5")
+     * @param port Server port
+     * @return true if connected successfully
+     */
+    bool connectToServer(const std::string& address, uint16_t port = 7777);
+    
+    /**
+     * @brief Disconnect from server
+     */
+    void disconnectFromServer();
+    
+    /**
+     * @brief Check if connected to multiplayer server
+     */
+    bool isConnectedToServer() const;
+    
+    /**
+     * @brief Enable/disable multiplayer mode
+     */
+    void setMultiplayerMode(bool enabled) { multiplayerMode = enabled; }
+    
+    /**
+     * @brief Check if in multiplayer mode
+     */
+    bool isMultiplayerMode() const { return multiplayerMode; }
+
 // Weapon system access
     const glm::vec3& getCameraPosition() const { return camera.Position; }
     const glm::vec3& getCameraFront() const { return camera.Front; }
@@ -140,6 +169,7 @@ private:
         PLAYING,
         SETTINGS,
         MAP_SELECTION,
+        SERVER_CONNECT,
         DEAD
     } gameState;
     
@@ -239,6 +269,28 @@ private:
     
     /// Screen damage effect
     float damageEffectTime; // Time remaining for damage screen effect
+    
+    /// Network multiplayer
+    NetworkClient* networkClient;
+    bool multiplayerMode;
+    
+    /// Remote players (for multiplayer)
+    struct RemotePlayer {
+        uint32_t id;
+        glm::vec3 position;
+        glm::vec3 velocity;
+        float yaw, pitch;
+        float health;
+        bool isDead;
+        bool active;
+    };
+    static const int MAX_REMOTE_PLAYERS = 8;
+    RemotePlayer remotePlayers[MAX_REMOTE_PLAYERS];
+    
+    /// Server connection
+    std::string serverAddress;
+    uint16_t serverPort;
+    bool enteringServerAddress;
     
     /// Death state
     bool isDead;
@@ -499,6 +551,16 @@ private:
      * @brief Process map selection input
      */
     void processMapSelectionInput();
+    
+    /**
+     * @brief Render server connection menu
+     */
+    void renderServerConnect();
+    
+    /**
+     * @brief Process server connection input
+     */
+    void processServerConnectInput();
     
     /**
      * @brief Save key bindings to file

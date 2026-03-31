@@ -194,18 +194,21 @@ void Renderer::drawTexturedCube(const glm::mat4& model, Texture* texture) {
     texturedShader->setMat4("view", glm::value_ptr(currentView));
     texturedShader->setMat4("projection", glm::value_ptr(currentProjection));
     
-    // Update vertex attributes for textured rendering
+    // Bind VAO first, then update vertex data and attributes
+    glBindVertexArray(cubeVAO);
+    
+    // Update vertex buffer data for textured rendering
     glBindBuffer(GL_ARRAY_BUFFER, cubeVBO);
     glBufferData(GL_ARRAY_BUFFER, sizeof(texturedCubeVertices), texturedCubeVertices, GL_STATIC_DRAW);
     
-    // position attribute
+    // position attribute (location 0)
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
-    // texture coord attribute
+    // texture coord attribute (location 1)
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
     glEnableVertexAttribArray(1);
     
-    glBindVertexArray(cubeVAO);
+    // Draw
     glDrawArrays(GL_TRIANGLES, 0, 36);
     glBindVertexArray(0);
     

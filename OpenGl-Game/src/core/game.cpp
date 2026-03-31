@@ -42,8 +42,15 @@ Game::Game(int width, int height)
       pistol(nullptr),
       shotgun(nullptr),
       grenade(nullptr),
-      flashbang(nullptr) {
+      flashbang(nullptr),
+      networkClient(nullptr),
+      multiplayerMode(false) {
     std::cout << "Game initialized - Player at: (" << playerPos.x << ", " << playerPos.y << ", " << playerPos.z << ")" << std::endl;
+    
+    // Initialize remote players
+    for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
+        remotePlayers[i].active = false;
+    }
     
     // Initialize key bindings
     initKeyBindings();
@@ -106,6 +113,7 @@ Game::Game(int width, int height)
 }
 
 Game::~Game() {
+    disconnectFromServer();
     if (currentMap) delete currentMap;
     glfwTerminate();
 }
@@ -145,7 +153,7 @@ void Game::processInput(float deltaTime) {
             gameState = MENU;
             menuSelection = 0;
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-        } else if (gameState == MENU || gameState == SETTINGS || gameState == MAP_SELECTION) {
+        } else if (gameState == MENU || gameState == SETTINGS || gameState == MAP_SELECTION || gameState == SERVER_CONNECT) {
             gameState = PLAYING;
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
         }
@@ -159,7 +167,7 @@ void Game::processInput(float deltaTime) {
         // Handle UP key
         if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS && !upPressed) {
             upPressed = true;
-            menuSelection = (menuSelection - 1 + 4) % 4;
+            menuSelection = (menuSelection - 1 + 5) % 5;
         } else if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_RELEASE) {
             upPressed = false;
         }
@@ -167,7 +175,7 @@ void Game::processInput(float deltaTime) {
         // Handle DOWN key
         if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS && !downPressed) {
             downPressed = true;
-            menuSelection = (menuSelection + 1) % 4;
+            menuSelection = (menuSelection + 1) % 5;
         } else if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_RELEASE) {
             downPressed = false;
         }
@@ -185,11 +193,18 @@ void Game::processInput(float deltaTime) {
                     gameState = MAP_SELECTION;
                     mapSelection = 0;
                     break;
-                case 2: // Settings
+                case 2: // Connect to Server
+                    std::cout << "ENTERING SERVER CONNECTION" << std::endl;
+                    gameState = SERVER_CONNECT;
+                    serverAddress = "127.0.0.1";
+                    serverPort = 7777;
+                    enteringServerAddress = true;
+                    break;
+                case 3: // Settings
                     gameState = SETTINGS;
                     settingsSelection = 0;
                     break;
-                case 3: // Exit
+                case 4: // Exit
                     glfwSetWindowShouldClose(window, true);
                     break;
             }
@@ -200,6 +215,8 @@ void Game::processInput(float deltaTime) {
         processSettingsInput();
     } else if (gameState == MAP_SELECTION) {
         processMapSelectionInput();
+    } else if (gameState == SERVER_CONNECT) {
+        processServerConnectInput();
     } else if (gameState == DEAD) {
         // Handle death screen input - any key to restart
         if (glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS || 
@@ -305,6 +322,35 @@ void Game::update(float deltaTime) {
         // Update player physics
         updatePlayerPhysics(deltaTime);
         
+        // Update network client
+        if (networkClient && networkClient->isConnected()) {
+            networkClient->update();
+            
+            // Send player input to server
+            float moveX = 0.0f, moveZ = 0.0f;
+            if (glfwGetKey(window, keyBindings.forward) == GLFW_PRESS) {
+                moveX += cos(glm::radians(camera.Yaw));
+                moveZ += sin(glm::radians(camera.Yaw));
+            }
+            if (glfwGetKey(window, keyBindings.backward) == GLFW_PRESS) {
+                moveX -= cos(glm::radians(camera.Yaw));
+                moveZ -= sin(glm::radians(camera.Yaw));
+            }
+            if (glfwGetKey(window, keyBindings.left) == GLFW_PRESS) {
+                moveX += cos(glm::radians(camera.Yaw - 90.0f));
+                moveZ += sin(glm::radians(camera.Yaw - 90.0f));
+            }
+            if (glfwGetKey(window, keyBindings.right) == GLFW_PRESS) {
+                moveX += cos(glm::radians(camera.Yaw + 90.0f));
+                moveZ += sin(glm::radians(camera.Yaw + 90.0f));
+            }
+            
+            bool jump = glfwGetKey(window, keyBindings.jump) == GLFW_PRESS;
+            bool shoot = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+            
+            networkClient->sendPlayerInput(moveX, moveZ, camera.Yaw, camera.Pitch, jump, shoot, static_cast<uint8_t>(currentWeapon));
+        }
+        
         // Update weapon cooldowns
         if (currentWeaponInstance) {
             currentWeaponInstance->updateCooldown(deltaTime);
@@ -388,7 +434,7 @@ void Game::render() {
                 glm::mat4 model = glm::mat4(1.0f);
                 model = glm::translate(model, projectiles[i].position);
                 
-                // Check if this is likely a grenade (slower velocity, longer lifetime)
+                // Check if this is a grenade (slower velocity, longer lifetime)
                 if (glm::length(projectiles[i].velocity) < 35.0f && projectiles[i].lifetime > 4.0f) {
                     model = glm::scale(model, glm::vec3(0.2f, 0.2f, 0.2f)); // Larger for grenades
                     renderer.drawCube(model, glm::vec3(0.0f, 1.0f, 0.0f)); // Green for grenades
@@ -403,6 +449,19 @@ void Game::render() {
         }
 
         // Don't render player in first-person view
+        
+        // Render remote players (multiplayer)
+        if (multiplayerMode) {
+            for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
+                if (remotePlayers[i].active && !remotePlayers[i].isDead) {
+                    glm::mat4 model = glm::mat4(1.0f);
+                    model = glm::translate(model, remotePlayers[i].position);
+                    model = glm::scale(model, glm::vec3(0.6f, 1.6f, 0.6f));
+                    glm::vec3 color = (remotePlayers[i].id % 2 == 0) ? glm::vec3(1.0f, 0.0f, 0.0f) : glm::vec3(0.0f, 1.0f, 0.0f);
+                    renderer.drawCube(model, color);
+                }
+            }
+        }
         
         // Render crosshair
         renderCrosshair();
@@ -460,6 +519,11 @@ void Game::render() {
         renderer.setViewProjection(view, projection);
         
         renderMapSelection();
+        glfwSwapBuffers(window);
+        glfwPollEvents();
+    } else if (gameState == SERVER_CONNECT) {
+        // Set up 2D rendering for server connection
+        renderServerConnect();
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
@@ -530,6 +594,15 @@ void Game::updatePlayerPhysics(float deltaTime) {
         }
     }
     
+    // Check for death by falling
+    if (playerPos.y < -20.0f && !isDead) {
+        isDead = true;
+        playerHealth = 0.0f;
+        gameState = DEAD;
+        std::cout << "Player fell out of the world and died!" << std::endl;
+        return;
+    }
+    
     // Update jump cooldown
     if (jumpCooldown > 0.0f) {
         jumpCooldown -= deltaTime;
@@ -592,82 +665,84 @@ void Game::updatePlayerPhysics(float deltaTime) {
             }
         }
     } else {
-        // No collision - allow full movement
+        // No collision - allow full movement (falling through air)
         playerPos = newPos;
     }
     
-    // Ground detection - check if we're standing on something
+    // Ground detection - check if we're standing on a solid block
     bool onGround = false;
-    if (playerPos.y <= 0.0f) {
-        // On main floor
-        if (playerPos.y < 0.0f) {
-            playerPos.y = 0.0f;
-        }
-        playerVelocity.y = 0.0f;
-        isJumping = false;
-        onGround = true;
-    } else if (currentMap) {
-        // Check if standing on a block
+    if (currentMap) {
+        // Check if standing on a block - cast down from feet
         glm::vec3 footPos = playerPos;
-        footPos.y -= 0.1f;
-        if (currentMap->checkCollision(footPos, 0.3f) && playerVelocity.y <= 0.0f) {
-            playerVelocity.y = 0.0f;
-            isJumping = false;
-            onGround = true;
+        footPos.y -= 0.05f; // Just below feet
+        
+        // Check multiple points around the player's feet for better detection
+        glm::vec3 checkPoints[5] = {
+            footPos,                                    // Center
+            footPos + glm::vec3(0.2f, 0, 0),           // Forward
+            footPos + glm::vec3(-0.2f, 0, 0),          // Back
+            footPos + glm::vec3(0, 0, 0.2f),           // Right
+            footPos + glm::vec3(0, 0, -0.2f)           // Left
+        };
+        
+        for (int i = 0; i < 5; i++) {
+            if (currentMap->checkCollision(checkPoints[i], 0.15f)) {
+                // Check if we're actually on top of the block (not inside it from the side)
+                // by verifying we're above the block's top surface
+                onGround = true;
+                
+                // Only stop falling if we're moving downward
+                if (playerVelocity.y <= 0.0f) {
+                    playerVelocity.y = 0.0f;
+                    isJumping = false;
+                }
+                break;
+            }
         }
     }
     
     // Debug output
     static int frameCount = 0;
-    if (frameCount++ % 60 == 0) {
+    if (frameCount++ % 120 == 0) {
         std::cout << "Physics - Pos: (" << playerPos.x << ", " << playerPos.y << ", " << playerPos.z 
                   << ") Vel: (" << playerVelocity.x << ", " << playerVelocity.y << ", " << playerVelocity.z 
-                  << ") - " << (onGround ? "ON GROUND" : "IN AIR") << std::endl;
+                  << ") - " << (onGround ? "ON GROUND" : "IN AIR/FALLING") << std::endl;
     }
     
     // Update camera
     camera.Position = glm::vec3(playerPos.x, playerPos.y + 1.6f, playerPos.z);
-    camera.updateCameraVectors(); // Add this to update Front vector
+    camera.updateCameraVectors();
 }
 
 void Game::handleJump() {
-    // Collision-based ground detection - check if there's something under player's feet
+    // Collision-based ground detection - check if there's a block under player's feet
     bool onGround = false;
     
     if (currentMap) {
-        // Check if player is on floor (y <= 0 with tolerance)
-        if (playerPos.y <= 0.05f) {
-            onGround = true;
-        } else {
-            // Check if standing on a block - cast a small ray down from feet
-            // Use a small box below player's feet for better detection
-            glm::vec3 footPos = playerPos;
-            footPos.y -= 0.15f; // Further below feet for better detection
-            
-            // Check multiple points around the player's feet
-            glm::vec3 checkPoints[9] = {
-                footPos,                                    // Center
-                footPos + glm::vec3(0.2f, 0, 0),           // Forward
-                footPos + glm::vec3(-0.2f, 0, 0),          // Back
-                footPos + glm::vec3(0, 0, 0.2f),           // Right
-                footPos + glm::vec3(0, 0, -0.2f),          // Left
-                footPos + glm::vec3(0.15f, 0, 0.15f),     // Forward-Right
-                footPos + glm::vec3(-0.15f, 0, 0.15f),    // Forward-Left
-                footPos + glm::vec3(0.15f, 0, -0.15f),    // Back-Right
-                footPos + glm::vec3(-0.15f, 0, -0.15f)    // Back-Left
-            };
-            
-            for (int i = 0; i < 9; i++) {
-                if (currentMap->checkCollision(checkPoints[i], 0.15f)) {
-                    onGround = true;
-                    std::cout << "Jump: Found ground at check point " << i << " at y=" << checkPoints[i].y << std::endl;
-                    break;
-                }
+        // Check if standing on a block - cast a small ray down from feet
+        // Use a small box below player's feet for better detection
+        glm::vec3 footPos = playerPos;
+        footPos.y -= 0.3f; // Further below feet for better detection
+        
+        // Check multiple points around the player's feet
+        glm::vec3 checkPoints[9] = {
+            footPos,                                    // Center
+            footPos + glm::vec3(0.2f, 0, 0),           // Forward
+            footPos + glm::vec3(-0.2f, 0, 0),          // Back
+            footPos + glm::vec3(0, 0, 0.2f),           // Right
+            footPos + glm::vec3(0, 0, -0.2f),          // Left
+            footPos + glm::vec3(0.15f, 0, 0.15f),     // Forward-Right
+            footPos + glm::vec3(-0.15f, 0, 0.15f),    // Forward-Left
+            footPos + glm::vec3(0.15f, 0, -0.15f),    // Back-Right
+            footPos + glm::vec3(-0.15f, 0, -0.15f)    // Back-Left
+        };
+        
+        for (int i = 0; i < 9; i++) {
+            if (currentMap->checkCollision(checkPoints[i], 0.15f)) {
+                onGround = true;
+                break;
             }
         }
-    } else {
-        // Fallback: assume on ground if low enough
-        onGround = (playerPos.y <= 0.05f);
     }
     
     if (onGround && !isJumping && jumpCooldown <= 0.0f) {
@@ -1932,19 +2007,20 @@ void Game::renderMenu() {
     float menuWidth = 300.0f;
     float menuHeight = 50.0f;
     float menuX = (800.0f - menuWidth) / 2.0f; // Center horizontally
-    float startY = 200.0f;
+    float startY = 150.0f;
     float spacing = 70.0f;
     
-    // Menu items: Play Game, Map Selection, Settings, Exit
-    const char* menuItems[] = {"Play Game", "Map Selection", "Settings", "Exit"};
+    // Menu items: Play Game, Map Selection, Connect to Server, Settings, Exit
+    const char* menuItems[] = {"Play Game", "Map Selection", "Connect to Server", "Settings", "Exit"};
     glm::vec3 colors[] = {
         glm::vec3(0.2f, 0.8f, 0.2f), // Green for Play
         glm::vec3(0.2f, 0.4f, 0.8f), // Blue for Map Selection
+        glm::vec3(0.8f, 0.2f, 0.8f), // Purple for Connect to Server
         glm::vec3(0.8f, 0.6f, 0.2f), // Orange for Settings
         glm::vec3(0.8f, 0.2f, 0.2f)  // Red for Exit
     };
     
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 5; i++) {
         float y = startY + i * spacing;
         
         // Create model matrix for this menu item
@@ -1973,12 +2049,22 @@ void Game::renderMenu() {
         renderer.drawText(menuItems[i], textX, textY, 1.0f);
     }
     
+    // Show multiplayer status if connected
+    if (isConnectedToServer()) {
+        glm::mat4 statusBg = glm::mat4(1.0f);
+        statusBg = glm::translate(statusBg, glm::vec3(400.0f, 520.0f, 0.0f));
+        statusBg = glm::scale(statusBg, glm::vec3(200.0f, 30.0f, 1.0f));
+        renderer.drawColoredQuad(statusBg, glm::vec3(0.0f, 0.8f, 0.0f)); // Green background
+        renderer.drawText("CONNECTED", 360.0f, 515.0f, 1.0f);
+    }
+    
     // Print to console for debugging and text display
     std::cout << "\n=== MAIN MENU ===" << std::endl;
     std::cout << (menuSelection == 0 ? "> " : "  ") << "Play Game" << std::endl;
     std::cout << (menuSelection == 1 ? "> " : "  ") << "Map Selection" << std::endl;
-    std::cout << (menuSelection == 2 ? "> " : "  ") << "Settings" << std::endl;
-    std::cout << (menuSelection == 3 ? "> " : "  ") << "Exit" << std::endl;
+    std::cout << (menuSelection == 2 ? "> " : "  ") << "Connect to Server" << std::endl;
+    std::cout << (menuSelection == 3 ? "> " : "  ") << "Settings" << std::endl;
+    std::cout << (menuSelection == 4 ? "> " : "  ") << "Exit" << std::endl;
     std::cout << "Use UP/DOWN to select, ENTER to confirm, ESC to resume" << std::endl;
 }
 
@@ -2250,6 +2336,255 @@ void Game::processMapSelectionInput() {
         escapePressed = true;
         gameState = MENU;
         menuSelection = 1; // Keep on Map Selection option
+    } else if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_RELEASE) {
+        escapePressed = false;
+    }
+}
+
+// ========== NETWORK MULTIPLAYER IMPLEMENTATION ==========
+
+bool Game::connectToServer(const std::string& address, uint16_t port) {
+    if (networkClient) {
+        disconnectFromServer();
+    }
+    
+    networkClient = new NetworkClient();
+    
+    // Set up callbacks
+    networkClient->onPlayerState = [this](const PlayerStatePacket& packet) {
+        // Skip our own player state - don't render ourselves as a remote player
+        if (networkClient && packet.playerId == networkClient->getClientId()) {
+            return;
+        }
+        
+        // Update remote player state
+        for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
+            if (!remotePlayers[i].active || remotePlayers[i].id == packet.playerId) {
+                remotePlayers[i].id = packet.playerId;
+                remotePlayers[i].position = glm::vec3(packet.posX, packet.posY, packet.posZ);
+                remotePlayers[i].velocity = glm::vec3(packet.velX, packet.velY, packet.velZ);
+                remotePlayers[i].yaw = packet.yaw;
+                remotePlayers[i].pitch = packet.pitch;
+                remotePlayers[i].health = packet.health;
+                remotePlayers[i].isDead = packet.isDead;
+                remotePlayers[i].active = true;
+                break;
+            }
+        }
+    };
+    
+    networkClient->onPlayerJoin = [this](const PlayerJoinPacket& packet) {
+        std::cout << "Player " << packet.playerId << " joined the game!" << std::endl;
+        // Add new remote player
+        for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
+            if (!remotePlayers[i].active) {
+                remotePlayers[i].id = packet.playerId;
+                remotePlayers[i].position = glm::vec3(packet.spawnX, packet.spawnY, packet.spawnZ);
+                remotePlayers[i].active = true;
+                break;
+            }
+        }
+    };
+    
+    networkClient->onPlayerLeave = [this](uint32_t playerId) {
+        std::cout << "Player " << playerId << " left the game!" << std::endl;
+        // Remove remote player
+        for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
+            if (remotePlayers[i].active && remotePlayers[i].id == playerId) {
+                remotePlayers[i].active = false;
+                break;
+            }
+        }
+    };
+    
+    networkClient->onProjectileSpawn = [this](const ProjectileSpawnPacket& packet) {
+        // Create projectile from other player
+        createProjectile(
+            glm::vec3(packet.posX, packet.posY, packet.posZ),
+            glm::vec3(packet.velX, packet.velY, packet.velZ),
+            packet.lifetime
+        );
+    };
+    
+    if (!networkClient->connect(address, port)) {
+        delete networkClient;
+        networkClient = nullptr;
+        std::cerr << "Failed to connect to server at " << address << ":" << port << std::endl;
+        return false;
+    }
+    
+    multiplayerMode = true;
+    std::cout << "Connected to server at " << address << ":" << port << std::endl;
+    return true;
+}
+
+void Game::disconnectFromServer() {
+    if (networkClient) {
+        networkClient->disconnect();
+        delete networkClient;
+        networkClient = nullptr;
+    }
+    multiplayerMode = false;
+    
+    // Clear remote players
+    for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
+        remotePlayers[i].active = false;
+    }
+}
+
+bool Game::isConnectedToServer() const {
+    return networkClient && networkClient->isConnected();
+}
+
+// ========== SERVER CONNECTION MENU ==========
+
+void Game::renderServerConnect() {
+    // Clear screen with dark background
+    renderer.clear();
+    
+    // Set up 2D rendering
+    glm::mat4 projection = glm::ortho(0.0f, 800.0f, 600.0f, 0.0f, -1.0f, 1.0f);
+    glm::mat4 view = glm::mat4(1.0f);
+    renderer.setViewProjection(view, projection);
+    
+    // Draw full screen dark background
+    glm::mat4 bgModel = glm::mat4(1.0f);
+    bgModel = glm::translate(bgModel, glm::vec3(400.0f, 300.0f, 0.0f));
+    bgModel = glm::scale(bgModel, glm::vec3(800.0f, 600.0f, 1.0f));
+    renderer.drawColoredQuad(bgModel, glm::vec3(0.05f, 0.05f, 0.15f)); // Very dark blue
+    
+    // Title bar
+    glm::mat4 titleBg = glm::mat4(1.0f);
+    titleBg = glm::translate(titleBg, glm::vec3(400.0f, 80.0f, 0.0f));
+    titleBg = glm::scale(titleBg, glm::vec3(600.0f, 80.0f, 1.0f));
+    renderer.drawColoredQuad(titleBg, glm::vec3(0.8f, 0.2f, 0.8f)); // Purple title bar
+    renderer.drawText("CONNECT TO SERVER", 280.0f, 75.0f, 1.5f);
+    
+    // Server address input box
+    float boxY = 220.0f;
+    glm::mat4 addressBox = glm::mat4(1.0f);
+    addressBox = glm::translate(addressBox, glm::vec3(400.0f, boxY, 0.0f));
+    addressBox = glm::scale(addressBox, glm::vec3(500.0f, 60.0f, 1.0f));
+    renderer.drawColoredQuad(addressBox, glm::vec3(0.2f, 0.2f, 0.4f)); // Dark blue-gray
+    
+    // Draw server address text
+    renderer.drawText("Server IP:", 150.0f, boxY - 10.0f, 1.2f);
+    renderer.drawText(serverAddress.c_str(), 250.0f, boxY - 10.0f, 1.2f);
+    
+    // Port input box
+    float portY = 320.0f;
+    glm::mat4 portBox = glm::mat4(1.0f);
+    portBox = glm::translate(portBox, glm::vec3(400.0f, portY, 0.0f));
+    portBox = glm::scale(portBox, glm::vec3(500.0f, 60.0f, 1.0f));
+    renderer.drawColoredQuad(portBox, glm::vec3(0.2f, 0.2f, 0.4f)); // Dark blue-gray
+    
+    // Draw port text
+    renderer.drawText("Port:", 150.0f, portY - 10.0f, 1.2f);
+    std::string portStr = std::to_string(serverPort);
+    renderer.drawText(portStr.c_str(), 250.0f, portY - 10.0f, 1.2f);
+    
+    // Connect button
+    float connectY = 420.0f;
+    glm::mat4 connectBtn = glm::mat4(1.0f);
+    connectBtn = glm::translate(connectBtn, glm::vec3(400.0f, connectY, 0.0f));
+    connectBtn = glm::scale(connectBtn, glm::vec3(300.0f, 60.0f, 1.0f));
+    
+    if (isConnectedToServer()) {
+        renderer.drawColoredQuad(connectBtn, glm::vec3(0.8f, 0.2f, 0.2f)); // Red for disconnect
+        renderer.drawText("DISCONNECT", 340.0f, connectY - 10.0f, 1.3f);
+    } else {
+        renderer.drawColoredQuad(connectBtn, glm::vec3(0.2f, 0.8f, 0.2f)); // Green for connect
+        renderer.drawText("CONNECT", 350.0f, connectY - 10.0f, 1.3f);
+    }
+    
+    // Back button
+    float backY = 520.0f;
+    glm::mat4 backBtn = glm::mat4(1.0f);
+    backBtn = glm::translate(backBtn, glm::vec3(400.0f, backY, 0.0f));
+    backBtn = glm::scale(backBtn, glm::vec3(200.0f, 50.0f, 1.0f));
+    renderer.drawColoredQuad(backBtn, glm::vec3(0.4f, 0.4f, 0.4f)); // Gray
+    renderer.drawText("BACK", 370.0f, backY - 8.0f, 1.2f);
+    
+    // Instructions at bottom
+    renderer.drawText("TAB to switch fields, ENTER to connect, ESC to go back", 180.0f, 580.0f, 0.8f);
+    
+    // Print to console
+    std::cout << "\n=== SERVER CONNECTION ===" << std::endl;
+    std::cout << "Server IP: " << serverAddress << std::endl;
+    std::cout << "Port: " << serverPort << std::endl;
+    std::cout << (enteringServerAddress ? "> IP <   Port" : "  IP   > Port <") << std::endl;
+    std::cout << "TAB = switch, ENTER = connect, ESC = back" << std::endl;
+}
+
+void Game::processServerConnectInput() {
+    static bool tabPressed = false;
+    static bool enterPressed = false;
+    static bool escapePressed = false;
+    static bool backspacePressed = false;
+    
+    // Handle TAB to switch between IP and Port fields
+    if (glfwGetKey(window, GLFW_KEY_TAB) == GLFW_PRESS && !tabPressed) {
+        tabPressed = true;
+        enteringServerAddress = !enteringServerAddress;
+    } else if (glfwGetKey(window, GLFW_KEY_TAB) == GLFW_RELEASE) {
+        tabPressed = false;
+    }
+    
+    // Handle number keys for IP/port input
+    for (int key = GLFW_KEY_0; key <= GLFW_KEY_9; key++) {
+        if (glfwGetKey(window, key) == GLFW_PRESS) {
+            char digit = '0' + (key - GLFW_KEY_0);
+            if (enteringServerAddress) {
+                serverAddress += digit;
+            } else {
+                if (serverPort < 65535) {
+                    serverPort = serverPort * 10 + (digit - '0');
+                }
+            }
+        }
+    }
+    
+    // Handle period for IP address
+    if (enteringServerAddress && glfwGetKey(window, GLFW_KEY_PERIOD) == GLFW_PRESS) {
+        serverAddress += '.';
+    }
+    
+    // Handle backspace
+    if (glfwGetKey(window, GLFW_KEY_BACKSPACE) == GLFW_PRESS && !backspacePressed) {
+        backspacePressed = true;
+        if (enteringServerAddress) {
+            if (!serverAddress.empty()) {
+                serverAddress.pop_back();
+            }
+        } else {
+            serverPort = serverPort / 10;
+        }
+    } else if (glfwGetKey(window, GLFW_KEY_BACKSPACE) == GLFW_RELEASE) {
+        backspacePressed = false;
+    }
+    
+    // Handle ENTER to connect/disconnect
+    if (glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS && !enterPressed) {
+        enterPressed = true;
+        if (isConnectedToServer()) {
+            disconnectFromServer();
+            std::cout << "Disconnected from server" << std::endl;
+        } else {
+            if (connectToServer(serverAddress, serverPort)) {
+                std::cout << "Connected! Press ESC to return to menu" << std::endl;
+            } else {
+                std::cout << "Failed to connect to " << serverAddress << ":" << serverPort << std::endl;
+            }
+        }
+    } else if (glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_RELEASE) {
+        enterPressed = false;
+    }
+    
+    // Handle ESC to go back to menu
+    if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS && !escapePressed) {
+        escapePressed = true;
+        gameState = MENU;
+        menuSelection = 2; // Keep on Connect to Server option
     } else if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_RELEASE) {
         escapePressed = false;
     }

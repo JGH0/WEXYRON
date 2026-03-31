@@ -1,0 +1,476 @@
+/**
+ * @file network.cpp
+ * @brief Network layer implementation for LAN multiplayer
+ */
+
+#include "network.hpp"
+#include <iostream>
+#include <chrono>
+#include <functional>
+
+// ========== NETWORK CLIENT ==========
+
+NetworkClient::NetworkClient() : socketFd(-1), connected(false), clientId(0), sequence(0) {
+    memset(&serverAddr, 0, sizeof(serverAddr));
+}
+
+NetworkClient::~NetworkClient() {
+    disconnect();
+}
+
+bool NetworkClient::connect(const std::string& serverAddress, uint16_t port) {
+    socketFd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (socketFd < 0) {
+        std::cerr << "Failed to create socket" << std::endl;
+        return false;
+    }
+    
+    // Set non-blocking
+    int flags = fcntl(socketFd, F_GETFL, 0);
+    fcntl(socketFd, F_SETFL, flags | O_NONBLOCK);
+    
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_port = htons(port);
+    inet_pton(AF_INET, serverAddress.c_str(), &serverAddr.sin_addr);
+    
+    // Send connect packet
+    PacketHeader header;
+    header.magic = PACKET_MAGIC;
+    header.type = PACKET_CONNECT;
+    header.sequence = sequence++;
+    header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    header.clientId = 0;
+    
+    if (!sendPacket(&header, sizeof(header))) {
+        std::cerr << "Failed to send connect packet" << std::endl;
+        close(socketFd);
+        socketFd = -1;
+        return false;
+    }
+    
+    std::cout << "Connecting to server at " << serverAddress << ":" << port << "..." << std::endl;
+    
+    // Wait for connect ack (non-blocking, will be handled in update)
+    connected = true;
+    return true;
+}
+
+void NetworkClient::disconnect() {
+    if (connected && socketFd >= 0) {
+        PacketHeader header;
+        header.magic = PACKET_MAGIC;
+        header.type = PACKET_DISCONNECT;
+        header.sequence = sequence++;
+        header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        header.clientId = clientId;
+        
+        sendPacket(&header, sizeof(header));
+    }
+    
+    if (socketFd >= 0) {
+        close(socketFd);
+        socketFd = -1;
+    }
+    connected = false;
+    clientId = 0;
+}
+
+void NetworkClient::sendPlayerInput(float moveX, float moveZ, float yaw, float pitch, 
+                                     bool jump, bool shoot, uint8_t weaponId) {
+    if (!connected) return;
+    
+    PlayerInputPacket packet;
+    packet.header.magic = PACKET_MAGIC;
+    packet.header.type = PACKET_PLAYER_INPUT;
+    packet.header.sequence = sequence++;
+    packet.header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    packet.header.clientId = clientId;
+    
+    packet.moveX = moveX;
+    packet.moveZ = moveZ;
+    packet.yaw = yaw;
+    packet.pitch = pitch;
+    packet.jump = jump;
+    packet.shoot = shoot;
+    packet.weaponId = weaponId;
+    
+    sendPacket(&packet, sizeof(packet));
+}
+
+void NetworkClient::update() {
+    if (!connected || socketFd < 0) return;
+    
+    char buffer[MAX_PACKET_SIZE];
+    size_t received;
+    
+    // Process all available packets
+    while (receivePacket(buffer, sizeof(buffer), received)) {
+        if (received < sizeof(PacketHeader)) continue;
+        
+        PacketHeader* header = (PacketHeader*)buffer;
+        if (header->magic != PACKET_MAGIC) continue;
+        
+        switch (header->type) {
+            case PACKET_CONNECT_ACK:
+                clientId = header->clientId;
+                std::cout << "Connected to server! Client ID: " << clientId << std::endl;
+                break;
+                
+            case PACKET_PLAYER_STATE:
+                if (received >= sizeof(PlayerStatePacket) && onPlayerState) {
+                    onPlayerState(*(PlayerStatePacket*)buffer);
+                }
+                break;
+                
+            case PACKET_PLAYER_JOIN:
+                if (received >= sizeof(PlayerJoinPacket) && onPlayerJoin) {
+                    onPlayerJoin(*(PlayerJoinPacket*)buffer);
+                }
+                break;
+                
+            case PACKET_PLAYER_LEAVE:
+                if (onPlayerLeave) {
+                    onPlayerLeave(header->clientId);
+                }
+                break;
+                
+            case PACKET_PROJECTILE_SPAWN:
+                if (received >= sizeof(ProjectileSpawnPacket) && onProjectileSpawn) {
+                    onProjectileSpawn(*(ProjectileSpawnPacket*)buffer);
+                }
+                break;
+                
+            case PACKET_PING:
+                // Send pong
+                PacketHeader pong;
+                pong.magic = PACKET_MAGIC;
+                pong.type = PACKET_PONG;
+                pong.sequence = sequence++;
+                pong.timestamp = header->timestamp;
+                pong.clientId = clientId;
+                sendPacket(&pong, sizeof(pong));
+                break;
+        }
+    }
+}
+
+bool NetworkClient::sendPacket(const void* data, size_t size) {
+    if (socketFd < 0) return false;
+    ssize_t sent = sendto(socketFd, data, size, 0, 
+                          (sockaddr*)&serverAddr, sizeof(serverAddr));
+    return sent == (ssize_t)size;
+}
+
+bool NetworkClient::receivePacket(void* buffer, size_t maxSize, size_t& received) {
+    if (socketFd < 0) return false;
+    
+    sockaddr_in from;
+    socklen_t fromLen = sizeof(from);
+    ssize_t bytes = recvfrom(socketFd, buffer, maxSize, 0, 
+                            (sockaddr*)&from, &fromLen);
+    
+    if (bytes > 0) {
+        received = bytes;
+        return true;
+    }
+    return false;
+}
+
+// ========== NETWORK SERVER ==========
+
+NetworkServer::NetworkServer() : socketFd(-1), running(false), nextClientId(1) {
+    memset(&serverAddr, 0, sizeof(serverAddr));
+}
+
+NetworkServer::~NetworkServer() {
+    stop();
+}
+
+bool NetworkServer::start(uint16_t port) {
+    if (!createSocket(port)) {
+        return false;
+    }
+    
+    running = true;
+    std::cout << "Server started on port " << port << std::endl;
+    return true;
+}
+
+void NetworkServer::stop() {
+    running = false;
+    
+    // Disconnect all players
+    for (auto& pair : players) {
+        if (onPlayerDisconnect) {
+            onPlayerDisconnect(pair.first);
+        }
+    }
+    players.clear();
+    
+    if (socketFd >= 0) {
+        close(socketFd);
+        socketFd = -1;
+    }
+}
+
+bool NetworkServer::createSocket(uint16_t port) {
+    socketFd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (socketFd < 0) {
+        std::cerr << "Failed to create server socket" << std::endl;
+        return false;
+    }
+    
+    // Allow reuse
+    int opt = 1;
+    setsockopt(socketFd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_addr.s_addr = INADDR_ANY;
+    serverAddr.sin_port = htons(port);
+    
+    if (bind(socketFd, (sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
+        std::cerr << "Failed to bind server socket" << std::endl;
+        close(socketFd);
+        socketFd = -1;
+        return false;
+    }
+    
+    // Set non-blocking
+    int flags = fcntl(socketFd, F_GETFL, 0);
+    fcntl(socketFd, F_SETFL, flags | O_NONBLOCK);
+    
+    return true;
+}
+
+void NetworkServer::update(float deltaTime) {
+    if (!running || socketFd < 0) return;
+    
+    char buffer[MAX_PACKET_SIZE];
+    sockaddr_in from;
+    socklen_t fromLen = sizeof(from);
+    
+    // Process all available packets
+    while (true) {
+        ssize_t bytes = recvfrom(socketFd, buffer, sizeof(buffer), 0,
+                                (sockaddr*)&from, &fromLen);
+        
+        if (bytes <= 0) break;
+        
+        processPacket(buffer, bytes, from);
+    }
+    
+    // Check for timed out players
+    auto now = std::chrono::steady_clock::now();
+    std::vector<uint32_t> toRemove;
+    
+    for (auto& pair : players) {
+        // Check if player hasn't sent anything in 10 seconds
+        // (simplified timeout check)
+        // In production, track last packet time per player
+    }
+}
+
+void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_in& from) {
+    if (size < sizeof(PacketHeader)) return;
+    
+    PacketHeader* header = (PacketHeader*)data;
+    if (header->magic != PACKET_MAGIC) return;
+    
+    switch (header->type) {
+        case PACKET_CONNECT: {
+            // New player connecting
+            uint32_t newId = nextClientId++;
+            ServerPlayer& player = players[newId];
+            player.id = newId;
+            player.address = from;
+            player.position = glm::vec3(0.0f, 2.0f, 0.0f);
+            player.velocity = glm::vec3(0.0f);
+            player.yaw = 0.0f;
+            player.pitch = 0.0f;
+            player.health = 100.0f;
+            player.isDead = false;
+            player.active = true;
+            player.lastInputSequence = 0;
+            player.shootCooldown = 0.0f;
+            
+            // Send connect ack
+            PacketHeader ack;
+            ack.magic = PACKET_MAGIC;
+            ack.type = PACKET_CONNECT_ACK;
+            ack.sequence = 0;
+            ack.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            ack.clientId = newId;
+            sendPacket(&ack, sizeof(ack), from);
+            
+            // Notify other players
+            PlayerJoinPacket join;
+            join.header.magic = PACKET_MAGIC;
+            join.header.type = PACKET_PLAYER_JOIN;
+            join.header.sequence = 0;
+            join.header.timestamp = ack.timestamp;
+            join.header.clientId = newId;
+            join.playerId = newId;
+            join.spawnX = player.position.x;
+            join.spawnY = player.position.y;
+            join.spawnZ = player.position.z;
+            broadcastPacket(&join, sizeof(join), newId);
+            
+            // Notify callback
+            if (onPlayerConnect) {
+                onPlayerConnect(newId);
+            }
+            
+            std::cout << "Player " << newId << " connected from " 
+                     << inet_ntoa(from.sin_addr) << std::endl;
+            break;
+        }
+        
+        case PACKET_DISCONNECT: {
+            uint32_t id = header->clientId;
+            if (players.find(id) != players.end()) {
+                removePlayer(id);
+            }
+            break;
+        }
+        
+        case PACKET_PLAYER_INPUT: {
+            if (size < sizeof(PlayerInputPacket)) return;
+            
+            PlayerInputPacket* input = (PlayerInputPacket*)data;
+            uint32_t id = input->header.clientId;
+            
+            if (players.find(id) != players.end()) {
+                ServerPlayer& player = players[id];
+                player.lastInputSequence = input->header.sequence;
+                
+                // Notify game logic
+                if (onPlayerInput) {
+                    onPlayerInput(id, *input);
+                }
+            }
+            break;
+        }
+        
+        case PACKET_PONG: {
+            // Update player ping/latency if needed
+            break;
+        }
+    }
+}
+
+void NetworkServer::broadcastPlayerState(uint32_t playerId, const glm::vec3& pos, 
+                                          const glm::vec3& vel, float yaw, float pitch,
+                                          float health, bool isDead) {
+    PlayerStatePacket packet;
+    packet.header.magic = PACKET_MAGIC;
+    packet.header.type = PACKET_PLAYER_STATE;
+    packet.header.sequence = 0;
+    packet.header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    packet.header.clientId = playerId;
+    
+    packet.playerId = playerId;
+    packet.posX = pos.x;
+    packet.posY = pos.y;
+    packet.posZ = pos.z;
+    packet.velX = vel.x;
+    packet.velY = vel.y;
+    packet.velZ = vel.z;
+    packet.yaw = yaw;
+    packet.pitch = pitch;
+    packet.health = health;
+    packet.isDead = isDead;
+    
+    broadcastPacket(&packet, sizeof(packet));
+}
+
+void NetworkServer::broadcastProjectileSpawn(const glm::vec3& pos, const glm::vec3& vel,
+                                              float lifetime, uint8_t type, uint32_t ownerId) {
+    ProjectileSpawnPacket packet;
+    packet.header.magic = PACKET_MAGIC;
+    packet.header.type = PACKET_PROJECTILE_SPAWN;
+    packet.header.sequence = 0;
+    packet.header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    packet.header.clientId = ownerId;
+    
+    packet.posX = pos.x;
+    packet.posY = pos.y;
+    packet.posZ = pos.z;
+    packet.velX = vel.x;
+    packet.velY = vel.y;
+    packet.velZ = vel.z;
+    packet.lifetime = lifetime;
+    packet.projectileType = type;
+    packet.ownerId = ownerId;
+    
+    broadcastPacket(&packet, sizeof(packet));
+}
+
+std::vector<ServerPlayer*> NetworkServer::getPlayers() {
+    std::vector<ServerPlayer*> result;
+    for (auto& pair : players) {
+        if (pair.second.active) {
+            result.push_back(&pair.second);
+        }
+    }
+    return result;
+}
+
+ServerPlayer* NetworkServer::getPlayer(uint32_t id) {
+    auto it = players.find(id);
+    if (it != players.end() && it->second.active) {
+        return &it->second;
+    }
+    return nullptr;
+}
+
+void NetworkServer::sendPacket(const void* data, size_t size, const sockaddr_in& to) {
+    if (socketFd < 0) return;
+    sendto(socketFd, data, size, 0, (sockaddr*)&to, sizeof(to));
+}
+
+void NetworkServer::broadcastPacket(const void* data, size_t size, uint32_t excludeId) {
+    for (auto& pair : players) {
+        if (pair.first != excludeId && pair.second.active) {
+            sendPacket(data, size, pair.second.address);
+        }
+    }
+}
+
+void NetworkServer::removePlayer(uint32_t id) {
+    auto it = players.find(id);
+    if (it != players.end()) {
+        // Notify other players
+        PacketHeader leave;
+        leave.magic = PACKET_MAGIC;
+        leave.type = PACKET_PLAYER_LEAVE;
+        leave.sequence = 0;
+        leave.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        leave.clientId = id;
+        broadcastPacket(&leave, sizeof(leave), id);
+        
+        // Notify callback
+        if (onPlayerDisconnect) {
+            onPlayerDisconnect(id);
+        }
+        
+        players.erase(it);
+        std::cout << "Player " << id << " disconnected" << std::endl;
+    }
+}
+
+ServerPlayer* NetworkServer::findPlayerByAddress(const sockaddr_in& addr) {
+    for (auto& pair : players) {
+        if (pair.second.address.sin_addr.s_addr == addr.sin_addr.s_addr &&
+            pair.second.address.sin_port == addr.sin_port) {
+            return &pair.second;
+        }
+    }
+    return nullptr;
+}
