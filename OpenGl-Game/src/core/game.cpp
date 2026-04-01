@@ -2352,8 +2352,18 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
     
     // Set up callbacks
     networkClient->onPlayerState = [this](const PlayerStatePacket& packet) {
-        // Skip our own player state - don't render ourselves as a remote player
+        // Apply server position to local player (server authoritative)
         if (networkClient && packet.playerId == networkClient->getClientId()) {
+            // Update local player position from server
+            playerPos.x = packet.posX;
+            playerPos.y = packet.posY;
+            playerPos.z = packet.posZ;
+            playerVelocity.x = packet.velX;
+            playerVelocity.y = packet.velY;
+            playerVelocity.z = packet.velZ;
+            // Client controls its own camera - don't apply server yaw/pitch
+            playerHealth = packet.health;
+            isDead = packet.isDead;
             return;
         }
         

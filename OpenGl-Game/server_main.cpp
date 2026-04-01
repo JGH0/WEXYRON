@@ -82,9 +82,6 @@ int main(int argc, char* argv[]) {
         
         // Handle shoot with cooldown and proper pitch/yaw
         if (input.shoot && player->shootCooldown <= 0.0f) {
-            // Set cooldown (0.2 seconds between shots)
-            player->shootCooldown = 0.2f;
-            
             // Calculate direction using both yaw and pitch
             float yawRad = glm::radians(input.yaw);
             float pitchRad = glm::radians(input.pitch);
@@ -95,14 +92,61 @@ int main(int argc, char* argv[]) {
                 cos(pitchRad) * sin(yawRad)
             );
             
-            // Spawn projectile from slightly in front of player
-            server.broadcastProjectileSpawn(
-                player->position + front * 0.5f,
-                front * 50.0f,
-                2.0f,
-                input.weaponId,
-                id
-            );
+            // Weapon-specific projectile spawning
+            switch (input.weaponId) {
+                case 1: // PUMP_SHOTGUN - 5 pellets with spread
+                    player->shootCooldown = 0.8f;
+                    for (int i = 0; i < 5; i++) {
+                        glm::vec3 spread = glm::vec3(
+                            (rand() % 100 - 50) * 0.002f,
+                            (rand() % 100 - 50) * 0.002f,
+                            0.0f
+                        );
+                        glm::vec3 dir = glm::normalize(front + spread);
+                        server.broadcastProjectileSpawn(
+                            player->position + front * 0.5f,
+                            dir * 50.0f,
+                            1.0f,
+                            input.weaponId,
+                            id
+                        );
+                    }
+                    break;
+                    
+                case 2: // GRENADE - slower, longer lifetime
+                    player->shootCooldown = 1.0f;
+                    server.broadcastProjectileSpawn(
+                        player->position + front * 0.5f,
+                        front * 30.0f,
+                        5.0f,
+                        input.weaponId,
+                        id
+                    );
+                    break;
+                    
+                case 3: // FLASHBANG - slower, medium lifetime
+                    player->shootCooldown = 1.0f;
+                    server.broadcastProjectileSpawn(
+                        player->position + front * 0.5f,
+                        front * 25.0f,
+                        4.0f,
+                        input.weaponId,
+                        id
+                    );
+                    break;
+                    
+                case 0: // PISTOL (default)
+                default:
+                    player->shootCooldown = 0.3f;
+                    server.broadcastProjectileSpawn(
+                        player->position + front * 0.5f,
+                        front * 60.0f,
+                        2.0f,
+                        input.weaponId,
+                        id
+                    );
+                    break;
+            }
         }
         
         // Broadcast updated state to all clients
