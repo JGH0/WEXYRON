@@ -196,7 +196,7 @@ void Game::processInput(float deltaTime) {
                 case 2: // Connect to Server
                     std::cout << "ENTERING SERVER CONNECTION" << std::endl;
                     gameState = SERVER_CONNECT;
-                    serverAddress = "127.0.0.1";
+                    serverAddress = "";
                     serverPort = 7777;
                     enteringServerAddress = true;
                     break;
@@ -961,6 +961,19 @@ void Game::updateProjectiles(float deltaTime) {
             // Check if this is a grenade or flashbang
             bool isGrenade = glm::length(projectiles[i].velocity) < 35.0f && projectiles[i].lifetime > 4.0f;
             bool isFlashbang = glm::length(projectiles[i].velocity) < 35.0f && projectiles[i].lifetime <= 4.0f;
+
+            auto detonateAndDeactivate = [&](const glm::vec3& atPos) {
+                if (isGrenade) {
+                    createSimpleExplosion(atPos);
+                } else if (isFlashbang) {
+                    createFlashbangEffect(atPos);
+                } else {
+                    // Bullets: no explosion, no bounce. Just leave a mark.
+                    createBulletHole(atPos, glm::vec3(0.0f, 1.0f, 0.0f));
+                }
+                projectiles[i].active = false;
+                activeProjectiles--;
+            };
             
             // Check map block collisions for grenades/flashbangs (they should bounce, not stick)
             if ((isGrenade || isFlashbang) && currentMap) {
@@ -984,49 +997,8 @@ void Game::updateProjectiles(float deltaTime) {
                         projectiles[i].position.y >= blockMin.y && projectiles[i].position.y <= blockMax.y &&
                         projectiles[i].position.z >= blockMin.z && projectiles[i].position.z <= blockMax.z) {
                         
-                        // Use velocity direction to determine which face was hit
-                        float absVelX = abs(projectiles[i].velocity.x);
-                        float absVelY = abs(projectiles[i].velocity.y);
-                        float absVelZ = abs(projectiles[i].velocity.z);
-                        
-                        // Find dominant velocity component
-                        if (absVelX >= absVelY && absVelX >= absVelZ && absVelX > 0.01f) {
-                            // X face hit
-                            if (projectiles[i].velocity.x > 0) {
-                                projectiles[i].position.x = block.position.x - block.scale.x / 2.0f - 0.2f;
-                            } else {
-                                projectiles[i].position.x = block.position.x + block.scale.x / 2.0f + 0.2f;
-                            }
-                            projectiles[i].velocity.x = -projectiles[i].velocity.x * 0.65f;
-                        }
-                        else if (absVelY >= absVelZ && absVelY > 0.01f) {
-                            // Y face (floor/ceiling) hit
-                            if (projectiles[i].velocity.y > 0) {
-                                projectiles[i].position.y = block.position.y - block.scale.y / 2.0f - 0.2f;
-                            } else {
-                                projectiles[i].position.y = block.position.y + block.scale.y / 2.0f + 0.2f;
-                            }
-                            projectiles[i].velocity.y = -projectiles[i].velocity.y * 0.55f;
-                        }
-                        else if (absVelZ > 0.01f) {
-                            // Z face hit
-                            if (projectiles[i].velocity.z > 0) {
-                                projectiles[i].position.z = block.position.z - block.scale.z / 2.0f - 0.2f;
-                            } else {
-                                projectiles[i].position.z = block.position.z + block.scale.z / 2.0f + 0.2f;
-                            }
-                            projectiles[i].velocity.z = -projectiles[i].velocity.z * 0.65f;
-                        }
-                        
-                        // Apply overall dampening - DISABLED FOR NO BOUNCE
-                        // projectiles[i].velocity *= 0.92f;
-                        
-                        // std::cout << "Grenade bounced! Vel: " << glm::length(projectiles[i].velocity) << std::endl;
-                        // DISABLE BOUNCE - just explode instead
-                        createSimpleExplosion(projectiles[i].position);
-                        projectiles[i].active = false;
-                        activeProjectiles--;
-                        std::cout << "Grenade exploded on bounce! Active: " << activeProjectiles << std::endl;
+                        // No bounce: detonate on impact.
+                        detonateAndDeactivate(projectiles[i].position);
                         break;
                     }
                     
@@ -1079,32 +1051,9 @@ void Game::updateProjectiles(float deltaTime) {
                         if (tmin <= rayLength && tmin >= 0.0f) {
                             // Position grenade at impact point
                             projectiles[i].position = prevPos + rayDir * (tmin - 0.01f);
-                            
-                            // Determine which face was hit based on velocity
-                            float absVelX = abs(projectiles[i].velocity.x);
-                            float absVelY = abs(projectiles[i].velocity.y);
-                            float absVelZ = abs(projectiles[i].velocity.z);
-                            
-                            // Find dominant velocity component and bounce
-                            if (absVelX >= absVelY && absVelX >= absVelZ && absVelX > 0.01f) {
-                                projectiles[i].velocity.x = -projectiles[i].velocity.x * 0.65f;
-                            }
-                            else if (absVelY >= absVelZ && absVelY > 0.01f) {
-                                projectiles[i].velocity.y = -projectiles[i].velocity.y * 0.55f;
-                            }
-                            else if (absVelZ > 0.01f) {
-                                projectiles[i].velocity.z = -projectiles[i].velocity.z * 0.65f;
-                            }
-                            
-                            // Apply overall dampening - DISABLED FOR NO BOUNCE
-                            // projectiles[i].velocity *= 0.92f;
-                            
-                            // std::cout << "Grenade bounced (swept)! Vel: " << glm::length(projectiles[i].velocity) << std::endl;
-                            // DISABLE BOUNCE - just explode instead
-                            createSimpleExplosion(projectiles[i].position);
-                            projectiles[i].active = false;
-                            activeProjectiles--;
-                            std::cout << "Grenade exploded on swept collision! Active: " << activeProjectiles << std::endl;
+
+                            // No bounce: detonate on impact.
+                            detonateAndDeactivate(projectiles[i].position);
                             break;
                         }
                     }
@@ -1114,69 +1063,38 @@ void Game::updateProjectiles(float deltaTime) {
                 prevGrenadePositions[i] = projectiles[i].position;
             }
             
-            // Simple boundary check and immediate bounce
+            // Simple boundary check (no bounce): treat edges/floor as walls
             float boundary = 20.0f;
-            bool bounced = false;
-            
-            // Check X boundaries
-            if (projectiles[i].position.x > boundary) {
-                projectiles[i].position.x = boundary - 0.5f; // Push slightly away from wall
-                projectiles[i].velocity.x = -abs(projectiles[i].velocity.x) * 0.7f; // Bounce with good energy
-                bounced = true;
-            }
-            else if (projectiles[i].position.x < -boundary) {
-                projectiles[i].position.x = -boundary + 0.5f; // Push slightly away from wall
-                projectiles[i].velocity.x = abs(projectiles[i].velocity.x) * 0.7f; // Bounce with good energy
-                bounced = true;
-            }
-            
-            // Check Z boundaries
-            if (projectiles[i].position.z > boundary) {
-                projectiles[i].position.z = boundary - 0.5f; // Push slightly away from wall
-                projectiles[i].velocity.z = -abs(projectiles[i].velocity.z) * 0.7f; // Bounce with good energy
-                bounced = true;
-            }
-            else if (projectiles[i].position.z < -boundary) {
-                projectiles[i].position.z = -boundary + 0.5f; // Push slightly away from wall
-                projectiles[i].velocity.z = abs(projectiles[i].velocity.z) * 0.7f; // Bounce with good energy
-                bounced = true;
-            }
-            
-            // Check floor (more reliable detection)
-            if (projectiles[i].position.y <= -10.0f) {
-                projectiles[i].position.y = -9.8f; // Push slightly above floor
-                projectiles[i].velocity.y = abs(projectiles[i].velocity.y) * 0.55f; // Bounce
-                bounced = true;
-            }
-            
-            // Handle bounce effects for world boundaries - DISABLED FOR NO BOUNCE
-            if (bounced && (isGrenade || isFlashbang)) {
-                // std::cout << "Grenade bounced! Velocity: " << glm::length(projectiles[i].velocity) << std::endl;
-                
-                // DISABLE BOUNCE - explode instead
-                createSimpleExplosion(projectiles[i].position);
-                projectiles[i].active = false;
-                activeProjectiles--;
-                std::cout << "Grenade exploded on boundary! Active: " << activeProjectiles << std::endl;
-                
-                // Simple velocity reduction to prevent infinite bouncing
-                // projectiles[i].velocity *= 0.9f;
-                
-                // Explode if too slow
-                if (glm::length(projectiles[i].velocity) < 3.0f) {
-                    if (isGrenade) {
-                        createSimpleExplosion(projectiles[i].position);
-                    } else {
-                        createFlashbangEffect(projectiles[i].position);
-                    }
-                    projectiles[i].active = false;
-                    activeProjectiles--;
-                    std::cout << "Grenade exploded! Active: " << activeProjectiles << std::endl;
-                }
+            bool hitBoundary =
+                projectiles[i].position.x > boundary || projectiles[i].position.x < -boundary ||
+                projectiles[i].position.z > boundary || projectiles[i].position.z < -boundary ||
+                projectiles[i].position.y <= -10.0f;
+
+            if (hitBoundary) {
+                // Clamp so effects/holes spawn near the boundary, not far outside it.
+                glm::vec3 clamped = projectiles[i].position;
+                clamped.x = std::min(boundary, std::max(-boundary, clamped.x));
+                clamped.z = std::min(boundary, std::max(-boundary, clamped.z));
+                clamped.y = std::max(-9.8f, clamped.y);
+
+                detonateAndDeactivate(clamped);
+                continue;
             }
 
             // Update lifetime
             projectiles[i].lifetime -= deltaTime;
+
+            // Detonate / expire with no bounce
+            if (projectiles[i].lifetime <= 0.0f) {
+                // Grenade -> explode, Flashbang -> flash, Bullets -> just disappear.
+                if (isGrenade || isFlashbang) {
+                    detonateAndDeactivate(projectiles[i].position);
+                } else {
+                    projectiles[i].active = false;
+                    activeProjectiles--;
+                }
+                continue;
+            }
 
             // Check collision with enemies first
             if (checkProjectileEnemyCollision(projectiles[i])) {
@@ -1298,25 +1216,27 @@ void Game::createFlashbangEffect(glm::vec3 position) {
     // Calculate distance from player to flashbang
     float playerDistance = glm::length(position - playerPos);
     float flashRadius = 5.0f; // 5 unit flash radius
+
+    // Always provide some visible feedback on detonation; scale strength by distance.
+    float flashIntensity = 1.0f - (playerDistance / flashRadius);
+    if (flashIntensity < 0.0f) flashIntensity = 0.0f;
+    if (flashIntensity > 1.0f) flashIntensity = 1.0f;
+
+    // Up to 3 seconds when close; minimal flash even if just outside radius.
+    float duration = 3.0f * flashIntensity;
+    if (duration < 0.35f) duration = 0.35f;
+
+    flashEffectTime = duration;
+    isFlashed = true;
+    std::cout << "Player flashed! Duration: " << flashEffectTime << " seconds" << std::endl;
     
-    if (playerDistance < flashRadius) {
-        // Flash the player based on distance
-        float flashIntensity = 1.0f - (playerDistance / flashRadius);
-        flashEffectTime = 3.0f * flashIntensity; // Up to 3 seconds of flash
-        isFlashed = true;
-        
-        std::cout << "Player flashed! Duration: " << flashEffectTime << " seconds" << std::endl;
-        
-        // Disorient enemies temporarily
-        for (int j = 0; j < MAX_ENEMIES; j++) {
-            if (enemies[j].active && enemies[j].alive) {
-                glm::vec3 enemyPos(enemies[j].x, enemies[j].y, enemies[j].z);
-                float enemyDistance = glm::length(position - enemyPos);
-                if (enemyDistance < flashRadius) {
-                    // Disorient enemy (reduce their movement speed temporarily)
-                    // This would require modifying the enemy system, for now just log it
-                    std::cout << "Enemy disoriented by flashbang!" << std::endl;
-                }
+    // Disorient enemies temporarily (log-only for now)
+    for (int j = 0; j < MAX_ENEMIES; j++) {
+        if (enemies[j].active && enemies[j].alive) {
+            glm::vec3 enemyPos(enemies[j].x, enemies[j].y, enemies[j].z);
+            float enemyDistance = glm::length(position - enemyPos);
+            if (enemyDistance < flashRadius) {
+                std::cout << "Enemy disoriented by flashbang!" << std::endl;
             }
         }
     }
@@ -1343,11 +1263,16 @@ void Game::renderFlashbangEffect() {
         glm::mat4 view = glm::mat4(1.0f);
         renderer.setViewProjection(view, projection);
         
+        // Ensure overlay is visible over the 3D scene
+        glDisable(GL_DEPTH_TEST);
+
         // Draw white overlay
         glm::mat4 model = glm::mat4(1.0f);
         model = glm::translate(model, glm::vec3(400.0f, 300.0f, 0.0f)); // Center of screen
         model = glm::scale(model, glm::vec3(800.0f, 600.0f, 1.0f)); // Full screen
         renderer.drawCube(model, glm::vec3(alpha, alpha, alpha)); // White with alpha
+
+        glEnable(GL_DEPTH_TEST);
     }
 }
 

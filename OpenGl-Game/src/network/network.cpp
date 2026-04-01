@@ -10,7 +10,7 @@
 
 // ========== NETWORK CLIENT ==========
 
-NetworkClient::NetworkClient() : socketFd(-1), connected(false), clientId(0), sequence(0) {
+NetworkClient::NetworkClient() : socketFd(-1), connected(false), connecting(false), clientId(0), sequence(0) {
     memset(&serverAddr, 0, sizeof(serverAddr));
 }
 
@@ -31,7 +31,13 @@ bool NetworkClient::connect(const std::string& serverAddress, uint16_t port) {
     
     serverAddr.sin_family = AF_INET;
     serverAddr.sin_port = htons(port);
-    inet_pton(AF_INET, serverAddress.c_str(), &serverAddr.sin_addr);
+    int ok = inet_pton(AF_INET, serverAddress.c_str(), &serverAddr.sin_addr);
+    if (ok != 1) {
+        std::cerr << "Invalid server IP address: " << serverAddress << std::endl;
+        close(socketFd);
+        socketFd = -1;
+        return false;
+    }
     
     // Send connect packet
     PacketHeader header;
@@ -51,13 +57,14 @@ bool NetworkClient::connect(const std::string& serverAddress, uint16_t port) {
     
     std::cout << "Connecting to server at " << serverAddress << ":" << port << "..." << std::endl;
     
-    // Wait for connect ack (non-blocking, will be handled in update)
-    connected = true;
+    // Wait for connect ack (non-blocking, handled in update)
+    connecting = true;
+    connected = false;
     return true;
 }
 
 void NetworkClient::disconnect() {
-    if (connected && socketFd >= 0) {
+    if ((connected || connecting) && socketFd >= 0) {
         PacketHeader header;
         header.magic = PACKET_MAGIC;
         header.type = PACKET_DISCONNECT;
@@ -74,6 +81,7 @@ void NetworkClient::disconnect() {
         socketFd = -1;
     }
     connected = false;
+    connecting = false;
     clientId = 0;
 }
 
@@ -101,7 +109,7 @@ void NetworkClient::sendPlayerInput(float moveX, float moveZ, float yaw, float p
 }
 
 void NetworkClient::update() {
-    if (!connected || socketFd < 0) return;
+    if ((!connected && !connecting) || socketFd < 0) return;
     
     char buffer[MAX_PACKET_SIZE];
     size_t received;
@@ -116,6 +124,8 @@ void NetworkClient::update() {
         switch (header->type) {
             case PACKET_CONNECT_ACK:
                 clientId = header->clientId;
+                connecting = false;
+                connected = true;
                 std::cout << "Connected to server! Client ID: " << clientId << std::endl;
                 break;
                 

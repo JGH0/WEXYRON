@@ -97,6 +97,7 @@ public:
     bool connect(const std::string& serverAddress, uint16_t port = DEFAULT_PORT);
     void disconnect();
     bool isConnected() const { return connected; }
+    bool isConnecting() const { return connecting; }
     
     // Send player input to server
     void sendPlayerInput(float moveX, float moveZ, float yaw, float pitch, bool jump, bool shoot, uint8_t weaponId);
@@ -117,6 +118,7 @@ private:
     int socketFd;
     sockaddr_in serverAddr;
     bool connected;
+    bool connecting;
     uint32_t clientId;
     uint32_t sequence;
     
