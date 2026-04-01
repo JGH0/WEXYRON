@@ -12,6 +12,7 @@
 #include <GLFW/glfw3.h>
 #include <vector>
 #include <glm/glm.hpp>
+#include <unordered_map>
 #include "camera.hpp"
 #include "renderer.hpp"
 #include "map.hpp"
@@ -291,6 +292,21 @@ private:
     std::string serverAddress;
     uint16_t serverPort;
     bool enteringServerAddress;
+
+    /// LAN server discovery (UDP broadcast)
+    struct DiscoveredServer {
+        std::string name;
+        std::string ip;
+        uint16_t port;
+        float lastSeenSeconds;
+    };
+    int discoverySocketFd;
+    float discoveryTimeSeconds;
+    float discoverySendCooldown;
+    std::vector<DiscoveredServer> discoveredServers;
+    int discoveredSelection;
+    bool focusServerList;
+    std::unordered_map<std::string, size_t> discoveredIndexByKey;
     
     /// Death state
     bool isDead;

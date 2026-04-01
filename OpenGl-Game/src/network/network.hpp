@@ -30,7 +30,10 @@ enum PacketType : uint8_t {
     PACKET_ENEMY_STATE = 9,
     PACKET_GAME_STATE = 10,
     PACKET_PING = 11,
-    PACKET_PONG = 12
+    PACKET_PONG = 12,
+    // LAN discovery (client broadcast -> server response)
+    PACKET_DISCOVER = 13,
+    PACKET_DISCOVER_RESPONSE = 14
 };
 
 #pragma pack(push, 1)
@@ -80,6 +83,18 @@ struct ProjectileSpawnPacket {
     float lifetime;
     uint8_t projectileType;
     uint32_t ownerId;
+};
+
+// LAN discovery request (broadcast)
+struct DiscoverPacket {
+    PacketHeader header;
+};
+
+// LAN discovery response (unicast back to requester)
+struct DiscoverResponsePacket {
+    PacketHeader header;
+    uint16_t port;
+    char name[32];
 };
 
 #pragma pack(pop)

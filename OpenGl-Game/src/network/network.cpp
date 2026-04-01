@@ -290,6 +290,22 @@ void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_
     if (header->magic != PACKET_MAGIC) return;
     
     switch (header->type) {
+        case PACKET_DISCOVER: {
+            // Reply with a simple server info packet
+            DiscoverResponsePacket resp;
+            resp.header.magic = PACKET_MAGIC;
+            resp.header.type = PACKET_DISCOVER_RESPONSE;
+            resp.header.sequence = 0;
+            resp.header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            resp.header.clientId = 0;
+            resp.port = ntohs(serverAddr.sin_port);
+            std::memset(resp.name, 0, sizeof(resp.name));
+            std::strncpy(resp.name, "Cube Game Server", sizeof(resp.name) - 1);
+            sendPacket(&resp, sizeof(resp), from);
+            break;
+        }
+
         case PACKET_CONNECT: {
             // New player connecting
             uint32_t newId = nextClientId++;

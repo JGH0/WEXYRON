@@ -9,6 +9,12 @@
 #include <iostream>
 #include <random>
 #include <cstring>
+#include <algorithm>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <fcntl.h>
 #include <glm/gtc/matrix_transform.hpp>
 
 Game::Game(int width, int height) 
@@ -34,6 +40,8 @@ Game::Game(int width, int height)
       shotgunCooldown(0.0f),
       grenadeCooldown(0.0f),
       flashbangCooldown(0.0f),
+      flashEffectTime(0.0f),
+      isFlashed(false),
       infiniteAmmoMode(false),
       activeProjectiles(0),
       bulletHoleCount(0),
@@ -44,7 +52,12 @@ Game::Game(int width, int height)
       grenade(nullptr),
       flashbang(nullptr),
       networkClient(nullptr),
-      multiplayerMode(false) {
+      multiplayerMode(false),
+      discoverySocketFd(-1),
+      discoveryTimeSeconds(0.0f),
+      discoverySendCooldown(0.0f),
+      discoveredSelection(0),
+      focusServerList(false) {
     std::cout << "Game initialized - Player at: (" << playerPos.x << ", " << playerPos.y << ", " << playerPos.z << ")" << std::endl;
     
     // Initialize remote players
@@ -114,6 +127,10 @@ Game::Game(int width, int height)
 
 Game::~Game() {
     disconnectFromServer();
+    if (discoverySocketFd >= 0) {
+        close(discoverySocketFd);
+        discoverySocketFd = -1;
+    }
     if (currentMap) delete currentMap;
     glfwTerminate();
 }
@@ -323,32 +340,34 @@ void Game::update(float deltaTime) {
         updatePlayerPhysics(deltaTime);
         
         // Update network client
-        if (networkClient && networkClient->isConnected()) {
+        if (networkClient && (networkClient->isConnected() || networkClient->isConnecting())) {
             networkClient->update();
             
             // Send player input to server
-            float moveX = 0.0f, moveZ = 0.0f;
-            if (glfwGetKey(window, keyBindings.forward) == GLFW_PRESS) {
-                moveX += cos(glm::radians(camera.Yaw));
-                moveZ += sin(glm::radians(camera.Yaw));
+            if (networkClient->isConnected()) {
+                float moveX = 0.0f, moveZ = 0.0f;
+                if (glfwGetKey(window, keyBindings.forward) == GLFW_PRESS) {
+                    moveX += cos(glm::radians(camera.Yaw));
+                    moveZ += sin(glm::radians(camera.Yaw));
+                }
+                if (glfwGetKey(window, keyBindings.backward) == GLFW_PRESS) {
+                    moveX -= cos(glm::radians(camera.Yaw));
+                    moveZ -= sin(glm::radians(camera.Yaw));
+                }
+                if (glfwGetKey(window, keyBindings.left) == GLFW_PRESS) {
+                    moveX += cos(glm::radians(camera.Yaw - 90.0f));
+                    moveZ += sin(glm::radians(camera.Yaw - 90.0f));
+                }
+                if (glfwGetKey(window, keyBindings.right) == GLFW_PRESS) {
+                    moveX += cos(glm::radians(camera.Yaw + 90.0f));
+                    moveZ += sin(glm::radians(camera.Yaw + 90.0f));
+                }
+                
+                bool jump = glfwGetKey(window, keyBindings.jump) == GLFW_PRESS;
+                bool shoot = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+                
+                networkClient->sendPlayerInput(moveX, moveZ, camera.Yaw, camera.Pitch, jump, shoot, static_cast<uint8_t>(currentWeapon));
             }
-            if (glfwGetKey(window, keyBindings.backward) == GLFW_PRESS) {
-                moveX -= cos(glm::radians(camera.Yaw));
-                moveZ -= sin(glm::radians(camera.Yaw));
-            }
-            if (glfwGetKey(window, keyBindings.left) == GLFW_PRESS) {
-                moveX += cos(glm::radians(camera.Yaw - 90.0f));
-                moveZ += sin(glm::radians(camera.Yaw - 90.0f));
-            }
-            if (glfwGetKey(window, keyBindings.right) == GLFW_PRESS) {
-                moveX += cos(glm::radians(camera.Yaw + 90.0f));
-                moveZ += sin(glm::radians(camera.Yaw + 90.0f));
-            }
-            
-            bool jump = glfwGetKey(window, keyBindings.jump) == GLFW_PRESS;
-            bool shoot = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
-            
-            networkClient->sendPlayerInput(moveX, moveZ, camera.Yaw, camera.Pitch, jump, shoot, static_cast<uint8_t>(currentWeapon));
         }
         
         // Update weapon cooldowns
@@ -406,12 +425,39 @@ void Game::update(float deltaTime) {
 }
 
 void Game::render() {
+    // Render everything into a consistent 4:3 area to avoid stretching on widescreen.
+    // The virtual UI space is 800x600; we letterbox/pillarbox into the actual framebuffer.
+    int fbW = 800, fbH = 600;
+    glfwGetFramebufferSize(window, &fbW, &fbH);
+    if (fbW <= 0) fbW = 800;
+    if (fbH <= 0) fbH = 600;
+
+    const float targetAspect = 800.0f / 600.0f; // 4:3
+    float fbAspect = (float)fbW / (float)fbH;
+
+    int vpX = 0, vpY = 0, vpW = fbW, vpH = fbH;
+    if (fbAspect > targetAspect) {
+        // Too wide: pillarbox
+        vpH = fbH;
+        vpW = (int)((float)fbH * targetAspect);
+        vpX = (fbW - vpW) / 2;
+        vpY = 0;
+    } else if (fbAspect < targetAspect) {
+        // Too tall: letterbox
+        vpW = fbW;
+        vpH = (int)((float)fbW / targetAspect);
+        vpX = 0;
+        vpY = (fbH - vpH) / 2;
+    }
+
+    renderer.setViewport(vpX, vpY, vpW, vpH);
+
     if (gameState == PLAYING) {
         renderer.clear();
 
         glm::mat4 view = camera.GetViewMatrix();
         glm::mat4 projection = glm::perspective(glm::radians(camera.Zoom),
-                                                (float)800/600, 0.1f, 100.0f);
+                                                (float)vpW / (float)vpH, 0.1f, 100.0f);
         renderer.setViewProjection(view, projection);
 
         // Render the map
@@ -554,7 +600,9 @@ Map* Game::getCurrentMap() {
 }
 
 void Game::framebufferSizeCallback(GLFWwindow* window, int width, int height) {
-    glViewport(0, 0, width, height);
+    // Viewport is controlled in `Game::render()` (letterboxed) to prevent stretching.
+    // Keep this as a no-op other than ensuring non-zero sizes.
+    if (width <= 0 || height <= 0) return;
 }
 
 void Game::mouseCallback(GLFWwindow* window, double xpos, double ypos) {
@@ -2371,6 +2419,48 @@ bool Game::isConnectedToServer() const {
     return networkClient && networkClient->isConnected();
 }
 
+static bool setNonBlocking(int fd) {
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) return false;
+    return fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
+}
+
+void ensureDiscoverySocket(int& sock) {
+    if (sock >= 0) return;
+    sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) return;
+
+    int opt = 1;
+    setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &opt, sizeof(opt));
+    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    setNonBlocking(sock);
+}
+
+static void sendDiscoverPing(int sock, uint16_t port) {
+    if (sock < 0) return;
+
+    DiscoverPacket p{};
+    p.header.magic = PACKET_MAGIC;
+    p.header.type = PACKET_DISCOVER;
+    p.header.sequence = 0;
+    p.header.timestamp = 0;
+    p.header.clientId = 0;
+
+    // Localhost (fixes "doesn't find server on my PC")
+    sockaddr_in local{};
+    local.sin_family = AF_INET;
+    local.sin_port = htons(port);
+    inet_pton(AF_INET, "127.0.0.1", &local.sin_addr);
+    sendto(sock, &p, sizeof(p), 0, (sockaddr*)&local, sizeof(local));
+
+    // Broadcast
+    sockaddr_in to{};
+    to.sin_family = AF_INET;
+    to.sin_port = htons(port);
+    to.sin_addr.s_addr = inet_addr("255.255.255.255");
+    sendto(sock, &p, sizeof(p), 0, (sockaddr*)&to, sizeof(to));
+}
+
 // ========== SERVER CONNECTION MENU ==========
 
 void Game::renderServerConnect() {
@@ -2400,23 +2490,44 @@ void Game::renderServerConnect() {
     glm::mat4 addressBox = glm::mat4(1.0f);
     addressBox = glm::translate(addressBox, glm::vec3(400.0f, boxY, 0.0f));
     addressBox = glm::scale(addressBox, glm::vec3(500.0f, 60.0f, 1.0f));
-    renderer.drawColoredQuad(addressBox, glm::vec3(0.2f, 0.2f, 0.4f)); // Dark blue-gray
+    renderer.drawColoredQuad(addressBox, enteringServerAddress && !focusServerList ? glm::vec3(0.25f, 0.25f, 0.55f) : glm::vec3(0.2f, 0.2f, 0.4f));
     
     // Draw server address text
     renderer.drawText("Server IP:", 150.0f, boxY - 10.0f, 1.2f);
-    renderer.drawText(serverAddress.c_str(), 250.0f, boxY - 10.0f, 1.2f);
+    std::string ipText = serverAddress.empty() ? std::string("192.168.1.50") : serverAddress;
+    renderer.drawText(ipText.c_str(), 250.0f, boxY - 10.0f, 1.2f);
     
     // Port input box
     float portY = 320.0f;
     glm::mat4 portBox = glm::mat4(1.0f);
     portBox = glm::translate(portBox, glm::vec3(400.0f, portY, 0.0f));
     portBox = glm::scale(portBox, glm::vec3(500.0f, 60.0f, 1.0f));
-    renderer.drawColoredQuad(portBox, glm::vec3(0.2f, 0.2f, 0.4f)); // Dark blue-gray
+    renderer.drawColoredQuad(portBox, (!enteringServerAddress && !focusServerList) ? glm::vec3(0.25f, 0.25f, 0.55f) : glm::vec3(0.2f, 0.2f, 0.4f));
     
     // Draw port text
     renderer.drawText("Port:", 150.0f, portY - 10.0f, 1.2f);
     std::string portStr = std::to_string(serverPort);
     renderer.drawText(portStr.c_str(), 250.0f, portY - 10.0f, 1.2f);
+
+    // Discovered servers list
+    float listY = 380.0f;
+    renderer.drawText("FOUND SERVERS (LAN):", 150.0f, listY - 30.0f, 1.0f);
+    if (discoveredServers.empty()) {
+        renderer.drawText("No servers found yet. Press R to rescan.", 150.0f, listY, 0.9f);
+    } else {
+        int maxRows = 3;
+        for (int i = 0; i < (int)discoveredServers.size() && i < maxRows; i++) {
+            const auto& s = discoveredServers[i];
+            std::string row = s.name + " - " + s.ip + ":" + std::to_string(s.port);
+            renderer.drawText(row.c_str(), 160.0f, listY + i * 25.0f, 0.9f);
+            if (focusServerList && i == discoveredSelection) {
+                glm::mat4 indicator = glm::mat4(1.0f);
+                indicator = glm::translate(indicator, glm::vec3(145.0f, listY + i * 25.0f + 5.0f, 0.0f));
+                indicator = glm::scale(indicator, glm::vec3(10.0f, 10.0f, 1.0f));
+                renderer.drawColoredQuad(indicator, glm::vec3(1.0f, 1.0f, 1.0f));
+            }
+        }
+    }
     
     // Connect button
     float connectY = 420.0f;
@@ -2427,6 +2538,9 @@ void Game::renderServerConnect() {
     if (isConnectedToServer()) {
         renderer.drawColoredQuad(connectBtn, glm::vec3(0.8f, 0.2f, 0.2f)); // Red for disconnect
         renderer.drawText("DISCONNECT", 340.0f, connectY - 10.0f, 1.3f);
+    } else if (networkClient && networkClient->isConnecting()) {
+        renderer.drawColoredQuad(connectBtn, glm::vec3(0.8f, 0.8f, 0.2f)); // Yellow for connecting
+        renderer.drawText("CONNECTING...", 320.0f, connectY - 10.0f, 1.2f);
     } else {
         renderer.drawColoredQuad(connectBtn, glm::vec3(0.2f, 0.8f, 0.2f)); // Green for connect
         renderer.drawText("CONNECT", 350.0f, connectY - 10.0f, 1.3f);
@@ -2441,14 +2555,8 @@ void Game::renderServerConnect() {
     renderer.drawText("BACK", 370.0f, backY - 8.0f, 1.2f);
     
     // Instructions at bottom
-    renderer.drawText("TAB to switch fields, ENTER to connect, ESC to go back", 180.0f, 580.0f, 0.8f);
+    renderer.drawText("TAB switch field, S focus list, R rescan LAN, ENTER connect/select, ESC back", 120.0f, 580.0f, 0.75f);
     
-    // Print to console
-    std::cout << "\n=== SERVER CONNECTION ===" << std::endl;
-    std::cout << "Server IP: " << serverAddress << std::endl;
-    std::cout << "Port: " << serverPort << std::endl;
-    std::cout << (enteringServerAddress ? "> IP <   Port" : "  IP   > Port <") << std::endl;
-    std::cout << "TAB = switch, ENTER = connect, ESC = back" << std::endl;
 }
 
 void Game::processServerConnectInput() {
@@ -2456,18 +2564,115 @@ void Game::processServerConnectInput() {
     static bool enterPressed = false;
     static bool escapePressed = false;
     static bool backspacePressed = false;
+    static bool periodPressed = false;
+    static bool rPressed = false;
+    static bool sPressed = false;
+    static bool upPressed = false;
+    static bool downPressed = false;
+    static bool digitPressed[10] = {false};
+
+    // Keep LAN discovery socket alive and poll for responses
+    discoveryTimeSeconds += 0.016f; // best-effort (menu doesn't have deltaTime)
+    if (discoverySendCooldown > 0.0f) discoverySendCooldown -= 0.016f;
+    ensureDiscoverySocket(discoverySocketFd);
+
+    // Poll discovery responses (non-blocking)
+    if (discoverySocketFd >= 0) {
+        char buffer[MAX_PACKET_SIZE];
+        sockaddr_in from{};
+        socklen_t fromLen = sizeof(from);
+        while (true) {
+            ssize_t bytes = recvfrom(discoverySocketFd, buffer, sizeof(buffer), 0, (sockaddr*)&from, &fromLen);
+            if (bytes <= 0) break;
+            if ((size_t)bytes < sizeof(PacketHeader)) continue;
+            auto* header = (PacketHeader*)buffer;
+            if (header->magic != PACKET_MAGIC) continue;
+            if (header->type != PACKET_DISCOVER_RESPONSE) continue;
+            if ((size_t)bytes < sizeof(DiscoverResponsePacket)) continue;
+            auto* resp = (DiscoverResponsePacket*)buffer;
+
+            std::string ip = inet_ntoa(from.sin_addr);
+            uint16_t port = resp->port;
+            std::string name(resp->name);
+            if (name.empty()) name = "Server";
+            std::string key = ip + ":" + std::to_string(port);
+
+            auto it = discoveredIndexByKey.find(key);
+            if (it == discoveredIndexByKey.end()) {
+                DiscoveredServer s;
+                s.ip = ip;
+                s.port = port;
+                s.name = name;
+                s.lastSeenSeconds = discoveryTimeSeconds;
+                discoveredIndexByKey[key] = discoveredServers.size();
+                discoveredServers.push_back(s);
+            } else {
+                auto& s = discoveredServers[it->second];
+                s.lastSeenSeconds = discoveryTimeSeconds;
+                s.name = name;
+            }
+        }
+    }
     
     // Handle TAB to switch between IP and Port fields
     if (glfwGetKey(window, GLFW_KEY_TAB) == GLFW_PRESS && !tabPressed) {
         tabPressed = true;
         enteringServerAddress = !enteringServerAddress;
+        focusServerList = false;
     } else if (glfwGetKey(window, GLFW_KEY_TAB) == GLFW_RELEASE) {
         tabPressed = false;
+    }
+
+    // Toggle focus to server list (S)
+    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS && !sPressed) {
+        sPressed = true;
+        focusServerList = !focusServerList;
+    } else if (glfwGetKey(window, GLFW_KEY_S) == GLFW_RELEASE) {
+        sPressed = false;
+    }
+
+    // Auto-scan while on this screen (lightweight)
+    if (discoverySocketFd >= 0 && discoverySendCooldown <= 0.0f) {
+        uint16_t port = serverPort == 0 ? DEFAULT_PORT : serverPort;
+        sendDiscoverPing(discoverySocketFd, port);
+        discoverySendCooldown = 1.0f;
+    }
+
+    // Rescan LAN (R)
+    if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS && !rPressed) {
+        rPressed = true;
+        uint16_t port = serverPort == 0 ? DEFAULT_PORT : serverPort;
+        sendDiscoverPing(discoverySocketFd, port);
+        discoverySendCooldown = 0.75f;
+    } else if (glfwGetKey(window, GLFW_KEY_R) == GLFW_RELEASE) {
+        rPressed = false;
+    }
+
+    // Navigate discovered list
+    if (focusServerList) {
+        if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS && !upPressed) {
+            upPressed = true;
+            if (!discoveredServers.empty()) {
+                discoveredSelection = (discoveredSelection - 1 + (int)discoveredServers.size()) % (int)discoveredServers.size();
+            }
+        } else if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_RELEASE) {
+            upPressed = false;
+        }
+        if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS && !downPressed) {
+            downPressed = true;
+            if (!discoveredServers.empty()) {
+                discoveredSelection = (discoveredSelection + 1) % (int)discoveredServers.size();
+            }
+        } else if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_RELEASE) {
+            downPressed = false;
+        }
     }
     
     // Handle number keys for IP/port input
     for (int key = GLFW_KEY_0; key <= GLFW_KEY_9; key++) {
-        if (glfwGetKey(window, key) == GLFW_PRESS) {
+        int idx = key - GLFW_KEY_0;
+        if (glfwGetKey(window, key) == GLFW_PRESS && !digitPressed[idx] && !focusServerList) {
+            digitPressed[idx] = true;
             char digit = '0' + (key - GLFW_KEY_0);
             if (enteringServerAddress) {
                 serverAddress += digit;
@@ -2476,12 +2681,26 @@ void Game::processServerConnectInput() {
                     serverPort = serverPort * 10 + (digit - '0');
                 }
             }
+        } else if (glfwGetKey(window, key) == GLFW_RELEASE) {
+            digitPressed[idx] = false;
         }
     }
     
     // Handle period for IP address
-    if (enteringServerAddress && glfwGetKey(window, GLFW_KEY_PERIOD) == GLFW_PRESS) {
+    if (enteringServerAddress && glfwGetKey(window, GLFW_KEY_PERIOD) == GLFW_PRESS && !periodPressed && !focusServerList) {
+        periodPressed = true;
         serverAddress += '.';
+    } else if (glfwGetKey(window, GLFW_KEY_PERIOD) == GLFW_RELEASE) {
+        periodPressed = false;
+    }
+
+    // Also support keypad decimal for IP entry
+    if (enteringServerAddress && glfwGetKey(window, GLFW_KEY_KP_DECIMAL) == GLFW_PRESS && !periodPressed && !focusServerList) {
+        periodPressed = true;
+        serverAddress += '.';
+    } else if (glfwGetKey(window, GLFW_KEY_KP_DECIMAL) == GLFW_RELEASE) {
+        // don't reset here if normal period is still held; keep it simple
+        periodPressed = false;
     }
     
     // Handle backspace
@@ -2505,7 +2724,12 @@ void Game::processServerConnectInput() {
             disconnectFromServer();
             std::cout << "Disconnected from server" << std::endl;
         } else {
-            if (connectToServer(serverAddress, serverPort)) {
+            if (focusServerList && !discoveredServers.empty()) {
+                const auto& s = discoveredServers[discoveredSelection];
+                serverAddress = s.ip;
+                serverPort = s.port;
+                focusServerList = false;
+            } else if (connectToServer(serverAddress, serverPort)) {
                 std::cout << "Connected! Press ESC to return to menu" << std::endl;
             } else {
                 std::cout << "Failed to connect to " << serverAddress << ":" << serverPort << std::endl;
