@@ -17,6 +17,10 @@
 #include <fcntl.h>
 #include <glm/gtc/matrix_transform.hpp>
 
+// UI helpers (defined later)
+static void setVirtualUIProjection(Renderer& renderer, GLFWwindow* window);
+static void getVirtualUIBounds(GLFWwindow* window, float& left, float& right, float& top, float& bottom);
+
 Game::Game(int width, int height) 
     : camera(glm::vec3(0.0f, 0.0f, 3.0f)), 
       gameState(MENU),
@@ -425,39 +429,20 @@ void Game::update(float deltaTime) {
 }
 
 void Game::render() {
-    // Render everything into a consistent 4:3 area to avoid stretching on widescreen.
-    // The virtual UI space is 800x600; we letterbox/pillarbox into the actual framebuffer.
+    // Fullscreen rendering: no borders/letterboxing.
+    // Wider windows show more horizontally; taller windows show more vertically (depending on FOV).
     int fbW = 800, fbH = 600;
     glfwGetFramebufferSize(window, &fbW, &fbH);
     if (fbW <= 0) fbW = 800;
     if (fbH <= 0) fbH = 600;
-
-    const float targetAspect = 800.0f / 600.0f; // 4:3
-    float fbAspect = (float)fbW / (float)fbH;
-
-    int vpX = 0, vpY = 0, vpW = fbW, vpH = fbH;
-    if (fbAspect > targetAspect) {
-        // Too wide: pillarbox
-        vpH = fbH;
-        vpW = (int)((float)fbH * targetAspect);
-        vpX = (fbW - vpW) / 2;
-        vpY = 0;
-    } else if (fbAspect < targetAspect) {
-        // Too tall: letterbox
-        vpW = fbW;
-        vpH = (int)((float)fbW / targetAspect);
-        vpX = 0;
-        vpY = (fbH - vpH) / 2;
-    }
-
-    renderer.setViewport(vpX, vpY, vpW, vpH);
+    renderer.setViewport(0, 0, fbW, fbH);
 
     if (gameState == PLAYING) {
         renderer.clear();
 
         glm::mat4 view = camera.GetViewMatrix();
         glm::mat4 projection = glm::perspective(glm::radians(camera.Zoom),
-                                                (float)vpW / (float)vpH, 0.1f, 100.0f);
+                                                (float)fbW / (float)fbH, 0.1f, 100.0f);
         renderer.setViewProjection(view, projection);
 
         // Render the map
@@ -524,10 +509,7 @@ void Game::render() {
         // Set up 2D rendering for death screen
         renderer.clear();
         
-        // Set up orthographic projection for 2D death screen
-        glm::mat4 projection = glm::ortho(0.0f, 800.0f, 600.0f, 0.0f, -1.0f, 1.0f);
-        glm::mat4 view = glm::mat4(1.0f);
-        renderer.setViewProjection(view, projection);
+        setVirtualUIProjection(renderer, window);
         
         // Render death screen
         renderDeathScreen();
@@ -537,10 +519,7 @@ void Game::render() {
         // Set up 2D rendering for menu
         renderer.clear();
         
-        // Set up orthographic projection for 2D menu
-        glm::mat4 projection = glm::ortho(0.0f, 800.0f, 600.0f, 0.0f, -1.0f, 1.0f);
-        glm::mat4 view = glm::mat4(1.0f);
-        renderer.setViewProjection(view, projection);
+        setVirtualUIProjection(renderer, window);
         
         renderMenu();
         glfwSwapBuffers(window);
@@ -549,9 +528,7 @@ void Game::render() {
         // Set up 2D rendering for settings
         renderer.clear();
         
-        glm::mat4 projection = glm::ortho(0.0f, 800.0f, 600.0f, 0.0f, -1.0f, 1.0f);
-        glm::mat4 view = glm::mat4(1.0f);
-        renderer.setViewProjection(view, projection);
+        setVirtualUIProjection(renderer, window);
         
         renderSettings();
         glfwSwapBuffers(window);
@@ -560,9 +537,7 @@ void Game::render() {
         // Set up 2D rendering for map selection
         renderer.clear();
         
-        glm::mat4 projection = glm::ortho(0.0f, 800.0f, 600.0f, 0.0f, -1.0f, 1.0f);
-        glm::mat4 view = glm::mat4(1.0f);
-        renderer.setViewProjection(view, projection);
+        setVirtualUIProjection(renderer, window);
         
         renderMapSelection();
         glfwSwapBuffers(window);
@@ -600,9 +575,9 @@ Map* Game::getCurrentMap() {
 }
 
 void Game::framebufferSizeCallback(GLFWwindow* window, int width, int height) {
-    // Viewport is controlled in `Game::render()` (letterboxed) to prevent stretching.
-    // Keep this as a no-op other than ensuring non-zero sizes.
+    // Keep OpenGL viewport in sync with window size.
     if (width <= 0 || height <= 0) return;
+    glViewport(0, 0, width, height);
 }
 
 void Game::mouseCallback(GLFWwindow* window, double xpos, double ypos) {
@@ -1265,10 +1240,23 @@ void Game::createFlashbangEffect(glm::vec3 position) {
     float playerDistance = glm::length(position - playerPos);
     float flashRadius = 5.0f; // 5 unit flash radius
 
-    // Always provide some visible feedback on detonation; scale strength by distance.
+    // Require the player to be looking roughly toward the flash to get flashed.
+    glm::vec3 toFlash = position - camera.Position;
+    float toLen = glm::length(toFlash);
+    if (toLen < 0.001f) toLen = 0.001f;
+    toFlash /= toLen;
+    float facing = glm::dot(glm::normalize(camera.Front), toFlash); // 1=looking at it, 0=90deg, -1=behind
+    if (facing < 0.2f) {
+        // Not looking at the flash: no effect.
+        return;
+    }
+
+    // Scale strength by distance and facing.
     float flashIntensity = 1.0f - (playerDistance / flashRadius);
     if (flashIntensity < 0.0f) flashIntensity = 0.0f;
     if (flashIntensity > 1.0f) flashIntensity = 1.0f;
+    if (facing > 1.0f) facing = 1.0f;
+    flashIntensity *= facing;
 
     // Up to 3 seconds when close; minimal flash even if just outside radius.
     float duration = 3.0f * flashIntensity;
@@ -1306,18 +1294,21 @@ void Game::renderFlashbangEffect() {
         float alpha = flashEffectTime / 3.0f; // Normalize to 0-1 range
         if (alpha > 1.0f) alpha = 1.0f;
         
-        // Set up 2D rendering for flash effect
-        glm::mat4 projection = glm::ortho(0.0f, 800.0f, 600.0f, 0.0f, -1.0f, 1.0f);
-        glm::mat4 view = glm::mat4(1.0f);
-        renderer.setViewProjection(view, projection);
+        setVirtualUIProjection(renderer, window);
+        float left, right, top, bottom;
+        getVirtualUIBounds(window, left, right, top, bottom);
+        float centerX = (left + right) * 0.5f;
+        float centerY = (top + bottom) * 0.5f;
+        float w = (right - left);
+        float h = (bottom - top);
         
         // Ensure overlay is visible over the 3D scene
         glDisable(GL_DEPTH_TEST);
 
         // Draw white overlay
         glm::mat4 model = glm::mat4(1.0f);
-        model = glm::translate(model, glm::vec3(400.0f, 300.0f, 0.0f)); // Center of screen
-        model = glm::scale(model, glm::vec3(800.0f, 600.0f, 1.0f)); // Full screen
+        model = glm::translate(model, glm::vec3(centerX, centerY, 0.0f));
+        model = glm::scale(model, glm::vec3(w, h, 1.0f));
         renderer.drawCube(model, glm::vec3(alpha, alpha, alpha)); // White with alpha
 
         glEnable(GL_DEPTH_TEST);
@@ -1718,10 +1709,7 @@ void Game::renderEnemies() {
 }
 
 void Game::renderCrosshair() {
-    // Set up 2D rendering for crosshair (after 3D rendering)
-    glm::mat4 projection = glm::ortho(0.0f, 800.0f, 600.0f, 0.0f, -1.0f, 1.0f);
-    glm::mat4 view = glm::mat4(1.0f);
-    renderer.setViewProjection(view, projection);
+    setVirtualUIProjection(renderer, window);
     
     // Draw crosshair in center of screen
     float crosshairSize = 25.0f;
@@ -1744,10 +1732,12 @@ void Game::renderCrosshair() {
 
 void Game::renderDamageEffect() {
     if (damageEffectTime > 0.0f) {
-        // Set up 2D rendering for damage effect
-        glm::mat4 projection = glm::ortho(0.0f, 800.0f, 600.0f, 0.0f, -1.0f, 1.0f);
-        glm::mat4 view = glm::mat4(1.0f);
-        renderer.setViewProjection(view, projection);
+        setVirtualUIProjection(renderer, window);
+
+        float left, right, top, bottom;
+        getVirtualUIBounds(window, left, right, top, bottom);
+        float centerY = (top + bottom) * 0.5f;
+        float h = (bottom - top);
         
         // Calculate damage effect alpha (fade out over time)
         float alpha = damageEffectTime / 0.5f; // 0.5 second duration
@@ -1758,15 +1748,15 @@ void Game::renderDamageEffect() {
         
         // Left side red tint
         glm::mat4 leftModel = glm::mat4(1.0f);
-        leftModel = glm::translate(leftModel, glm::vec3(sideWidth/2, 300.0f, 0.0f));
-        leftModel = glm::scale(leftModel, glm::vec3(sideWidth, 600.0f, 1.0f));
+        leftModel = glm::translate(leftModel, glm::vec3(left + sideWidth/2.0f, centerY, 0.0f));
+        leftModel = glm::scale(leftModel, glm::vec3(sideWidth, h, 1.0f));
         glm::vec3 leftColor = glm::vec3(0.8f, 0.0f, 0.0f) * sideAlpha; // Subtle red
         renderer.drawColoredQuad(leftModel, leftColor);
         
         // Right side red tint
         glm::mat4 rightModel = glm::mat4(1.0f);
-        rightModel = glm::translate(rightModel, glm::vec3(800.0f - sideWidth/2, 300.0f, 0.0f));
-        rightModel = glm::scale(rightModel, glm::vec3(sideWidth, 600.0f, 1.0f));
+        rightModel = glm::translate(rightModel, glm::vec3(right - sideWidth/2.0f, centerY, 0.0f));
+        rightModel = glm::scale(rightModel, glm::vec3(sideWidth, h, 1.0f));
         glm::vec3 rightColor = glm::vec3(0.8f, 0.0f, 0.0f) * sideAlpha; // Subtle red
         renderer.drawColoredQuad(rightModel, rightColor);
     }
@@ -2202,10 +2192,7 @@ void Game::renderMapSelection() {
     // Clear screen with dark background
     renderer.clear();
     
-    // Set up 2D rendering
-    glm::mat4 projection = glm::ortho(0.0f, 800.0f, 600.0f, 0.0f, -1.0f, 1.0f);
-    glm::mat4 view = glm::mat4(1.0f);
-    renderer.setViewProjection(view, projection);
+    setVirtualUIProjection(renderer, window);
     
     // Draw full screen dark background
     glm::mat4 bgModel = glm::mat4(1.0f);
@@ -2465,16 +2452,60 @@ static void sendDiscoverPing(int sock, uint16_t port) {
     sendto(sock, &p, sizeof(p), 0, (sockaddr*)&to, sizeof(to));
 }
 
+static void setVirtualUIProjection(Renderer& renderer, GLFWwindow* window) {
+    // Prevent UI stretching: keep 800x600 as "design space" and expand the
+    // visible virtual area on wider/taller screens (no borders).
+    int fbW = 800, fbH = 600;
+    glfwGetFramebufferSize(window, &fbW, &fbH);
+    if (fbW <= 0) fbW = 800;
+    if (fbH <= 0) fbH = 600;
+
+    float scaleX = (float)fbW / 800.0f;
+    float scaleY = (float)fbH / 600.0f;
+    float uiScale = std::min(scaleX, scaleY);
+    if (uiScale <= 0.0f) uiScale = 1.0f;
+
+    float uiW = (float)fbW / uiScale;
+    float uiH = (float)fbH / uiScale;
+    float offsetX = (uiW - 800.0f) * 0.5f;
+    float offsetY = (uiH - 600.0f) * 0.5f;
+
+    glm::mat4 projection = glm::ortho(-offsetX, 800.0f + offsetX,
+                                      600.0f + offsetY, -offsetY,
+                                      -1.0f, 1.0f);
+    glm::mat4 view = glm::mat4(1.0f);
+    renderer.setViewProjection(view, projection);
+}
+
+static void getVirtualUIBounds(GLFWwindow* window, float& left, float& right, float& top, float& bottom) {
+    int fbW = 800, fbH = 600;
+    glfwGetFramebufferSize(window, &fbW, &fbH);
+    if (fbW <= 0) fbW = 800;
+    if (fbH <= 0) fbH = 600;
+
+    float scaleX = (float)fbW / 800.0f;
+    float scaleY = (float)fbH / 600.0f;
+    float uiScale = std::min(scaleX, scaleY);
+    if (uiScale <= 0.0f) uiScale = 1.0f;
+
+    float uiW = (float)fbW / uiScale;
+    float uiH = (float)fbH / uiScale;
+    float offsetX = (uiW - 800.0f) * 0.5f;
+    float offsetY = (uiH - 600.0f) * 0.5f;
+
+    left = -offsetX;
+    right = 800.0f + offsetX;
+    top = -offsetY;
+    bottom = 600.0f + offsetY;
+}
+
 // ========== SERVER CONNECTION MENU ==========
 
 void Game::renderServerConnect() {
     // Clear screen with dark background
     renderer.clear();
     
-    // Set up 2D rendering
-    glm::mat4 projection = glm::ortho(0.0f, 800.0f, 600.0f, 0.0f, -1.0f, 1.0f);
-    glm::mat4 view = glm::mat4(1.0f);
-    renderer.setViewProjection(view, projection);
+    setVirtualUIProjection(renderer, window);
     
     // Draw full screen dark background
     glm::mat4 bgModel = glm::mat4(1.0f);
