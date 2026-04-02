@@ -2152,6 +2152,10 @@ void Game::processSettingsInput() {
         // Special handling for infinite ammo toggle
         if (settingsSelection == 6) {
             infiniteAmmoMode = !infiniteAmmoMode;
+            pistol->setInfiniteAmmo(infiniteAmmoMode);
+            shotgun->setInfiniteAmmo(infiniteAmmoMode);
+            grenade->setInfiniteAmmo(infiniteAmmoMode);
+            flashbang->setInfiniteAmmo(infiniteAmmoMode);
             std::cout << "Infinite ammo mode: " << (infiniteAmmoMode ? "ON" : "OFF") << std::endl;
         } else {
             // Wait for key release and capture new key

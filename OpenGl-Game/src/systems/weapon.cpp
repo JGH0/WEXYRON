@@ -74,9 +74,11 @@ void Grenade::shoot(Game* game) {
     if (!canShoot()) return;
     
     if (game->createProjectile(game->getCameraPosition(), game->getCameraFront() * 30.0f, 5.0f)) {
-        ammo--;
+        if (!infiniteAmmo) {
+            ammo--;
+        }
         cooldownTimer = cooldown;
-        std::cout << "Threw grenade! Grenades left: " << ammo << std::endl;
+        std::cout << "Threw grenade! Grenades left: " << (infiniteAmmo ? "∞" : std::to_string(ammo)) << std::endl;
     }
 }
 
@@ -89,8 +91,10 @@ void Flashbang::shoot(Game* game) {
     if (!canShoot()) return;
     
     if (game->createProjectile(game->getCameraPosition(), game->getCameraFront() * 25.0f, 4.0f)) {
-        ammo--;
+        if (!infiniteAmmo) {
+            ammo--;
+        }
         cooldownTimer = cooldown;
-        std::cout << "Threw flashbang! Flashbangs left: " << ammo << std::endl;
+        std::cout << "Threw flashbang! Flashbangs left: " << (infiniteAmmo ? "∞" : std::to_string(ammo)) << std::endl;
     }
 }

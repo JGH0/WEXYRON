@@ -38,6 +38,7 @@ public:
     float getCooldown() const { return cooldown; }
     int getAmmo() const { return ammo; }
     bool isInfiniteAmmo() const { return infiniteAmmo; }
+    void setInfiniteAmmo(bool val) { infiniteAmmo = val; }
 };
 
 /**
