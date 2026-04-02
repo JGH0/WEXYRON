@@ -84,6 +84,15 @@ public:
     void addBlock(const MapBlock& block);
     
     /**
+     * @brief Delete a block at the specified position
+     * 
+     * @param position Position to check for block deletion
+     * @param tolerance Distance tolerance for matching block
+     * @return true if a block was deleted, false otherwise
+     */
+    bool deleteBlockAt(const glm::vec3& position, float tolerance = 0.1f);
+    
+    /**
      * @brief Get all blocks in the map
      * 
      * @return const std::vector<MapBlock>& Reference to blocks vector

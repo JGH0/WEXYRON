@@ -131,6 +131,22 @@ void Map::addBlock(const MapBlock& block) {
     blocks.push_back(block);
 }
 
+bool Map::deleteBlockAt(const glm::vec3& position, float tolerance) {
+    for (auto it = blocks.begin(); it != blocks.end(); ++it) {
+        // Check if the position is within this block's bounds
+        glm::vec3 blockMin = it->position - it->scale * 0.5f;
+        glm::vec3 blockMax = it->position + it->scale * 0.5f;
+        
+        if (position.x >= blockMin.x && position.x <= blockMax.x &&
+            position.y >= blockMin.y && position.y <= blockMax.y &&
+            position.z >= blockMin.z && position.z <= blockMax.z) {
+            blocks.erase(it);
+            return true;
+        }
+    }
+    return false;
+}
+
 const std::vector<MapBlock>& Map::getBlocks() const {
     return blocks;
 }

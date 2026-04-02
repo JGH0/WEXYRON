@@ -172,6 +172,7 @@ private:
         SETTINGS,
         MAP_SELECTION,
         SERVER_CONNECT,
+        MAP_EDITOR,
         DEAD
     } gameState;
     
@@ -309,6 +310,16 @@ private:
     int discoveredSelection;
     bool focusServerList;
     std::unordered_map<std::string, size_t> discoveredIndexByKey;
+
+    /// Map Editor
+    bool editorNoclip = true;
+    float editorSpeed = 15.0f;
+    glm::vec3 editorGridPos = glm::vec3(0.0f);
+    glm::vec3 editorBlockSize = glm::vec3(2.0f, 2.0f, 2.0f);
+    int editorSelectedTexture = 1;
+    bool editorShowGrid = true;
+    float editorGridSize = 1.0f;
+    float editorBlockOffset = 5.0f;  // Distance in front of player for block placement
     
     /// Death state
     bool isDead;
@@ -579,6 +590,21 @@ private:
      * @brief Process server connection input
      */
     void processServerConnectInput();
+    
+    /**
+     * @brief Render map editor
+     */
+    void renderEditor();
+    
+    /**
+     * @brief Process map editor input
+     */
+    void processEditorInput();
+    
+    /**
+     * @brief Save current map to file
+     */
+    void saveMap(const std::string& filename);
     
     /**
      * @brief Save key bindings to file

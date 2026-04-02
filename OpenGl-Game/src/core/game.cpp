@@ -10,6 +10,7 @@
 #include <random>
 #include <cstring>
 #include <algorithm>
+#include <fstream>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -184,10 +185,13 @@ void Game::processInput(float deltaTime) {
     if (gameState == PLAYING) {
         processGameInput(deltaTime);
     } else if (gameState == MENU) {
+        // Calculate number of menu items (Map Editor hidden when connected)
+        int numItems = isConnectedToServer() ? 5 : 6;
+        
         // Handle UP key
         if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS && !upPressed) {
             upPressed = true;
-            menuSelection = (menuSelection - 1 + 5) % 5;
+            menuSelection = (menuSelection - 1 + numItems) % numItems;
         } else if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_RELEASE) {
             upPressed = false;
         }
@@ -195,15 +199,24 @@ void Game::processInput(float deltaTime) {
         // Handle DOWN key
         if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS && !downPressed) {
             downPressed = true;
-            menuSelection = (menuSelection + 1) % 5;
+            menuSelection = (menuSelection + 1) % numItems;
         } else if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_RELEASE) {
             downPressed = false;
         }
         
-        // Handle ENTER key
+        // Handle ENTER key - map filtered index to actual action
         if (glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS && !enterPressed) {
             enterPressed = true;
-            switch (menuSelection) {
+            
+            // Map the filtered menu selection to actual action
+            // When connected: 0=Play, 1=Map Select, 2=Connect, 3=Settings, 4=Exit
+            // When offline: 0=Play, 1=Map Select, 2=Editor, 3=Connect, 4=Settings, 5=Exit
+            int actionIndex = menuSelection;
+            if (isConnectedToServer() && menuSelection >= 2) {
+                actionIndex = menuSelection + 1; // Skip Map Editor
+            }
+            
+            switch (actionIndex) {
                 case 0: // Play Game
                     gameState = PLAYING;
                     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
@@ -212,7 +225,13 @@ void Game::processInput(float deltaTime) {
                     std::cout << "ENTERING MAP SELECTION MODE" << std::endl;
                     gameState = MAP_SELECTION;
                     break;
-                case 2: // Connect to Server
+                case 2: // Map Editor
+                    std::cout << "ENTERING MAP EDITOR" << std::endl;
+                    gameState = MAP_EDITOR;
+                    editorNoclip = true;
+                    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+                    break;
+                case 3: // Connect to Server
                     std::cout << "ENTERING SERVER CONNECTION" << std::endl;
                     gameState = SERVER_CONNECT;
                     serverAddress = "";
@@ -220,11 +239,11 @@ void Game::processInput(float deltaTime) {
                     enteringServerAddress = true;
                     serverConnectSelection = 0;
                     break;
-                case 3: // Settings
+                case 4: // Settings
                     gameState = SETTINGS;
                     settingsSelection = 0;
                     break;
-                case 4: // Exit
+                case 5: // Exit
                     glfwSetWindowShouldClose(window, true);
                     break;
             }
@@ -237,6 +256,8 @@ void Game::processInput(float deltaTime) {
         processMapSelectionInput();
     } else if (gameState == SERVER_CONNECT) {
         processServerConnectInput();
+    } else if (gameState == MAP_EDITOR) {
+        processEditorInput();
     } else if (gameState == DEAD) {
         // Handle death screen input - any key to restart
         if (glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS || 
@@ -544,6 +565,11 @@ void Game::render() {
     } else if (gameState == SERVER_CONNECT) {
         // Set up 2D rendering for server connection
         renderServerConnect();
+        glfwSwapBuffers(window);
+        glfwPollEvents();
+    } else if (gameState == MAP_EDITOR) {
+        // Render map editor - 3D view
+        renderEditor();
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
@@ -1985,17 +2011,41 @@ void Game::renderMenu() {
     float startY = 150.0f;
     float spacing = 70.0f;
     
-    // Menu items: Play Game, Map Selection, Connect to Server, Settings, Exit
-    const char* menuItems[] = {"Play Game", "Map Selection", "Connect to Server", "Settings", "Exit"};
-    glm::vec3 colors[] = {
+    // Menu items: Play Game, Map Selection, Map Editor, Connect to Server, Settings, Exit
+    // Note: Map Editor is hidden when connected to server
+    const char* allMenuItems[] = {"Play Game", "Map Selection", "Map Editor", "Connect to Server", "Settings", "Exit"};
+    glm::vec3 allColors[] = {
         glm::vec3(0.2f, 0.8f, 0.2f), // Green for Play
         glm::vec3(0.2f, 0.4f, 0.8f), // Blue for Map Selection
+        glm::vec3(0.2f, 0.8f, 0.8f), // Cyan for Map Editor
         glm::vec3(0.8f, 0.2f, 0.8f), // Purple for Connect to Server
         glm::vec3(0.8f, 0.6f, 0.2f), // Orange for Settings
         glm::vec3(0.8f, 0.2f, 0.2f)  // Red for Exit
     };
     
-    for (int i = 0; i < 5; i++) {
+    // Filter items based on connection status
+    const char* menuItems[6];
+    glm::vec3 colors[6];
+    int numItems = 0;
+    int editorIndex = -1;
+    
+    for (int i = 0; i < 6; i++) {
+        // Skip Map Editor (index 2) if connected to server
+        if (i == 2 && isConnectedToServer()) {
+            continue;
+        }
+        menuItems[numItems] = allMenuItems[i];
+        colors[numItems] = allColors[i];
+        if (i == 2) editorIndex = numItems;
+        numItems++;
+    }
+    
+    // Adjust menuSelection if it now points to a non-existent item
+    if (menuSelection >= numItems) {
+        menuSelection = numItems - 1;
+    }
+    
+    for (int i = 0; i < numItems; i++) {
         float y = startY + i * spacing;
         
         // Create model matrix for this menu item
@@ -2037,9 +2087,10 @@ void Game::renderMenu() {
     std::cout << "\n=== MAIN MENU ===" << std::endl;
     std::cout << (menuSelection == 0 ? "> " : "  ") << "Play Game" << std::endl;
     std::cout << (menuSelection == 1 ? "> " : "  ") << "Map Selection" << std::endl;
-    std::cout << (menuSelection == 2 ? "> " : "  ") << "Connect to Server" << std::endl;
-    std::cout << (menuSelection == 3 ? "> " : "  ") << "Settings" << std::endl;
-    std::cout << (menuSelection == 4 ? "> " : "  ") << "Exit" << std::endl;
+    std::cout << (menuSelection == 2 ? "> " : "  ") << "Map Editor" << std::endl;
+    std::cout << (menuSelection == 3 ? "> " : "  ") << "Connect to Server" << std::endl;
+    std::cout << (menuSelection == 4 ? "> " : "  ") << "Settings" << std::endl;
+    std::cout << (menuSelection == 5 ? "> " : "  ") << "Exit" << std::endl;
     std::cout << "Use UP/DOWN to select, ENTER to confirm, ESC to resume" << std::endl;
 }
 
@@ -2863,4 +2914,429 @@ void Game::processServerConnectInput() {
     } else if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_RELEASE) {
         escapePressed = false;
     }
+}
+
+// ========== MAP EDITOR IMPLEMENTATION ==========
+
+void Game::renderEditor() {
+    int fbW = 800, fbH = 600;
+    glfwGetFramebufferSize(window, &fbW, &fbH);
+    if (fbW <= 0) fbW = 800;
+    if (fbH <= 0) fbH = 600;
+    renderer.setViewport(0, 0, fbW, fbH);
+    
+    renderer.clear();
+    
+    glm::mat4 view = camera.GetViewMatrix();
+    glm::mat4 projection = glm::perspective(glm::radians(camera.Zoom),
+                                            (float)fbW / (float)fbH, 0.1f, 1000.0f);
+    renderer.setViewProjection(view, projection);
+    
+    // Render the map
+    if (currentMap) {
+        renderer.renderMap(currentMap);
+    }
+    
+    // Render grid lines on ground
+    if (editorShowGrid) {
+        for (int i = -20; i <= 20; i++) {
+            // X lines
+            glm::mat4 lineX = glm::mat4(1.0f);
+            lineX = glm::translate(lineX, glm::vec3(i * editorGridSize, -0.05f, 0.0f));
+            lineX = glm::scale(lineX, glm::vec3(0.05f, 0.05f, 40.0f * editorGridSize));
+            renderer.drawCube(lineX, glm::vec3(0.3f, 0.3f, 0.3f));
+            
+            // Z lines
+            glm::mat4 lineZ = glm::mat4(1.0f);
+            lineZ = glm::translate(lineZ, glm::vec3(0.0f, -0.05f, i * editorGridSize));
+            lineZ = glm::scale(lineZ, glm::vec3(40.0f * editorGridSize, 0.05f, 0.05f));
+            renderer.drawCube(lineZ, glm::vec3(0.3f, 0.3f, 0.3f));
+        }
+    }
+    
+    // Render ghost block at grid position - wireframe style (edges only)
+    // The ghost block should match the size of the block that will be placed
+    {
+        glm::vec3 halfSize = editorBlockSize * 0.5f;
+        glm::vec3 center = editorGridPos;
+        float edgeThickness = 0.02f;  // Thinner edges
+        glm::vec3 edgeColor = glm::vec3(0.0f, 1.0f, 0.0f); // Bright green edges
+        
+        // Draw 12 edges of the cube - sized to match the actual block
+        // Vertical edges (4 corners)
+        for (float x = -1; x <= 1; x += 2) {
+            for (float z = -1; z <= 1; z += 2) {
+                glm::mat4 edge = glm::mat4(1.0f);
+                edge = glm::translate(edge, center + glm::vec3(x * halfSize.x, 0.0f, z * halfSize.z));
+                edge = glm::scale(edge, glm::vec3(edgeThickness, halfSize.y * 2.0f, edgeThickness));
+                renderer.drawCube(edge, edgeColor);
+            }
+        }
+        // Horizontal edges at top and bottom
+        for (float y = -1; y <= 1; y += 2) {
+            // X-direction edges
+            for (float z = -1; z <= 1; z += 2) {
+                glm::mat4 edge = glm::mat4(1.0f);
+                edge = glm::translate(edge, center + glm::vec3(0.0f, y * halfSize.y, z * halfSize.z));
+                edge = glm::scale(edge, glm::vec3(halfSize.x * 2.0f, edgeThickness, edgeThickness));
+                renderer.drawCube(edge, edgeColor);
+            }
+            // Z-direction edges
+            for (float x = -1; x <= 1; x += 2) {
+                glm::mat4 edge = glm::mat4(1.0f);
+                edge = glm::translate(edge, center + glm::vec3(x * halfSize.x, y * halfSize.y, 0.0f));
+                edge = glm::scale(edge, glm::vec3(edgeThickness, edgeThickness, halfSize.z * 2.0f));
+                renderer.drawCube(edge, edgeColor);
+            }
+        }
+    }
+    
+    // Render crosshair
+    setVirtualUIProjection(renderer, window);
+    renderCrosshair();
+    
+    // Render editor UI overlay - smaller text with more line spacing
+    float textScale = 0.6f;
+    float lineHeight = 28.0f;  // Increased spacing between lines
+    float startX = 20.0f;
+    float startY = 20.0f;
+    
+    renderer.drawText("MAP EDITOR", startX, startY, textScale);
+    renderer.drawText("WASD=move, SPACE/SHIFT=up/down", startX, startY + lineHeight, textScale);
+    renderer.drawText("CLICK=place, RCLICK=delete", startX, startY + lineHeight * 2, textScale);
+    renderer.drawText("1-8=texture, +/- =resize", startX, startY + lineHeight * 3, textScale);
+    renderer.drawText("UP/DOWN=placement dist, arrows=move", startX, startY + lineHeight * 4, textScale);
+    renderer.drawText("[,] =grid, G=grid, N=noclip", startX, startY + lineHeight * 5, textScale);
+    renderer.drawText("F9=save, ESC=exit", startX, startY + lineHeight * 6, textScale);
+    
+    // Show current settings
+    char buf[128];
+    snprintf(buf, sizeof(buf), "POS: %.1f, %.1f, %.1f", editorGridPos.x, editorGridPos.y, editorGridPos.z);
+    renderer.drawText(buf, startX, startY + lineHeight * 8, textScale);
+    snprintf(buf, sizeof(buf), "SIZE: %.1f, %.1f, %.1f", editorBlockSize.x, editorBlockSize.y, editorBlockSize.z);
+    renderer.drawText(buf, startX, startY + lineHeight * 9, textScale);
+    snprintf(buf, sizeof(buf), "TEX: %d  GRID: %.1f  DIST: %.1f", editorSelectedTexture, editorGridSize, editorBlockOffset);
+    renderer.drawText(buf, startX, startY + lineHeight * 10, textScale);
+    snprintf(buf, sizeof(buf), "NOCLIP: %s", editorNoclip ? "ON" : "OFF");
+    renderer.drawText(buf, startX, startY + lineHeight * 11, textScale);
+    
+    // Texture preview in bottom RIGHT corner - make it larger and more visible
+    // Texture color palette (matching the map texture IDs)
+    glm::vec3 textureColors[8] = {
+        glm::vec3(0.4f, 0.8f, 0.4f),  // 0 = grass (green)
+        glm::vec3(0.6f, 0.6f, 0.6f),  // 1 = stone (gray)
+        glm::vec3(0.8f, 0.4f, 0.3f),  // 2 = brick (red-brown)
+        glm::vec3(0.5f, 0.5f, 0.6f),  // 3 = metal (blue-gray)
+        glm::vec3(0.8f, 0.6f, 0.4f),  // 4 = wood (brown)
+        glm::vec3(0.9f, 0.8f, 0.5f),  // 5 = sand (tan)
+        glm::vec3(0.7f, 0.9f, 0.9f),  // 6 = ice (light blue)
+        glm::vec3(0.5f, 0.4f, 0.3f)   // 7 = dirt (dark brown)
+    };
+    
+    // Draw texture preview box in bottom RIGHT corner - larger size
+    float previewSize = 80.0f;
+    float previewX = fbW - previewSize - 40.0f;  // Right side, 40px margin
+    float previewY = 40.0f;  // Near bottom (40px from bottom)
+    
+    // Draw black background first (for visibility)
+    glm::mat4 bgModel = glm::mat4(1.0f);
+    bgModel = glm::translate(bgModel, glm::vec3(previewX, previewY, 0.0f));
+    bgModel = glm::scale(bgModel, glm::vec3(previewSize + 8.0f, previewSize + 8.0f, 1.0f));
+    renderer.drawColoredQuad(bgModel, glm::vec3(0.0f, 0.0f, 0.0f)); // Black background
+    
+    // Draw white border
+    glm::mat4 borderModel = glm::mat4(1.0f);
+    borderModel = glm::translate(borderModel, glm::vec3(previewX, previewY, 0.0f));
+    borderModel = glm::scale(borderModel, glm::vec3(previewSize + 6.0f, previewSize + 6.0f, 1.0f));
+    renderer.drawColoredQuad(borderModel, glm::vec3(1.0f, 1.0f, 1.0f)); // White border
+    
+    // Draw colored preview inside
+    glm::mat4 previewModel = glm::mat4(1.0f);
+    previewModel = glm::translate(previewModel, glm::vec3(previewX, previewY, 0.0f));
+    previewModel = glm::scale(previewModel, glm::vec3(previewSize, previewSize, 1.0f));
+    renderer.drawColoredQuad(previewModel, textureColors[editorSelectedTexture]);
+    
+    // Preview label above the preview box
+    char previewLabel[32];
+    snprintf(previewLabel, sizeof(previewLabel), "TEX %d", editorSelectedTexture);
+    renderer.drawText(previewLabel, previewX, previewY + previewSize + 15.0f, textScale);
+}
+
+void Game::processEditorInput() {
+    static bool escPressed = false;
+    static bool gPressed = false;
+    static bool nPressed = false;
+    static bool f9Pressed = false;
+    static bool texKeyPressed[8] = {false};
+    static bool lmbPressed = false;
+    static bool rmbPressed = false;
+    static bool plusPressed = false;
+    static bool minusPressed = false;
+    static bool lbracketPressed = false;
+    static bool rbracketPressed = false;
+    static bool xPressed = false;
+    static bool yPressed = false;
+    static bool zPressed = false;
+    static bool upArrowPressed = false;
+    static bool downArrowPressed = false;
+    static bool leftArrowPressed = false;
+    static bool rightArrowPressed = false;
+    static float sidewaysOffset = 0.0f;  // Persistent sideways offset
+    
+    float moveSpeed = editorSpeed * 0.016f;
+    
+    // Flying camera movement (WASD + Space/Shift)
+    glm::vec3 moveDir(0.0f);
+    
+    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
+        moveDir += camera.Front;
+    }
+    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
+        moveDir -= camera.Front;
+    }
+    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
+        moveDir -= camera.Right;
+    }
+    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
+        moveDir += camera.Right;
+    }
+    if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) {
+        moveDir += glm::vec3(0.0f, 1.0f, 0.0f);
+    }
+    if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) {
+        moveDir -= glm::vec3(0.0f, 1.0f, 0.0f);
+    }
+    
+    // Normalize and apply movement
+    if (glm::length(moveDir) > 0.0f) {
+        moveDir = glm::normalize(moveDir);
+        camera.Position += moveDir * moveSpeed;
+    }
+    
+    // UP/DOWN arrows move block placement forward/backward along camera direction
+    if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS && !upArrowPressed) {
+        upArrowPressed = true;
+        editorBlockOffset += editorGridSize;
+        if (editorBlockOffset > 20.0f) editorBlockOffset = 20.0f;
+        std::cout << "Placement forward: " << editorBlockOffset << std::endl;
+    } else if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_RELEASE) {
+        upArrowPressed = false;
+    }
+    
+    if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS && !downArrowPressed) {
+        downArrowPressed = true;
+        editorBlockOffset -= editorGridSize;
+        if (editorBlockOffset < 0.5f) editorBlockOffset = 0.5f;
+        std::cout << "Placement backward: " << editorBlockOffset << std::endl;
+    } else if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_RELEASE) {
+        downArrowPressed = false;
+    }
+    
+    // LEFT/RIGHT arrows move placement sideways (perpendicular to camera)
+    if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS && !leftArrowPressed) {
+        leftArrowPressed = true;
+        sidewaysOffset -= editorGridSize;
+        std::cout << "Placement left: " << sidewaysOffset << std::endl;
+    } else if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_RELEASE) {
+        leftArrowPressed = false;
+    }
+    
+    if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS && !rightArrowPressed) {
+        rightArrowPressed = true;
+        sidewaysOffset += editorGridSize;
+        std::cout << "Placement right: " << sidewaysOffset << std::endl;
+    } else if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_RELEASE) {
+        rightArrowPressed = false;
+    }
+    
+    // Calculate placement position based on offset from camera
+    glm::vec3 placementPos = camera.Position + camera.Front * editorBlockOffset + camera.Right * sidewaysOffset;
+    
+    // Snap grid position to grid at the offset distance
+    editorGridPos.x = round(placementPos.x / editorGridSize) * editorGridSize;
+    editorGridPos.y = round(placementPos.y / editorGridSize) * editorGridSize;
+    editorGridPos.z = round(placementPos.z / editorGridSize) * editorGridSize;
+    
+    // Texture selection (keys 1-8)
+    for (int i = 0; i < 8; i++) {
+        int key = GLFW_KEY_1 + i;
+        if (glfwGetKey(window, key) == GLFW_PRESS && !texKeyPressed[i]) {
+            texKeyPressed[i] = true;
+            editorSelectedTexture = i;
+            std::cout << "Selected texture: " << i << std::endl;
+        } else if (glfwGetKey(window, key) == GLFW_RELEASE) {
+            texKeyPressed[i] = false;
+        }
+    }
+    
+    // Grid toggle
+    if (glfwGetKey(window, GLFW_KEY_G) == GLFW_PRESS && !gPressed) {
+        gPressed = true;
+        editorShowGrid = !editorShowGrid;
+    } else if (glfwGetKey(window, GLFW_KEY_G) == GLFW_RELEASE) {
+        gPressed = false;
+    }
+    
+    // Noclip toggle
+    if (glfwGetKey(window, GLFW_KEY_N) == GLFW_PRESS && !nPressed) {
+        nPressed = true;
+        editorNoclip = !editorNoclip;
+    } else if (glfwGetKey(window, GLFW_KEY_N) == GLFW_RELEASE) {
+        nPressed = false;
+    }
+    
+    // Save map (F9)
+    if (glfwGetKey(window, GLFW_KEY_F9) == GLFW_PRESS && !f9Pressed) {
+        f9Pressed = true;
+        saveMap("custom.map");
+    } else if (glfwGetKey(window, GLFW_KEY_F9) == GLFW_RELEASE) {
+        f9Pressed = false;
+    }
+    
+    // Block placement (Left mouse button)
+    if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS && !lmbPressed) {
+        lmbPressed = true;
+        if (currentMap) {
+            MapBlock block;
+            block.position = editorGridPos;
+            block.scale = editorBlockSize * 0.5f; // Half-extents
+            block.color = glm::vec3(1.0f, 1.0f, 1.0f);
+            block.textureId = editorSelectedTexture;
+            block.solid = true;
+            currentMap->addBlock(block);
+            std::cout << "Added block at " << editorGridPos.x << "," << editorGridPos.y << "," << editorGridPos.z 
+                      << " size " << editorBlockSize.x << "x" << editorBlockSize.y << "x" << editorBlockSize.z << std::endl;
+        }
+    } else if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_RELEASE) {
+        lmbPressed = false;
+    }
+    
+    // Block deletion (Right mouse button)
+    if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS && !rmbPressed) {
+        rmbPressed = true;
+        if (currentMap) {
+            glm::vec3 rayOrigin = camera.Position;
+            glm::vec3 rayDir = camera.Front;
+            float maxDist = 100.0f;
+            float step = 0.1f;
+            
+            for (float t = 0; t < maxDist; t += step) {
+                glm::vec3 point = rayOrigin + rayDir * t;
+                if (currentMap->checkCollision(point, 0.1f)) {
+                    // Found a block - delete it using the new method
+                    if (currentMap->deleteBlockAt(point, 0.1f)) {
+                        std::cout << "Deleted block at distance " << t << std::endl;
+                    }
+                    break;
+                }
+            }
+        }
+    } else if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_RELEASE) {
+        rmbPressed = false;
+    }
+    
+    // Plus key - increase current resize axis
+    if (glfwGetKey(window, GLFW_KEY_EQUAL) == GLFW_PRESS && !plusPressed) {
+        plusPressed = true;
+        // Use X/Y/Z keys to select which axis to resize
+        if (glfwGetKey(window, GLFW_KEY_X) == GLFW_PRESS) {
+            editorBlockSize.x = glm::min(editorBlockSize.x + 0.5f, 20.0f);
+        } else if (glfwGetKey(window, GLFW_KEY_Y) == GLFW_PRESS) {
+            editorBlockSize.y = glm::min(editorBlockSize.y + 0.5f, 20.0f);
+        } else if (glfwGetKey(window, GLFW_KEY_Z) == GLFW_PRESS) {
+            editorBlockSize.z = glm::min(editorBlockSize.z + 0.5f, 20.0f);
+        } else {
+            // No axis key pressed - resize all uniformly
+            editorBlockSize += glm::vec3(0.5f);
+            editorBlockSize = glm::min(editorBlockSize, glm::vec3(20.0f));
+        }
+        std::cout << "Block size: " << editorBlockSize.x << "x" << editorBlockSize.y << "x" << editorBlockSize.z << std::endl;
+    } else if (glfwGetKey(window, GLFW_KEY_EQUAL) == GLFW_RELEASE) {
+        plusPressed = false;
+    }
+    
+    // Minus key - decrease current resize axis
+    if (glfwGetKey(window, GLFW_KEY_MINUS) == GLFW_PRESS && !minusPressed) {
+        minusPressed = true;
+        // Use X/Y/Z keys to select which axis to resize
+        if (glfwGetKey(window, GLFW_KEY_X) == GLFW_PRESS) {
+            editorBlockSize.x = glm::max(editorBlockSize.x - 0.5f, 0.5f);
+        } else if (glfwGetKey(window, GLFW_KEY_Y) == GLFW_PRESS) {
+            editorBlockSize.y = glm::max(editorBlockSize.y - 0.5f, 0.5f);
+        } else if (glfwGetKey(window, GLFW_KEY_Z) == GLFW_PRESS) {
+            editorBlockSize.z = glm::max(editorBlockSize.z - 0.5f, 0.5f);
+        } else {
+            // No axis key pressed - resize all uniformly
+            editorBlockSize -= glm::vec3(0.5f);
+            editorBlockSize = glm::max(editorBlockSize, glm::vec3(0.5f));
+        }
+        std::cout << "Block size: " << editorBlockSize.x << "x" << editorBlockSize.y << "x" << editorBlockSize.z << std::endl;
+    } else if (glfwGetKey(window, GLFW_KEY_MINUS) == GLFW_RELEASE) {
+        minusPressed = false;
+    }
+    
+    // Grid size adjustment with [ and ] keys
+    if (glfwGetKey(window, GLFW_KEY_LEFT_BRACKET) == GLFW_PRESS && !lbracketPressed) {
+        lbracketPressed = true;
+        editorGridSize = glm::max(editorGridSize - 0.5f, 0.5f);
+        std::cout << "Grid size: " << editorGridSize << std::endl;
+    } else if (glfwGetKey(window, GLFW_KEY_LEFT_BRACKET) == GLFW_RELEASE) {
+        lbracketPressed = false;
+    }
+    
+    if (glfwGetKey(window, GLFW_KEY_RIGHT_BRACKET) == GLFW_PRESS && !rbracketPressed) {
+        rbracketPressed = true;
+        editorGridSize = glm::min(editorGridSize + 0.5f, 5.0f);
+        std::cout << "Grid size: " << editorGridSize << std::endl;
+    } else if (glfwGetKey(window, GLFW_KEY_RIGHT_BRACKET) == GLFW_RELEASE) {
+        rbracketPressed = false;
+    }
+    
+    // ESC to exit
+    if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS && !escPressed) {
+        escPressed = true;
+        gameState = MENU;
+        menuSelection = 2;
+    } else if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_RELEASE) {
+        escPressed = false;
+    }
+}
+
+void Game::saveMap(const std::string& filename) {
+    if (!currentMap) {
+        std::cerr << "No map to save!" << std::endl;
+        return;
+    }
+    
+    std::string filepath = "assets/maps/" + filename;
+    std::ofstream file(filepath);
+    
+    if (!file.is_open()) {
+        std::cerr << "Failed to open file for writing: " << filepath << std::endl;
+        return;
+    }
+    
+    // Write header
+    file << "# Custom map created in editor\n";
+    file << "name Custom\n";
+    file << "dimensions 100.0 50.0 100.0\n\n";
+    
+    // Write blocks
+    const auto& blocks = currentMap->getBlocks();
+    for (const auto& block : blocks) {
+        // Format: block x y z width height depth textureId solid visible
+        file << "block " 
+             << block.position.x << " "
+             << block.position.y << " "
+             << block.position.z << " "
+             << block.scale.x * 2.0f << " "  // Convert half-extents to full size
+             << block.scale.y * 2.0f << " "
+             << block.scale.z * 2.0f << " "
+             << block.textureId << " "
+             << (block.solid ? "1" : "0") << " "
+             << "1\n"; // visible
+    }
+    
+    file.close();
+    std::cout << "Map saved to " << filepath << " with " << blocks.size() << " blocks" << std::endl;
 }
