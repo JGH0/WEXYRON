@@ -185,7 +185,7 @@ void Renderer::clear() {
 void Renderer::drawTexturedCube(const glm::mat4& model, Texture* texture) {
     if (!texture || !texturedShader) return;
     
-    // Bind texture
+    // Bind texture - this activates the texture unit and binds the texture
     texture->bind();
     
     // Use textured shader
@@ -193,6 +193,11 @@ void Renderer::drawTexturedCube(const glm::mat4& model, Texture* texture) {
     texturedShader->setMat4("model", glm::value_ptr(model));
     texturedShader->setMat4("view", glm::value_ptr(currentView));
     texturedShader->setMat4("projection", glm::value_ptr(currentProjection));
+    
+    // Tell shader which texture unit to sample from
+    // Texture unit is stored as GL_TEXTURE0 + unit, so we need to extract the unit number
+    GLint unit = texture->getUnit() - GL_TEXTURE0;
+    texturedShader->setInt("ourTexture", unit);
     
     // Bind VAO first, then update vertex data and attributes
     glBindVertexArray(cubeVAO);

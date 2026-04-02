@@ -44,6 +44,14 @@ public:
     void setMat4(const std::string &name, const float *value) const;
     
     /**
+     * @brief Set an integer uniform
+     * 
+     * @param name Uniform variable name
+     * @param value Integer value
+     */
+    void setInt(const std::string &name, int value) const;
+    
+    /**
      * @brief Destructor - cleans up shader program
      */
     ~Shader();

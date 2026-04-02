@@ -567,6 +567,19 @@ bool Game::loadMap(const std::string& mapFile) {
     }
     
     currentMap = new Map("assets/maps/" + mapFile);
+    
+    // Load textures for the map
+    if (currentMap) {
+        currentMap->loadTexture("grass.png", 0);
+        currentMap->loadTexture("stone.png", 1);
+        currentMap->loadTexture("brick.png", 2);
+        currentMap->loadTexture("metal.png", 3);
+        currentMap->loadTexture("wood.png", 4);
+        currentMap->loadTexture("sand.png", 5);
+        currentMap->loadTexture("ice.png", 6);
+        currentMap->loadTexture("dirt.png", 7);
+    }
+    
     return currentMap != nullptr;
 }
 
@@ -2200,62 +2213,64 @@ void Game::renderMapSelection() {
     bgModel = glm::scale(bgModel, glm::vec3(800.0f, 600.0f, 1.0f));
     renderer.drawColoredQuad(bgModel, glm::vec3(0.05f, 0.05f, 0.15f)); // Very dark blue
     
-    // Title area - bright colored bar at top
+    // Title bar - similar to settings
     glm::mat4 titleBg = glm::mat4(1.0f);
-    titleBg = glm::translate(titleBg, glm::vec3(400.0f, 60.0f, 0.0f));
+    titleBg = glm::translate(titleBg, glm::vec3(400.0f, 80.0f, 0.0f));
     titleBg = glm::scale(titleBg, glm::vec3(600.0f, 60.0f, 1.0f));
     renderer.drawColoredQuad(titleBg, glm::vec3(0.8f, 0.4f, 0.1f)); // Orange title bar
+    renderer.drawText("SELECT MAP", 340.0f, 75.0f, 1.5f);
     
-    // Map data
-    const char* mapNames[] = {"SIMPLE", "LARGE", "ARENA", "SNIPER", "COMPLEX"};
-    glm::vec3 mapColors[] = {
-        glm::vec3(0.3f, 0.8f, 0.3f),  // Green - Simple
-        glm::vec3(0.3f, 0.5f, 1.0f),  // Blue - Large
-        glm::vec3(1.0f, 0.6f, 0.2f),  // Orange - Arena
-        glm::vec3(0.8f, 0.3f, 0.8f),  // Purple - Sniper
-        glm::vec3(0.5f, 0.8f, 1.0f)   // Cyan - Complex
-    };
+    // Map data - styled like settings menu
+    const char* mapNames[] = {"Simple", "Large", "Arena", "Sniper", "Complex"};
+    const char* mapSizes[] = {"Small", "Large", "Medium", "Long Range", "Multi-Level"};
     const int numMaps = 5;
     
-    float startY = 140.0f;
-    float boxHeight = 70.0f;
-    float spacing = 80.0f;
+    float menuWidth = 400.0f;
+    float menuHeight = 40.0f;
+    float menuX = (800.0f - menuWidth) / 2.0f; // Center horizontally
+    float startY = 150.0f;
+    float spacing = 50.0f;
     
-    // Draw map boxes
+    // Draw map boxes like settings items
     for (int i = 0; i < numMaps; i++) {
         float y = startY + i * spacing;
         bool isSelected = (i == mapSelection);
         
-        glm::mat4 box = glm::mat4(1.0f);
-        box = glm::translate(box, glm::vec3(400.0f, y, 0.0f));
+        // Create background rectangle for this map
+        glm::mat4 bgModel = glm::mat4(1.0f);
+        bgModel = glm::translate(bgModel, glm::vec3(menuX + menuWidth/2.0f, y + menuHeight/2.0f, 0.0f));
+        bgModel = glm::scale(bgModel, glm::vec3(menuWidth, menuHeight, 1.0f));
         
+        // Use blue for normal, green for selected (matching settings style)
+        glm::vec3 bgColor;
         if (isSelected) {
-            box = glm::scale(box, glm::vec3(420.0f, boxHeight + 10.0f, 1.0f));
-            renderer.drawColoredQuad(box, mapColors[i] * 1.3f); // Brighter when selected
-            
-            // White indicator
-            glm::mat4 indicator = glm::mat4(1.0f);
-            indicator = glm::translate(indicator, glm::vec3(140.0f, y, 0.0f));
-            indicator = glm::scale(indicator, glm::vec3(25.0f, 25.0f, 1.0f));
-            renderer.drawColoredQuad(indicator, glm::vec3(1.0f, 1.0f, 1.0f));
+            bgColor = glm::vec3(0.6f, 0.8f, 0.2f); // Bright green when selected
         } else {
-            box = glm::scale(box, glm::vec3(380.0f, boxHeight, 1.0f));
-            renderer.drawColoredQuad(box, mapColors[i]); // Normal color
+            bgColor = glm::vec3(0.3f, 0.5f, 0.7f); // Blue for normal
+        }
+        
+        renderer.drawColoredQuad(bgModel, bgColor);
+        
+        // Draw map name on the left
+        float textX = menuX + 20.0f;
+        renderer.drawText(mapNames[i], textX, y + menuHeight/2.0f - 8.0f, 1.2f);
+        
+        // Draw map size/type on the right
+        const char* sizeText = mapSizes[i];
+        float sizeTextWidth = strlen(sizeText) * 8.0f; // Approximate width
+        renderer.drawText(sizeText, menuX + menuWidth - sizeTextWidth - 20.0f, y + menuHeight/2.0f - 8.0f, 1.2f);
+        
+        // Draw selection indicator
+        if (isSelected) {
+            glm::mat4 indicatorModel = glm::mat4(1.0f);
+            indicatorModel = glm::translate(indicatorModel, glm::vec3(menuX + 10.0f, y + menuHeight/2.0f, 0.0f));
+            indicatorModel = glm::scale(indicatorModel, glm::vec3(8.0f, 8.0f, 1.0f));
+            renderer.drawColoredQuad(indicatorModel, glm::vec3(1.0f, 1.0f, 1.0f));
         }
     }
     
-    // Instructions at bottom - gray bar
-    glm::mat4 instrBg = glm::mat4(1.0f);
-    instrBg = glm::translate(instrBg, glm::vec3(400.0f, 540.0f, 0.0f));
-    instrBg = glm::scale(instrBg, glm::vec3(700.0f, 50.0f, 1.0f));
-    renderer.drawColoredQuad(instrBg, glm::vec3(0.3f, 0.3f, 0.3f)); // Gray bar
-    
-    // Print to console
-    std::cout << "\n=== MAP SELECTION ===" << std::endl;
-    for (int i = 0; i < numMaps; i++) {
-        std::cout << (i == mapSelection ? "> " : "  ") << mapNames[i] << std::endl;
-    }
-    std::cout << "UP/DOWN = change, ENTER = load, ESC = back" << std::endl;
+    // Instructions at bottom
+    renderer.drawText("UP/DOWN = change, ENTER = load, ESC = back", 250.0f, 580.0f, 1.0f);
 }
 
 void Game::processMapSelectionInput() {

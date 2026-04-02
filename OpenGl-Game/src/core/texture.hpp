@@ -66,6 +66,12 @@ public:
      * @param magFilter Magnification filter (default: GL_LINEAR)
      */
     void setFilterParameters(GLenum minFilter = GL_LINEAR, GLenum magFilter = GL_LINEAR);
+    
+    /**
+     * @brief Get the OpenGL texture unit this texture uses
+     * @return GLenum The texture unit (GL_TEXTURE0, GL_TEXTURE1, etc.)
+     */
+    GLenum getUnit() const { return textureUnit; }
 
 private:
     /// OpenGL texture unit
