@@ -16,6 +16,7 @@
 #include "camera.hpp"
 #include "renderer.hpp"
 #include "map.hpp"
+#include "../ui/menu.hpp"
 #include "../systems/weapon.hpp"
 #include "../systems/physics.hpp"
 #include "../systems/input.hpp"
@@ -192,7 +193,7 @@ private:
     int settingsSelection;
     
     /// Map selection
-    int mapSelection;
+    int mapSelection = 0;
     
     /// Key bindings
     struct KeyBindings {
@@ -292,6 +293,7 @@ private:
     std::string serverAddress;
     uint16_t serverPort;
     bool enteringServerAddress;
+    int serverConnectSelection;
 
     /// LAN server discovery (UDP broadcast)
     struct DiscoveredServer {

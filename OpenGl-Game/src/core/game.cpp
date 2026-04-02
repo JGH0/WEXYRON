@@ -25,7 +25,6 @@ Game::Game(int width, int height)
     : camera(glm::vec3(0.0f, 0.0f, 3.0f)), 
       gameState(MENU),
       menuSelection(0),
-      mapSelection(0),
       settingsSelection(0),
       currentWeapon(PISTOL),
       playerPos(glm::vec3(0.0f, 2.0f, 0.0f)),
@@ -212,7 +211,6 @@ void Game::processInput(float deltaTime) {
                 case 1: // Map Selection
                     std::cout << "ENTERING MAP SELECTION MODE" << std::endl;
                     gameState = MAP_SELECTION;
-                    mapSelection = 0;
                     break;
                 case 2: // Connect to Server
                     std::cout << "ENTERING SERVER CONNECTION" << std::endl;
@@ -220,6 +218,7 @@ void Game::processInput(float deltaTime) {
                     serverAddress = "";
                     serverPort = 7777;
                     enteringServerAddress = true;
+                    serverConnectSelection = 0;
                     break;
                 case 3: // Settings
                     gameState = SETTINGS;
@@ -2207,27 +2206,21 @@ void Game::renderMapSelection() {
     
     setVirtualUIProjection(renderer, window);
     
-    // Draw full screen dark background
-    glm::mat4 bgModel = glm::mat4(1.0f);
-    bgModel = glm::translate(bgModel, glm::vec3(400.0f, 300.0f, 0.0f));
-    bgModel = glm::scale(bgModel, glm::vec3(800.0f, 600.0f, 1.0f));
-    renderer.drawColoredQuad(bgModel, glm::vec3(0.05f, 0.05f, 0.15f)); // Very dark blue
-    
-    // Title bar - similar to settings
+    // Title bar - orange like settings
     glm::mat4 titleBg = glm::mat4(1.0f);
     titleBg = glm::translate(titleBg, glm::vec3(400.0f, 80.0f, 0.0f));
     titleBg = glm::scale(titleBg, glm::vec3(600.0f, 60.0f, 1.0f));
-    renderer.drawColoredQuad(titleBg, glm::vec3(0.8f, 0.4f, 0.1f)); // Orange title bar
+    renderer.drawColoredQuad(titleBg, glm::vec3(0.8f, 0.4f, 0.1f));
     renderer.drawText("SELECT MAP", 340.0f, 75.0f, 1.5f);
     
-    // Map data - styled like settings menu
+    // Map data - styled exactly like settings menu
     const char* mapNames[] = {"Simple", "Large", "Arena", "Sniper", "Complex"};
     const char* mapSizes[] = {"Small", "Large", "Medium", "Long Range", "Multi-Level"};
     const int numMaps = 5;
     
     float menuWidth = 400.0f;
     float menuHeight = 40.0f;
-    float menuX = (800.0f - menuWidth) / 2.0f; // Center horizontally
+    float menuX = (800.0f - menuWidth) / 2.0f;
     float startY = 150.0f;
     float spacing = 50.0f;
     
@@ -2242,23 +2235,16 @@ void Game::renderMapSelection() {
         bgModel = glm::scale(bgModel, glm::vec3(menuWidth, menuHeight, 1.0f));
         
         // Use blue for normal, green for selected (matching settings style)
-        glm::vec3 bgColor;
-        if (isSelected) {
-            bgColor = glm::vec3(0.6f, 0.8f, 0.2f); // Bright green when selected
-        } else {
-            bgColor = glm::vec3(0.3f, 0.5f, 0.7f); // Blue for normal
-        }
+        glm::vec3 bgColor = isSelected ? glm::vec3(0.6f, 0.8f, 0.2f) : glm::vec3(0.3f, 0.5f, 0.7f);
         
         renderer.drawColoredQuad(bgModel, bgColor);
         
         // Draw map name on the left
-        float textX = menuX + 20.0f;
-        renderer.drawText(mapNames[i], textX, y + menuHeight/2.0f - 8.0f, 1.2f);
+        renderer.drawText(mapNames[i], menuX + 20.0f, y + menuHeight/2.0f - 8.0f, 1.2f);
         
         // Draw map size/type on the right
-        const char* sizeText = mapSizes[i];
-        float sizeTextWidth = strlen(sizeText) * 8.0f; // Approximate width
-        renderer.drawText(sizeText, menuX + menuWidth - sizeTextWidth - 20.0f, y + menuHeight/2.0f - 8.0f, 1.2f);
+        float valueWidth = strlen(mapSizes[i]) * 8.0f;
+        renderer.drawText(mapSizes[i], menuX + menuWidth - valueWidth - 20.0f, y + menuHeight/2.0f - 8.0f, 1.2f);
         
         // Draw selection indicator
         if (isSelected) {
@@ -2280,6 +2266,7 @@ void Game::processMapSelectionInput() {
     static bool escapePressed = false;
     
     const int numMaps = 5;
+    const char* mapFiles[] = {"simple.map", "large.map", "arena.map", "sniper.map", "complex.map"};
     
     // Handle UP key
     if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS && !upPressed) {
@@ -2300,8 +2287,6 @@ void Game::processMapSelectionInput() {
     // Handle ENTER key
     if (glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS && !enterPressed) {
         enterPressed = true;
-        const char* mapFiles[] = {"simple.map", "large.map", "arena.map", "sniper.map", "complex.map"};
-        
         std::cout << "Loading " << mapFiles[mapSelection] << "..." << std::endl;
         loadMap(mapFiles[mapSelection]);
         gameState = PLAYING;
@@ -2314,7 +2299,7 @@ void Game::processMapSelectionInput() {
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS && !escapePressed) {
         escapePressed = true;
         gameState = MENU;
-        menuSelection = 1; // Keep on Map Selection option
+        menuSelection = 1;
     } else if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_RELEASE) {
         escapePressed = false;
     }
@@ -2517,96 +2502,162 @@ static void getVirtualUIBounds(GLFWwindow* window, float& left, float& right, fl
 // ========== SERVER CONNECTION MENU ==========
 
 void Game::renderServerConnect() {
-    // Clear screen with dark background
+    // Clear screen
     renderer.clear();
     
     setVirtualUIProjection(renderer, window);
     
-    // Draw full screen dark background
-    glm::mat4 bgModel = glm::mat4(1.0f);
-    bgModel = glm::translate(bgModel, glm::vec3(400.0f, 300.0f, 0.0f));
-    bgModel = glm::scale(bgModel, glm::vec3(800.0f, 600.0f, 1.0f));
-    renderer.drawColoredQuad(bgModel, glm::vec3(0.05f, 0.05f, 0.15f)); // Very dark blue
-    
-    // Title bar
+    // Title bar - orange like settings
     glm::mat4 titleBg = glm::mat4(1.0f);
     titleBg = glm::translate(titleBg, glm::vec3(400.0f, 80.0f, 0.0f));
-    titleBg = glm::scale(titleBg, glm::vec3(600.0f, 80.0f, 1.0f));
-    renderer.drawColoredQuad(titleBg, glm::vec3(0.8f, 0.2f, 0.8f)); // Purple title bar
+    titleBg = glm::scale(titleBg, glm::vec3(600.0f, 60.0f, 1.0f));
+    renderer.drawColoredQuad(titleBg, glm::vec3(0.8f, 0.4f, 0.1f));
     renderer.drawText("CONNECT TO SERVER", 280.0f, 75.0f, 1.5f);
     
-    // Server address input box
-    float boxY = 220.0f;
+    float menuWidth = 400.0f;
+    float menuHeight = 40.0f;
+    float menuX = (800.0f - menuWidth) / 2.0f;
+    float startY = 150.0f;
+    float spacing = 50.0f;
+    
+    // Server address input box - styled like settings menu
+    float addressY = startY;
     glm::mat4 addressBox = glm::mat4(1.0f);
-    addressBox = glm::translate(addressBox, glm::vec3(400.0f, boxY, 0.0f));
-    addressBox = glm::scale(addressBox, glm::vec3(500.0f, 60.0f, 1.0f));
-    renderer.drawColoredQuad(addressBox, enteringServerAddress && !focusServerList ? glm::vec3(0.25f, 0.25f, 0.55f) : glm::vec3(0.2f, 0.2f, 0.4f));
+    addressBox = glm::translate(addressBox, glm::vec3(menuX + menuWidth/2.0f, addressY + menuHeight/2.0f, 0.0f));
+    addressBox = glm::scale(addressBox, glm::vec3(menuWidth, menuHeight, 1.0f));
     
-    // Draw server address text
-    renderer.drawText("Server IP:", 150.0f, boxY - 10.0f, 1.2f);
+    // Blue when not selected, green when selected (entering address)
+    glm::vec3 addressColor = (enteringServerAddress && !focusServerList) ? 
+        glm::vec3(0.6f, 0.8f, 0.2f) : glm::vec3(0.3f, 0.5f, 0.7f);
+    renderer.drawColoredQuad(addressBox, addressColor);
+    
+    // Draw server address label and value
+    renderer.drawText("Server IP:", menuX + 30.0f, addressY + menuHeight/2.0f - 6.0f, 1.0f);
     std::string ipText = serverAddress.empty() ? std::string("192.168.1.50") : serverAddress;
-    renderer.drawText(ipText.c_str(), 250.0f, boxY - 10.0f, 1.2f);
+    float ipWidth = ipText.length() * 8.0f;
+    renderer.drawText(ipText.c_str(), menuX + menuWidth - ipWidth - 30.0f, addressY + menuHeight/2.0f - 6.0f, 1.0f);
     
-    // Port input box
-    float portY = 320.0f;
+    // Selection indicator for address
+    if (serverConnectSelection == 0) {
+        glm::mat4 indicatorModel = glm::mat4(1.0f);
+        indicatorModel = glm::translate(indicatorModel, glm::vec3(menuX + 15.0f, addressY + menuHeight/2.0f, 0.0f));
+        indicatorModel = glm::scale(indicatorModel, glm::vec3(8.0f, 8.0f, 1.0f));
+        renderer.drawColoredQuad(indicatorModel, glm::vec3(1.0f, 1.0f, 1.0f));
+    }
+    
+    // Port input box - styled like settings menu
+    float portY = startY + spacing;
     glm::mat4 portBox = glm::mat4(1.0f);
-    portBox = glm::translate(portBox, glm::vec3(400.0f, portY, 0.0f));
-    portBox = glm::scale(portBox, glm::vec3(500.0f, 60.0f, 1.0f));
-    renderer.drawColoredQuad(portBox, (!enteringServerAddress && !focusServerList) ? glm::vec3(0.25f, 0.25f, 0.55f) : glm::vec3(0.2f, 0.2f, 0.4f));
+    portBox = glm::translate(portBox, glm::vec3(menuX + menuWidth/2.0f, portY + menuHeight/2.0f, 0.0f));
+    portBox = glm::scale(portBox, glm::vec3(menuWidth, menuHeight, 1.0f));
     
-    // Draw port text
-    renderer.drawText("Port:", 150.0f, portY - 10.0f, 1.2f);
+    // Green if selected (row 1), blue otherwise
+    glm::vec3 portColor = (serverConnectSelection == 1) ? 
+        glm::vec3(0.6f, 0.8f, 0.2f) : glm::vec3(0.3f, 0.5f, 0.7f);
+    renderer.drawColoredQuad(portBox, portColor);
+    
+    // Draw port label and value
+    renderer.drawText("Port:", menuX + 30.0f, portY + menuHeight/2.0f - 6.0f, 1.0f);
     std::string portStr = std::to_string(serverPort);
-    renderer.drawText(portStr.c_str(), 250.0f, portY - 10.0f, 1.2f);
-
-    // Discovered servers list
-    float listY = 380.0f;
-    renderer.drawText("FOUND SERVERS (LAN):", 150.0f, listY - 30.0f, 1.0f);
+    float portWidth = portStr.length() * 8.0f;
+    renderer.drawText(portStr.c_str(), menuX + menuWidth - portWidth - 30.0f, portY + menuHeight/2.0f - 6.0f, 1.0f);
+    
+    // Selection indicator for port
+    if (serverConnectSelection == 1) {
+        glm::mat4 indicatorModel = glm::mat4(1.0f);
+        indicatorModel = glm::translate(indicatorModel, glm::vec3(menuX + 15.0f, portY + menuHeight/2.0f, 0.0f));
+        indicatorModel = glm::scale(indicatorModel, glm::vec3(8.0f, 8.0f, 1.0f));
+        renderer.drawColoredQuad(indicatorModel, glm::vec3(1.0f, 1.0f, 1.0f));
+    }
+    
+    // Discovered servers list - styled like settings items
+    float listY = startY + 2 * spacing;
+    renderer.drawText("FOUND SERVERS (LAN):", menuX + 20.0f, listY - 20.0f, 1.0f);
+    
     if (discoveredServers.empty()) {
-        renderer.drawText("No servers found yet. Press R to rescan.", 150.0f, listY, 0.9f);
+        renderer.drawText("No servers found. Press R to rescan.", menuX + 30.0f, listY + 5.0f, 1.0f);
     } else {
-        int maxRows = 3;
-        for (int i = 0; i < (int)discoveredServers.size() && i < maxRows; i++) {
+        int maxRows = std::min(3, (int)discoveredServers.size());
+        for (int i = 0; i < maxRows; i++) {
             const auto& s = discoveredServers[i];
-            std::string row = s.name + " - " + s.ip + ":" + std::to_string(s.port);
-            renderer.drawText(row.c_str(), 160.0f, listY + i * 25.0f, 0.9f);
-            if (focusServerList && i == discoveredSelection) {
-                glm::mat4 indicator = glm::mat4(1.0f);
-                indicator = glm::translate(indicator, glm::vec3(145.0f, listY + i * 25.0f + 5.0f, 0.0f));
-                indicator = glm::scale(indicator, glm::vec3(10.0f, 10.0f, 1.0f));
-                renderer.drawColoredQuad(indicator, glm::vec3(1.0f, 1.0f, 1.0f));
+            float serverY = listY + i * spacing;
+            
+            // Server item box
+            glm::mat4 serverBox = glm::mat4(1.0f);
+            serverBox = glm::translate(serverBox, glm::vec3(menuX + menuWidth/2.0f, serverY + menuHeight/2.0f, 0.0f));
+            serverBox = glm::scale(serverBox, glm::vec3(menuWidth, menuHeight, 1.0f));
+            
+            // Green if selected in list, blue otherwise
+            glm::vec3 serverColor = (serverConnectSelection == 2 + i) ? 
+                glm::vec3(0.6f, 0.8f, 0.2f) : glm::vec3(0.3f, 0.5f, 0.7f);
+            renderer.drawColoredQuad(serverBox, serverColor);
+            
+            // Server name and address
+            std::string serverText = s.name + " - " + s.ip + ":" + std::to_string(s.port);
+            renderer.drawText(serverText.c_str(), menuX + 30.0f, serverY + menuHeight/2.0f - 6.0f, 1.0f);
+            
+            // Selection indicator
+            if (serverConnectSelection == 2 + i) {
+                glm::mat4 indicatorModel = glm::mat4(1.0f);
+                indicatorModel = glm::translate(indicatorModel, glm::vec3(menuX + 15.0f, serverY + menuHeight/2.0f, 0.0f));
+                indicatorModel = glm::scale(indicatorModel, glm::vec3(8.0f, 8.0f, 1.0f));
+                renderer.drawColoredQuad(indicatorModel, glm::vec3(1.0f, 1.0f, 1.0f));
             }
         }
     }
     
-    // Connect button
-    float connectY = 420.0f;
-    glm::mat4 connectBtn = glm::mat4(1.0f);
-    connectBtn = glm::translate(connectBtn, glm::vec3(400.0f, connectY, 0.0f));
-    connectBtn = glm::scale(connectBtn, glm::vec3(300.0f, 60.0f, 1.0f));
+    // Connect button - styled as menu item
+    int connectRow = discoveredServers.empty() ? 2 : 2 + std::min(3, (int)discoveredServers.size());
+    float connectY = startY + connectRow * spacing;
+    glm::mat4 connectBox = glm::mat4(1.0f);
+    connectBox = glm::translate(connectBox, glm::vec3(menuX + menuWidth/2.0f, connectY + menuHeight/2.0f, 0.0f));
+    connectBox = glm::scale(connectBox, glm::vec3(menuWidth, menuHeight, 1.0f));
     
     if (isConnectedToServer()) {
-        renderer.drawColoredQuad(connectBtn, glm::vec3(0.8f, 0.2f, 0.2f)); // Red for disconnect
-        renderer.drawText("DISCONNECT", 340.0f, connectY - 10.0f, 1.3f);
+        renderer.drawColoredQuad(connectBox, glm::vec3(0.8f, 0.2f, 0.2f)); // Red for disconnect
+        renderer.drawText("DISCONNECT", menuX + 30.0f, connectY + menuHeight/2.0f - 6.0f, 1.0f);
     } else if (networkClient && networkClient->isConnecting()) {
-        renderer.drawColoredQuad(connectBtn, glm::vec3(0.8f, 0.8f, 0.2f)); // Yellow for connecting
-        renderer.drawText("CONNECTING...", 320.0f, connectY - 10.0f, 1.2f);
+        renderer.drawColoredQuad(connectBox, glm::vec3(0.8f, 0.8f, 0.2f)); // Yellow for connecting
+        renderer.drawText("CONNECTING...", menuX + 30.0f, connectY + menuHeight/2.0f - 6.0f, 1.0f);
     } else {
-        renderer.drawColoredQuad(connectBtn, glm::vec3(0.2f, 0.8f, 0.2f)); // Green for connect
-        renderer.drawText("CONNECT", 350.0f, connectY - 10.0f, 1.3f);
+        // Green if selected, blue otherwise
+        glm::vec3 connectColor = (serverConnectSelection == connectRow) ?
+            glm::vec3(0.6f, 0.8f, 0.2f) : glm::vec3(0.3f, 0.5f, 0.7f);
+        renderer.drawColoredQuad(connectBox, connectColor);
+        renderer.drawText("CONNECT", menuX + 30.0f, connectY + menuHeight/2.0f - 6.0f, 1.0f);
     }
     
-    // Back button
-    float backY = 520.0f;
-    glm::mat4 backBtn = glm::mat4(1.0f);
-    backBtn = glm::translate(backBtn, glm::vec3(400.0f, backY, 0.0f));
-    backBtn = glm::scale(backBtn, glm::vec3(200.0f, 50.0f, 1.0f));
-    renderer.drawColoredQuad(backBtn, glm::vec3(0.4f, 0.4f, 0.4f)); // Gray
-    renderer.drawText("BACK", 370.0f, backY - 8.0f, 1.2f);
+    // Selection indicator for connect button
+    if (serverConnectSelection == connectRow) {
+        glm::mat4 indicatorModel = glm::mat4(1.0f);
+        indicatorModel = glm::translate(indicatorModel, glm::vec3(menuX + 15.0f, connectY + menuHeight/2.0f, 0.0f));
+        indicatorModel = glm::scale(indicatorModel, glm::vec3(8.0f, 8.0f, 1.0f));
+        renderer.drawColoredQuad(indicatorModel, glm::vec3(1.0f, 1.0f, 1.0f));
+    }
+    
+    // Back button - styled as menu item
+    int backRow = connectRow + 1;
+    float backY = startY + backRow * spacing;
+    glm::mat4 backBox = glm::mat4(1.0f);
+    backBox = glm::translate(backBox, glm::vec3(menuX + menuWidth/2.0f, backY + menuHeight/2.0f, 0.0f));
+    backBox = glm::scale(backBox, glm::vec3(menuWidth, menuHeight, 1.0f));
+    
+    // Green if selected, blue otherwise
+    glm::vec3 backColor = (serverConnectSelection == backRow) ?
+        glm::vec3(0.6f, 0.8f, 0.2f) : glm::vec3(0.3f, 0.5f, 0.7f);
+    renderer.drawColoredQuad(backBox, backColor);
+    renderer.drawText("BACK", menuX + 30.0f, backY + menuHeight/2.0f - 6.0f, 1.0f);
+    
+    // Selection indicator for back button
+    if (serverConnectSelection == backRow) {
+        glm::mat4 indicatorModel = glm::mat4(1.0f);
+        indicatorModel = glm::translate(indicatorModel, glm::vec3(menuX + 15.0f, backY + menuHeight/2.0f, 0.0f));
+        indicatorModel = glm::scale(indicatorModel, glm::vec3(8.0f, 8.0f, 1.0f));
+        renderer.drawColoredQuad(indicatorModel, glm::vec3(1.0f, 1.0f, 1.0f));
+    }
     
     // Instructions at bottom
-    renderer.drawText("TAB switch field, S focus list, R rescan LAN, ENTER connect/select, ESC back", 120.0f, 580.0f, 0.75f);
-    
+    renderer.drawText("UP/DOWN=navigate, ENTER=select/connect, TAB=input, R=rescan, ESC=back", 160.0f, 580.0f, 1.0f);
 }
 
 void Game::processServerConnectInput() {
@@ -2616,7 +2667,6 @@ void Game::processServerConnectInput() {
     static bool backspacePressed = false;
     static bool periodPressed = false;
     static bool rPressed = false;
-    static bool sPressed = false;
     static bool upPressed = false;
     static bool downPressed = false;
     static bool digitPressed[10] = {false};
@@ -2664,21 +2714,44 @@ void Game::processServerConnectInput() {
         }
     }
     
-    // Handle TAB to switch between IP and Port fields
-    if (glfwGetKey(window, GLFW_KEY_TAB) == GLFW_PRESS && !tabPressed) {
-        tabPressed = true;
-        enteringServerAddress = !enteringServerAddress;
-        focusServerList = false;
-    } else if (glfwGetKey(window, GLFW_KEY_TAB) == GLFW_RELEASE) {
-        tabPressed = false;
+    // Calculate max row based on discovered servers
+    int numServerRows = discoveredServers.empty() ? 0 : std::min(3, (int)discoveredServers.size());
+    int connectRow = 2 + numServerRows;
+    int backRow = connectRow + 1;
+    int maxRow = backRow;
+    
+    // Handle UP navigation
+    if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS && !upPressed) {
+        upPressed = true;
+        serverConnectSelection = (serverConnectSelection - 1 + maxRow + 1) % (maxRow + 1);
+        // Update enteringServerAddress based on selection
+        enteringServerAddress = (serverConnectSelection == 0);
+    } else if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_RELEASE) {
+        upPressed = false;
+    }
+    
+    // Handle DOWN navigation
+    if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS && !downPressed) {
+        downPressed = true;
+        serverConnectSelection = (serverConnectSelection + 1) % (maxRow + 1);
+        // Update enteringServerAddress based on selection
+        enteringServerAddress = (serverConnectSelection == 0);
+    } else if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_RELEASE) {
+        downPressed = false;
     }
 
-    // Toggle focus to server list (S)
-    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS && !sPressed) {
-        sPressed = true;
-        focusServerList = !focusServerList;
-    } else if (glfwGetKey(window, GLFW_KEY_S) == GLFW_RELEASE) {
-        sPressed = false;
+    // Handle TAB to toggle between IP and Port fields (only if on rows 0 or 1)
+    if (glfwGetKey(window, GLFW_KEY_TAB) == GLFW_PRESS && !tabPressed) {
+        tabPressed = true;
+        if (serverConnectSelection == 0) {
+            serverConnectSelection = 1;
+            enteringServerAddress = false;
+        } else if (serverConnectSelection == 1) {
+            serverConnectSelection = 0;
+            enteringServerAddress = true;
+        }
+    } else if (glfwGetKey(window, GLFW_KEY_TAB) == GLFW_RELEASE) {
+        tabPressed = false;
     }
 
     // Auto-scan while on this screen (lightweight)
@@ -2688,7 +2761,7 @@ void Game::processServerConnectInput() {
         discoverySendCooldown = 1.0f;
     }
 
-    // Rescan LAN (R)
+    // Rescan LAN (R) - works on any row
     if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS && !rPressed) {
         rPressed = true;
         uint16_t port = serverPort == 0 ? DEFAULT_PORT : serverPort;
@@ -2697,93 +2770,86 @@ void Game::processServerConnectInput() {
     } else if (glfwGetKey(window, GLFW_KEY_R) == GLFW_RELEASE) {
         rPressed = false;
     }
-
-    // Navigate discovered list
-    if (focusServerList) {
-        if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS && !upPressed) {
-            upPressed = true;
-            if (!discoveredServers.empty()) {
-                discoveredSelection = (discoveredSelection - 1 + (int)discoveredServers.size()) % (int)discoveredServers.size();
-            }
-        } else if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_RELEASE) {
-            upPressed = false;
-        }
-        if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS && !downPressed) {
-            downPressed = true;
-            if (!discoveredServers.empty()) {
-                discoveredSelection = (discoveredSelection + 1) % (int)discoveredServers.size();
-            }
-        } else if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_RELEASE) {
-            downPressed = false;
-        }
-    }
     
-    // Handle number keys for IP/port input
-    for (int key = GLFW_KEY_0; key <= GLFW_KEY_9; key++) {
-        int idx = key - GLFW_KEY_0;
-        if (glfwGetKey(window, key) == GLFW_PRESS && !digitPressed[idx] && !focusServerList) {
-            digitPressed[idx] = true;
-            char digit = '0' + (key - GLFW_KEY_0);
-            if (enteringServerAddress) {
-                serverAddress += digit;
-            } else {
-                if (serverPort < 65535) {
-                    serverPort = serverPort * 10 + (digit - '0');
+    // Handle number keys for IP/port input (only when on address or port row)
+    if (serverConnectSelection == 0 || serverConnectSelection == 1) {
+        for (int key = GLFW_KEY_0; key <= GLFW_KEY_9; key++) {
+            int idx = key - GLFW_KEY_0;
+            if (glfwGetKey(window, key) == GLFW_PRESS && !digitPressed[idx]) {
+                digitPressed[idx] = true;
+                char digit = '0' + (key - GLFW_KEY_0);
+                if (serverConnectSelection == 0) {
+                    serverAddress += digit;
+                } else if (serverConnectSelection == 1) {
+                    if (serverPort < 65535) {
+                        serverPort = serverPort * 10 + (digit - '0');
+                    }
                 }
+            } else if (glfwGetKey(window, key) == GLFW_RELEASE) {
+                digitPressed[idx] = false;
             }
-        } else if (glfwGetKey(window, key) == GLFW_RELEASE) {
-            digitPressed[idx] = false;
         }
-    }
-    
-    // Handle period for IP address
-    if (enteringServerAddress && glfwGetKey(window, GLFW_KEY_PERIOD) == GLFW_PRESS && !periodPressed && !focusServerList) {
-        periodPressed = true;
-        serverAddress += '.';
-    } else if (glfwGetKey(window, GLFW_KEY_PERIOD) == GLFW_RELEASE) {
-        periodPressed = false;
-    }
+        
+        // Handle period for IP address
+        if (serverConnectSelection == 0 && glfwGetKey(window, GLFW_KEY_PERIOD) == GLFW_PRESS && !periodPressed) {
+            periodPressed = true;
+            serverAddress += '.';
+        } else if (glfwGetKey(window, GLFW_KEY_PERIOD) == GLFW_RELEASE) {
+            periodPressed = false;
+        }
 
-    // Also support keypad decimal for IP entry
-    if (enteringServerAddress && glfwGetKey(window, GLFW_KEY_KP_DECIMAL) == GLFW_PRESS && !periodPressed && !focusServerList) {
-        periodPressed = true;
-        serverAddress += '.';
-    } else if (glfwGetKey(window, GLFW_KEY_KP_DECIMAL) == GLFW_RELEASE) {
-        // don't reset here if normal period is still held; keep it simple
-        periodPressed = false;
-    }
-    
-    // Handle backspace
-    if (glfwGetKey(window, GLFW_KEY_BACKSPACE) == GLFW_PRESS && !backspacePressed) {
-        backspacePressed = true;
-        if (enteringServerAddress) {
-            if (!serverAddress.empty()) {
-                serverAddress.pop_back();
-            }
-        } else {
-            serverPort = serverPort / 10;
+        // Also support keypad decimal for IP entry
+        if (serverConnectSelection == 0 && glfwGetKey(window, GLFW_KEY_KP_DECIMAL) == GLFW_PRESS && !periodPressed) {
+            periodPressed = true;
+            serverAddress += '.';
+        } else if (glfwGetKey(window, GLFW_KEY_KP_DECIMAL) == GLFW_RELEASE) {
+            periodPressed = false;
         }
-    } else if (glfwGetKey(window, GLFW_KEY_BACKSPACE) == GLFW_RELEASE) {
-        backspacePressed = false;
+        
+        // Handle backspace
+        if (glfwGetKey(window, GLFW_KEY_BACKSPACE) == GLFW_PRESS && !backspacePressed) {
+            backspacePressed = true;
+            if (serverConnectSelection == 0) {
+                if (!serverAddress.empty()) {
+                    serverAddress.pop_back();
+                }
+            } else if (serverConnectSelection == 1) {
+                serverPort = serverPort / 10;
+            }
+        } else if (glfwGetKey(window, GLFW_KEY_BACKSPACE) == GLFW_RELEASE) {
+            backspacePressed = false;
+        }
     }
     
-    // Handle ENTER to connect/disconnect
+    // Handle ENTER to connect/disconnect or select server
     if (glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS && !enterPressed) {
         enterPressed = true;
-        if (isConnectedToServer()) {
-            disconnectFromServer();
-            std::cout << "Disconnected from server" << std::endl;
-        } else {
-            if (focusServerList && !discoveredServers.empty()) {
-                const auto& s = discoveredServers[discoveredSelection];
+        if (serverConnectSelection >= 2 && serverConnectSelection < connectRow) {
+            // Selecting a discovered server
+            int serverIndex = serverConnectSelection - 2;
+            if (serverIndex < (int)discoveredServers.size()) {
+                const auto& s = discoveredServers[serverIndex];
                 serverAddress = s.ip;
                 serverPort = s.port;
-                focusServerList = false;
+                // Try to connect immediately
+                if (connectToServer(serverAddress, serverPort)) {
+                    std::cout << "Connected to discovered server!" << std::endl;
+                }
+            }
+        } else if (serverConnectSelection == connectRow) {
+            // Connect/Disconnect button
+            if (isConnectedToServer()) {
+                disconnectFromServer();
+                std::cout << "Disconnected from server" << std::endl;
             } else if (connectToServer(serverAddress, serverPort)) {
                 std::cout << "Connected! Press ESC to return to menu" << std::endl;
             } else {
                 std::cout << "Failed to connect to " << serverAddress << ":" << serverPort << std::endl;
             }
+        } else if (serverConnectSelection == backRow) {
+            // Back button
+            gameState = MENU;
+            menuSelection = 2;
         }
     } else if (glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_RELEASE) {
         enterPressed = false;

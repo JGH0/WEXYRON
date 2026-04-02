@@ -8,6 +8,7 @@ SYSTEMS_DIR = src/systems
 ENGINE_DIR = src/engine
 GAME_DIR = src/game
 NETWORK_DIR = src/network
+UI_DIR = src/ui
 BUILD_DIR = build/obj
 BIN_DIR = build/bin
 TARGET = $(BIN_DIR)/game
@@ -17,21 +18,23 @@ SERVER_TARGET = $(BIN_DIR)/server
 CORE_SOURCES = $(CORE_DIR)/game.cpp $(CORE_DIR)/renderer.cpp $(CORE_DIR)/camera.cpp $(CORE_DIR)/map.cpp $(CORE_DIR)/shader.cpp $(CORE_DIR)/texture.cpp
 SYSTEMS_SOURCES = $(SYSTEMS_DIR)/input.cpp $(SYSTEMS_DIR)/weapon.cpp $(SYSTEMS_DIR)/physics.cpp $(SYSTEMS_DIR)/enemy.cpp $(SYSTEMS_DIR)/projectile.cpp $(SYSTEMS_DIR)/player.cpp $(SYSTEMS_DIR)/game_state.cpp
 NETWORK_SOURCES = $(NETWORK_DIR)/network.cpp
+UI_SOURCES = $(UI_DIR)/menu.cpp $(UI_DIR)/menu_item.cpp $(UI_DIR)/text_renderer.cpp
 ENGINE_SOURCES =
 MAIN_SOURCES = $(SRC_DIR)/main.cpp
 SERVER_SOURCES = server_main.cpp $(NETWORK_SOURCES)
 GLAD_SOURCES = glad.c
-ALL_SOURCES = $(CORE_SOURCES) $(SYSTEMS_SOURCES) $(NETWORK_SOURCES) $(ENGINE_SOURCES) $(MAIN_SOURCES) $(GLAD_SOURCES)
+ALL_SOURCES = $(CORE_SOURCES) $(SYSTEMS_SOURCES) $(NETWORK_SOURCES) $(UI_SOURCES) $(ENGINE_SOURCES) $(MAIN_SOURCES) $(GLAD_SOURCES)
 
 # Object files
 CORE_OBJECTS = $(addprefix $(BUILD_DIR)/core/, $(notdir $(CORE_SOURCES:.cpp=.o)))
 SYSTEMS_OBJECTS = $(addprefix $(BUILD_DIR)/systems/, $(notdir $(SYSTEMS_SOURCES:.cpp=.o)))
 NETWORK_OBJECTS = $(addprefix $(BUILD_DIR)/network/, $(notdir $(NETWORK_SOURCES:.cpp=.o)))
+UI_OBJECTS = $(addprefix $(BUILD_DIR)/ui/, $(notdir $(UI_SOURCES:.cpp=.o)))
 ENGINE_OBJECTS = $(addprefix $(BUILD_DIR)/engine/, $(notdir $(ENGINE_SOURCES:.cpp=.o)))
 MAIN_OBJECT = $(BUILD_DIR)/main.o
 SERVER_MAIN_OBJECT = $(BUILD_DIR)/server_main.o
 GLAD_OBJECT = $(BUILD_DIR)/glad.o
-ALL_OBJECTS = $(CORE_OBJECTS) $(SYSTEMS_OBJECTS) $(NETWORK_OBJECTS) $(ENGINE_OBJECTS) $(MAIN_OBJECT) $(GLAD_OBJECT)
+ALL_OBJECTS = $(CORE_OBJECTS) $(SYSTEMS_OBJECTS) $(NETWORK_OBJECTS) $(UI_OBJECTS) $(ENGINE_OBJECTS) $(MAIN_OBJECT) $(GLAD_OBJECT)
 SERVER_OBJECTS = $(SERVER_MAIN_OBJECT) $(NETWORK_OBJECTS)
 
 all: $(TARGET) $(SERVER_TARGET)
@@ -56,6 +59,10 @@ $(BUILD_DIR)/systems/%.o: $(SYSTEMS_DIR)/%.cpp | $(BUILD_DIR)/systems
 
 # Network object files
 $(BUILD_DIR)/network/%.o: $(NETWORK_DIR)/%.cpp | $(BUILD_DIR)/network
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# UI object files
+$(BUILD_DIR)/ui/%.o: $(UI_DIR)/%.cpp | $(BUILD_DIR)/ui
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 # Engine object files
@@ -94,6 +101,9 @@ $(BUILD_DIR)/systems:
 
 $(BUILD_DIR)/network:
 	mkdir -p $(BUILD_DIR)/network
+
+$(BUILD_DIR)/ui:
+	mkdir -p $(BUILD_DIR)/ui
 
 $(BUILD_DIR)/engine:
 	mkdir -p $(BUILD_DIR)/engine

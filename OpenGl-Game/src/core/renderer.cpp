@@ -279,24 +279,24 @@ void Renderer::drawText(const std::string& text, float x, float y, float scale) 
         unsigned short pattern = 0;
         
         switch (c) {
-            case 'A': pattern = 0b010101111111010; break;
+            case 'A': pattern = 0b010101111101101; break;
             case 'B': pattern = 0b111101110101110; break;
             case 'C': pattern = 0b111100100100111; break;
-            case 'D': pattern = 0b111101101101111; break;
+            case 'D': pattern = 0b110101101101110; break;
             case 'E': pattern = 0b111100111100111; break;
             case 'F': pattern = 0b111100111100100; break;
             case 'G': pattern = 0b111100101101111; break;
             case 'H': pattern = 0b101101111101101; break;
             case 'I': pattern = 0b010010010010010; break;
-            case 'J': pattern = 0b001001001101111; break;
+            case 'J': pattern = 0b111001001101111; break;
             case 'K': pattern = 0b101101110101101; break;
             case 'L': pattern = 0b100100100100111; break;
             case 'M': pattern = 0b101111101101101; break;
-            case 'N': pattern = 0b101111111101101; break;
+            case 'N': pattern = 0b101111111111101; break;
             case 'O': pattern = 0b111101101101111; break;
             case 'P': pattern = 0b111101111100100; break;
             case 'Q': pattern = 0b111101101101011; break;
-            case 'R': pattern = 0b111101111101101; break;
+            case 'R': pattern = 0b110101110101101; break;
             case 'S': pattern = 0b111100111001111; break;
             case 'T': pattern = 0b111010010010010; break;
             case 'U': pattern = 0b101101101101111; break;
@@ -312,14 +312,19 @@ void Renderer::drawText(const std::string& text, float x, float y, float scale) 
             case '4': pattern = 0b101101111001001; break;
             case '5': pattern = 0b111100111001111; break;
             case '6': pattern = 0b111100111101111; break;
-            case '7': pattern = 0b111001010010010; break;
-            case '8': pattern = 0b111111010111111; break;
-            case '9': pattern = 0b111111001001001; break;
+            case '7': pattern = 0b111001010010100; break;
+            case '8': pattern = 0b111101010101111; break;
+            case '9': pattern = 0b111101111001111; break;
             case '/': pattern = 0b001001010100100; break;
             case '-': pattern = 0b000000111000000; break;
             case '_': pattern = 0b000000000000111; break;
-            case '>': pattern = 0b100010001000100; break;
-            case '<': pattern = 0b001000100010001; break;
+            case '>': pattern = 0b000010001010000; break;
+            case '<': pattern = 0b000010100010000; break;
+            case '!': pattern = 0b010010010000010; break;
+            case '?': pattern = 0b111001010000010; break;
+            case '+': pattern = 0b000010111010000; break;
+            case '=': pattern = 0b000111000111000; break;
+            case '*': pattern = 0b101010101000000; break;
             default:  pattern = 0b111101101101111; break; // Default O
         }
         
