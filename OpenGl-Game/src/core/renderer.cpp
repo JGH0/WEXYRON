@@ -325,7 +325,15 @@ void Renderer::drawText(const std::string& text, float x, float y, float scale) 
             case '+': pattern = 0b000010111010000; break;
             case '=': pattern = 0b000111000111000; break;
             case '*': pattern = 0b101010101000000; break;
-            default:  pattern = 0b111101101101111; break; // Default O
+            case '.': pattern = 0b000000000000010; break;
+            case ',': pattern = 0b000000000010100; break;
+            case ':': pattern = 0b000010000010000; break;
+            case ';': pattern = 0b000010000010100; break;
+            case '|': pattern = 0b010010010010010; break;
+            case '(': pattern = 0b010100100100010; break;
+            case ')': pattern = 0b010001001001010; break;
+            case '~': pattern = 0b000010111000000; break;
+            default:  pattern = 0b010101010101010; break; // Default raster of black and white
         }
         
         // Draw the 3x5 pattern - row 0 is top
