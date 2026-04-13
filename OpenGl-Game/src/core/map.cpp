@@ -131,18 +131,33 @@ void Map::addBlock(const MapBlock& block) {
     blocks.push_back(block);
 }
 
-bool Map::deleteBlockAt(const glm::vec3& position, float tolerance) {
-    for (auto it = blocks.begin(); it != blocks.end(); ++it) {
-        // Check if the position is within this block's bounds
-        glm::vec3 blockMin = it->position - it->scale * 0.5f;
-        glm::vec3 blockMax = it->position + it->scale * 0.5f;
-        
+int Map::findBlockAt(const glm::vec3& position, float tolerance) const {
+    for (int i = 0; i < (int)blocks.size(); ++i) {
+        glm::vec3 blockMin = blocks[i].position - blocks[i].scale * 0.5f - glm::vec3(tolerance);
+        glm::vec3 blockMax = blocks[i].position + blocks[i].scale * 0.5f + glm::vec3(tolerance);
         if (position.x >= blockMin.x && position.x <= blockMax.x &&
             position.y >= blockMin.y && position.y <= blockMax.y &&
             position.z >= blockMin.z && position.z <= blockMax.z) {
-            blocks.erase(it);
-            return true;
+            return i;
         }
+    }
+    return -1;
+}
+
+bool Map::deleteBlockAt(const glm::vec3& position, float tolerance) {
+    int idx = findBlockAt(position, tolerance);
+    if (idx >= 0) {
+        blocks.erase(blocks.begin() + idx);
+        return true;
+    }
+    return false;
+}
+
+bool Map::replaceTextureAt(const glm::vec3& position, int newTextureId) {
+    int idx = findBlockAt(position, 0.15f);
+    if (idx >= 0) {
+        blocks[idx].textureId = newTextureId;
+        return true;
     }
     return false;
 }

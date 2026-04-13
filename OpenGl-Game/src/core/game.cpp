@@ -3011,10 +3011,10 @@ void Game::renderEditor() {
     
     renderer.drawText("MAP EDITOR", startX, startY, textScale);
     renderer.drawText("WASD=move, SPACE/SHIFT=up/down", startX, startY + lineHeight, textScale);
-    renderer.drawText("CLICK=place, RCLICK=delete", startX, startY + lineHeight * 2, textScale);
-    renderer.drawText("1-8=texture, +/- =resize", startX, startY + lineHeight * 3, textScale);
+    renderer.drawText("HOLD LMB=place, RCLICK=retex, ALT+RCLICK=delete", startX, startY + lineHeight * 2, textScale);
+    renderer.drawText("1-8=texture, E/Q=resize (+X/Y/Z)", startX, startY + lineHeight * 3, textScale);
     renderer.drawText("UP/DOWN=placement dist, arrows=move", startX, startY + lineHeight * 4, textScale);
-    renderer.drawText("[,] =grid, G=toggle, N=noclip", startX, startY + lineHeight * 5, textScale);
+    renderer.drawText("[,]=grid size, G=grid toggle, N=noclip", startX, startY + lineHeight * 5, textScale);
     renderer.drawText("F9=save, ESC=exit", startX, startY + lineHeight * 6, textScale);
     
     // Show current settings
@@ -3076,10 +3076,9 @@ void Game::processEditorInput() {
     static bool nPressed = false;
     static bool f9Pressed = false;
     static bool texKeyPressed[8] = {false};
-    static bool lmbPressed = false;
     static bool rmbPressed = false;
-    static bool plusPressed = false;
-    static bool minusPressed = false;
+    static bool qPressed = false;  // decrease size
+    static bool ePressed = false;  // increase size
     static bool lbracketPressed = false;
     static bool rbracketPressed = false;
     static bool xPressed = false;
@@ -3090,6 +3089,8 @@ void Game::processEditorInput() {
     static bool leftArrowPressed = false;
     static bool rightArrowPressed = false;
     static float sidewaysOffset = 0.0f;  // Persistent sideways offset
+    static double lastPlaceTime = 0.0;   // For hold-to-place throttle
+    const double placeInterval = 0.25;   // Seconds between placements when holding
     
     float moveSpeed = editorSpeed * 0.016f;
     
@@ -3199,48 +3200,44 @@ void Game::processEditorInput() {
         
         // Use look position + sideways offset
         glm::vec3 placementPos = lookPos + camera.Right * sidewaysOffset;
-        
-        // Free placement mode: check for snap to existing blocks
+
+        // Free placement mode: snap to nearest block face per axis (sticky edges)
         glm::vec3 snapPos = placementPos;
-        bool snapped = false;
-        float snapDistance = 0.5f; // Distance to snap to block edges
-        
+        float snapThreshold = 1.0f; // How close (center-to-face) before snapping kicks in
+
         if (currentMap) {
             const auto& blocks = currentMap->getBlocks();
+
+            float bestDistX = snapThreshold, bestDistY = snapThreshold, bestDistZ = snapThreshold;
+            float bestSnapX = placementPos.x, bestSnapY = placementPos.y, bestSnapZ = placementPos.z;
+
             for (const auto& block : blocks) {
-                // block.scale is now full size, so half-extents is scale * 0.5
                 glm::vec3 blockHalfSize = block.scale * 0.5f;
                 glm::vec3 blockMin = block.position - blockHalfSize;
                 glm::vec3 blockMax = block.position + blockHalfSize;
-                
-                // Check if close enough to snap to this block's faces
-                // Snap X
-                if (fabs(placementPos.x - blockMin.x) < snapDistance) {
-                    snapPos.x = blockMin.x - editorBlockSize.x * 0.5f;
-                    snapped = true;
-                } else if (fabs(placementPos.x - blockMax.x) < snapDistance) {
-                    snapPos.x = blockMax.x + editorBlockSize.x * 0.5f;
-                    snapped = true;
-                }
-                // Snap Y
-                if (fabs(placementPos.y - blockMin.y) < snapDistance) {
-                    snapPos.y = blockMin.y - editorBlockSize.y * 0.5f;
-                    snapped = true;
-                } else if (fabs(placementPos.y - blockMax.y) < snapDistance) {
-                    snapPos.y = blockMax.y + editorBlockSize.y * 0.5f;
-                    snapped = true;
-                }
-                // Snap Z
-                if (fabs(placementPos.z - blockMin.z) < snapDistance) {
-                    snapPos.z = blockMin.z - editorBlockSize.z * 0.5f;
-                    snapped = true;
-                } else if (fabs(placementPos.z - blockMax.z) < snapDistance) {
-                    snapPos.z = blockMax.z + editorBlockSize.z * 0.5f;
-                    snapped = true;
-                }
+
+                // Per-axis: find the closest face and snap flush to it
+                float dXMin = fabs(placementPos.x - (blockMin.x - editorBlockSize.x * 0.5f));
+                float dXMax = fabs(placementPos.x - (blockMax.x + editorBlockSize.x * 0.5f));
+                if (dXMin < bestDistX) { bestDistX = dXMin; bestSnapX = blockMin.x - editorBlockSize.x * 0.5f; }
+                if (dXMax < bestDistX) { bestDistX = dXMax; bestSnapX = blockMax.x + editorBlockSize.x * 0.5f; }
+
+                float dYMin = fabs(placementPos.y - (blockMin.y - editorBlockSize.y * 0.5f));
+                float dYMax = fabs(placementPos.y - (blockMax.y + editorBlockSize.y * 0.5f));
+                if (dYMin < bestDistY) { bestDistY = dYMin; bestSnapY = blockMin.y - editorBlockSize.y * 0.5f; }
+                if (dYMax < bestDistY) { bestDistY = dYMax; bestSnapY = blockMax.y + editorBlockSize.y * 0.5f; }
+
+                float dZMin = fabs(placementPos.z - (blockMin.z - editorBlockSize.z * 0.5f));
+                float dZMax = fabs(placementPos.z - (blockMax.z + editorBlockSize.z * 0.5f));
+                if (dZMin < bestDistZ) { bestDistZ = dZMin; bestSnapZ = blockMin.z - editorBlockSize.z * 0.5f; }
+                if (dZMax < bestDistZ) { bestDistZ = dZMax; bestSnapZ = blockMax.z + editorBlockSize.z * 0.5f; }
             }
+
+            if (bestDistX < snapThreshold) snapPos.x = bestSnapX;
+            if (bestDistY < snapThreshold) snapPos.y = bestSnapY;
+            if (bestDistZ < snapThreshold) snapPos.z = bestSnapZ;
         }
-        
+
         editorGridPos = snapPos;
     }
     
@@ -3280,25 +3277,28 @@ void Game::processEditorInput() {
         f9Pressed = false;
     }
     
-    // Block placement (Left mouse button)
-    if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS && !lmbPressed) {
-        lmbPressed = true;
-        if (currentMap) {
-            MapBlock block;
-            block.position = editorGridPos;
-            block.scale = editorBlockSize; // Full size (renderer uses this as scale factor)
-            block.color = glm::vec3(1.0f, 1.0f, 1.0f);
-            block.textureId = editorSelectedTexture;
-            block.solid = true;
-            currentMap->addBlock(block);
-            std::cout << "Added block at " << editorGridPos.x << "," << editorGridPos.y << "," << editorGridPos.z 
-                      << " size " << editorBlockSize.x << "x" << editorBlockSize.y << "x" << editorBlockSize.z << std::endl;
+    // Block placement (Left mouse button) - hold to keep placing, throttled
+    if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
+        double now = glfwGetTime();
+        if (now - lastPlaceTime >= placeInterval) {
+            lastPlaceTime = now;
+            if (currentMap) {
+                MapBlock block;
+                block.position = editorGridPos;
+                block.scale = editorBlockSize;
+                block.color = glm::vec3(1.0f, 1.0f, 1.0f);
+                block.textureId = editorSelectedTexture;
+                block.solid = true;
+                currentMap->addBlock(block);
+                std::cout << "Added block at " << editorGridPos.x << "," << editorGridPos.y << "," << editorGridPos.z
+                          << " size " << editorBlockSize.x << "x" << editorBlockSize.y << "x" << editorBlockSize.z << std::endl;
+            }
         }
-    } else if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_RELEASE) {
-        lmbPressed = false;
     }
     
-    // Block deletion (Right mouse button)
+    // Right mouse button:
+    //   Plain RMB          = replace texture of aimed block with current texture
+    //   Shift + RMB        = delete aimed block entirely
     if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS && !rmbPressed) {
         rmbPressed = true;
         if (currentMap) {
@@ -3306,13 +3306,21 @@ void Game::processEditorInput() {
             glm::vec3 rayDir = camera.Front;
             float maxDist = 100.0f;
             float step = 0.1f;
-            
+            bool altHeld = glfwGetKey(window, GLFW_KEY_LEFT_ALT) == GLFW_PRESS ||
+                          glfwGetKey(window, GLFW_KEY_RIGHT_ALT) == GLFW_PRESS;
+
             for (float t = 0; t < maxDist; t += step) {
                 glm::vec3 point = rayOrigin + rayDir * t;
-                if (currentMap->checkCollision(point, 0.1f)) {
-                    // Found a block - delete it using the new method
-                    if (currentMap->deleteBlockAt(point, 0.1f)) {
-                        std::cout << "Deleted block at distance " << t << std::endl;
+                if (currentMap->findBlockAt(point, 0.15f) >= 0) {
+                    if (altHeld) {
+                        if (currentMap->deleteBlockAt(point, 0.15f)) {
+                            std::cout << "Deleted block at distance " << t << std::endl;
+                        }
+                    } else {
+                        if (currentMap->replaceTextureAt(point, editorSelectedTexture)) {
+                            std::cout << "Replaced texture -> " << editorSelectedTexture
+                                      << " at distance " << t << std::endl;
+                        }
                     }
                     break;
                 }
@@ -3322,10 +3330,9 @@ void Game::processEditorInput() {
         rmbPressed = false;
     }
     
-    // Plus key - increase current resize axis
-    if (glfwGetKey(window, GLFW_KEY_EQUAL) == GLFW_PRESS && !plusPressed) {
-        plusPressed = true;
-        // Use X/Y/Z keys to select which axis to resize
+    // E key - increase block size on selected axis (or all)
+    if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS && !ePressed) {
+        ePressed = true;
         if (glfwGetKey(window, GLFW_KEY_X) == GLFW_PRESS) {
             editorBlockSize.x = glm::min(editorBlockSize.x + 0.5f, 20.0f);
         } else if (glfwGetKey(window, GLFW_KEY_Y) == GLFW_PRESS) {
@@ -3333,19 +3340,17 @@ void Game::processEditorInput() {
         } else if (glfwGetKey(window, GLFW_KEY_Z) == GLFW_PRESS) {
             editorBlockSize.z = glm::min(editorBlockSize.z + 0.5f, 20.0f);
         } else {
-            // No axis key pressed - resize all uniformly
             editorBlockSize += glm::vec3(0.5f);
             editorBlockSize = glm::min(editorBlockSize, glm::vec3(20.0f));
         }
         std::cout << "Block size: " << editorBlockSize.x << "x" << editorBlockSize.y << "x" << editorBlockSize.z << std::endl;
-    } else if (glfwGetKey(window, GLFW_KEY_EQUAL) == GLFW_RELEASE) {
-        plusPressed = false;
+    } else if (glfwGetKey(window, GLFW_KEY_E) == GLFW_RELEASE) {
+        ePressed = false;
     }
-    
-    // Minus key - decrease current resize axis
-    if (glfwGetKey(window, GLFW_KEY_MINUS) == GLFW_PRESS && !minusPressed) {
-        minusPressed = true;
-        // Use X/Y/Z keys to select which axis to resize
+
+    // Q key - decrease block size on selected axis (or all)
+    if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS && !qPressed) {
+        qPressed = true;
         if (glfwGetKey(window, GLFW_KEY_X) == GLFW_PRESS) {
             editorBlockSize.x = glm::max(editorBlockSize.x - 0.5f, 0.5f);
         } else if (glfwGetKey(window, GLFW_KEY_Y) == GLFW_PRESS) {
@@ -3353,13 +3358,12 @@ void Game::processEditorInput() {
         } else if (glfwGetKey(window, GLFW_KEY_Z) == GLFW_PRESS) {
             editorBlockSize.z = glm::max(editorBlockSize.z - 0.5f, 0.5f);
         } else {
-            // No axis key pressed - resize all uniformly
             editorBlockSize -= glm::vec3(0.5f);
             editorBlockSize = glm::max(editorBlockSize, glm::vec3(0.5f));
         }
         std::cout << "Block size: " << editorBlockSize.x << "x" << editorBlockSize.y << "x" << editorBlockSize.z << std::endl;
-    } else if (glfwGetKey(window, GLFW_KEY_MINUS) == GLFW_RELEASE) {
-        minusPressed = false;
+    } else if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_RELEASE) {
+        qPressed = false;
     }
     
     // Grid size adjustment with [ and ] keys

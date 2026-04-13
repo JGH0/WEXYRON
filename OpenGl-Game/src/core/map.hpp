@@ -85,12 +85,30 @@ public:
     
     /**
      * @brief Delete a block at the specified position
-     * 
+     *
      * @param position Position to check for block deletion
      * @param tolerance Distance tolerance for matching block
      * @return true if a block was deleted, false otherwise
      */
     bool deleteBlockAt(const glm::vec3& position, float tolerance = 0.1f);
+
+    /**
+     * @brief Replace the texture of a block at the specified position
+     *
+     * @param position Position inside the target block
+     * @param newTextureId New texture ID to assign
+     * @return true if a block was found and updated, false otherwise
+     */
+    bool replaceTextureAt(const glm::vec3& position, int newTextureId);
+
+    /**
+     * @brief Find the index of the first block whose bounds (expanded by tolerance) contain position.
+     *
+     * @param position Point to test
+     * @param tolerance Expansion applied to each block face
+     * @return Index into getBlocks(), or -1 if none found
+     */
+    int findBlockAt(const glm::vec3& position, float tolerance = 0.15f) const;
     
     /**
      * @brief Get all blocks in the map
