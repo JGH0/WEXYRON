@@ -2937,38 +2937,46 @@ void Game::renderEditor() {
         renderer.renderMap(currentMap);
     }
     
-    // Render grid lines on ground
+    // Render grid lines on ground - grid size now matches block size
     if (editorShowGrid) {
+        // Use the largest block dimension as the grid cell size
+        float gridCellSize = glm::max(editorBlockSize.x, glm::max(editorBlockSize.y, editorBlockSize.z));
         for (int i = -20; i <= 20; i++) {
             // X lines
             glm::mat4 lineX = glm::mat4(1.0f);
-            lineX = glm::translate(lineX, glm::vec3(i * editorGridSize, -0.05f, 0.0f));
-            lineX = glm::scale(lineX, glm::vec3(0.05f, 0.05f, 40.0f * editorGridSize));
+            lineX = glm::translate(lineX, glm::vec3(i * gridCellSize, -0.05f, 0.0f));
+            lineX = glm::scale(lineX, glm::vec3(0.02f, 0.02f, 40.0f * gridCellSize));
             renderer.drawCube(lineX, glm::vec3(0.3f, 0.3f, 0.3f));
             
             // Z lines
             glm::mat4 lineZ = glm::mat4(1.0f);
-            lineZ = glm::translate(lineZ, glm::vec3(0.0f, -0.05f, i * editorGridSize));
-            lineZ = glm::scale(lineZ, glm::vec3(40.0f * editorGridSize, 0.05f, 0.05f));
+            lineZ = glm::translate(lineZ, glm::vec3(0.0f, -0.05f, i * gridCellSize));
+            lineZ = glm::scale(lineZ, glm::vec3(40.0f * gridCellSize, 0.02f, 0.02f));
             renderer.drawCube(lineZ, glm::vec3(0.3f, 0.3f, 0.3f));
         }
     }
     
     // Render ghost block at grid position - wireframe style (edges only)
-    // The ghost block should match the size of the block that will be placed
+    // The ghost block should match the size of the block that will be placed EXACTLY
     {
+        // The renderer scales by block.scale, so we use editorBlockSize directly
+        // For the wireframe, we need half-extents (center to edge distance)
         glm::vec3 halfSize = editorBlockSize * 0.5f;
         glm::vec3 center = editorGridPos;
-        float edgeThickness = 0.02f;  // Thinner edges
+        float edgeThickness = 0.02f;
         glm::vec3 edgeColor = glm::vec3(0.0f, 1.0f, 0.0f); // Bright green edges
         
-        // Draw 12 edges of the cube - sized to match the actual block
-        // Vertical edges (4 corners)
+        // Edge lengths should match the full block size minus edge thickness
+        float xEdgeLen = editorBlockSize.x - edgeThickness;
+        float yEdgeLen = editorBlockSize.y - edgeThickness;
+        float zEdgeLen = editorBlockSize.z - edgeThickness;
+        
+        // Vertical edges (4 corners) - Y direction
         for (float x = -1; x <= 1; x += 2) {
             for (float z = -1; z <= 1; z += 2) {
                 glm::mat4 edge = glm::mat4(1.0f);
                 edge = glm::translate(edge, center + glm::vec3(x * halfSize.x, 0.0f, z * halfSize.z));
-                edge = glm::scale(edge, glm::vec3(edgeThickness, halfSize.y * 2.0f, edgeThickness));
+                edge = glm::scale(edge, glm::vec3(edgeThickness, yEdgeLen, edgeThickness));
                 renderer.drawCube(edge, edgeColor);
             }
         }
@@ -2978,14 +2986,14 @@ void Game::renderEditor() {
             for (float z = -1; z <= 1; z += 2) {
                 glm::mat4 edge = glm::mat4(1.0f);
                 edge = glm::translate(edge, center + glm::vec3(0.0f, y * halfSize.y, z * halfSize.z));
-                edge = glm::scale(edge, glm::vec3(halfSize.x * 2.0f, edgeThickness, edgeThickness));
+                edge = glm::scale(edge, glm::vec3(xEdgeLen, edgeThickness, edgeThickness));
                 renderer.drawCube(edge, edgeColor);
             }
             // Z-direction edges
             for (float x = -1; x <= 1; x += 2) {
                 glm::mat4 edge = glm::mat4(1.0f);
                 edge = glm::translate(edge, center + glm::vec3(x * halfSize.x, y * halfSize.y, 0.0f));
-                edge = glm::scale(edge, glm::vec3(edgeThickness, edgeThickness, halfSize.z * 2.0f));
+                edge = glm::scale(edge, glm::vec3(edgeThickness, edgeThickness, zEdgeLen));
                 renderer.drawCube(edge, edgeColor);
             }
         }
@@ -3006,7 +3014,7 @@ void Game::renderEditor() {
     renderer.drawText("CLICK=place, RCLICK=delete", startX, startY + lineHeight * 2, textScale);
     renderer.drawText("1-8=texture, +/- =resize", startX, startY + lineHeight * 3, textScale);
     renderer.drawText("UP/DOWN=placement dist, arrows=move", startX, startY + lineHeight * 4, textScale);
-    renderer.drawText("[,] =grid, G=grid, N=noclip", startX, startY + lineHeight * 5, textScale);
+    renderer.drawText("[,] =grid, G=toggle, N=noclip", startX, startY + lineHeight * 5, textScale);
     renderer.drawText("F9=save, ESC=exit", startX, startY + lineHeight * 6, textScale);
     
     // Show current settings
@@ -3015,9 +3023,9 @@ void Game::renderEditor() {
     renderer.drawText(buf, startX, startY + lineHeight * 8, textScale);
     snprintf(buf, sizeof(buf), "SIZE: %.1f, %.1f, %.1f", editorBlockSize.x, editorBlockSize.y, editorBlockSize.z);
     renderer.drawText(buf, startX, startY + lineHeight * 9, textScale);
-    snprintf(buf, sizeof(buf), "TEX: %d  GRID: %.1f  DIST: %.1f", editorSelectedTexture, editorGridSize, editorBlockOffset);
+    snprintf(buf, sizeof(buf), "TEX: %d  DIST: %.1f", editorSelectedTexture, editorBlockOffset);
     renderer.drawText(buf, startX, startY + lineHeight * 10, textScale);
-    snprintf(buf, sizeof(buf), "NOCLIP: %s", editorNoclip ? "ON" : "OFF");
+    snprintf(buf, sizeof(buf), "GRID: %s  NOCLIP: %s", editorShowGrid ? "ON" : "OFF", editorNoclip ? "ON" : "OFF");
     renderer.drawText(buf, startX, startY + lineHeight * 11, textScale);
     
     // Texture preview in bottom RIGHT corner - make it larger and more visible
@@ -3132,30 +3140,109 @@ void Game::processEditorInput() {
         downArrowPressed = false;
     }
     
+    // Calculate base placement position from where camera is looking
+    glm::vec3 lookPos = camera.Position + camera.Front * editorBlockOffset;
+    
     // LEFT/RIGHT arrows move placement sideways (perpendicular to camera)
-    if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS && !leftArrowPressed) {
-        leftArrowPressed = true;
-        sidewaysOffset -= editorGridSize;
-        std::cout << "Placement left: " << sidewaysOffset << std::endl;
-    } else if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_RELEASE) {
-        leftArrowPressed = false;
+    static int gridCellX = 0;
+    static int gridCellZ = 0;
+    
+    if (editorShowGrid) {
+        float gridCellSize = glm::max(editorBlockSize.x, glm::max(editorBlockSize.y, editorBlockSize.z));
+        
+        // In grid mode, LEFT/RIGHT moves between grid cells
+        if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS && !leftArrowPressed) {
+            leftArrowPressed = true;
+            gridCellX--;
+            std::cout << "Grid cell: " << gridCellX << ", " << gridCellZ << std::endl;
+        } else if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_RELEASE) {
+            leftArrowPressed = false;
+        }
+        
+        if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS && !rightArrowPressed) {
+            rightArrowPressed = true;
+            gridCellX++;
+            std::cout << "Grid cell: " << gridCellX << ", " << gridCellZ << std::endl;
+        } else if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_RELEASE) {
+            rightArrowPressed = false;
+        }
+        
+        // Calculate grid position based on where player is looking + cell offsets
+        // Use floor() to align with grid lines (not between them)
+        float baseGridX = floor(lookPos.x / gridCellSize) * gridCellSize + gridCellSize * 0.5f;
+        float baseGridY = floor(lookPos.y / gridCellSize) * gridCellSize + gridCellSize * 0.5f;
+        float baseGridZ = floor(lookPos.z / gridCellSize) * gridCellSize + gridCellSize * 0.5f;
+        
+        // Add sideways offset in grid cells
+        editorGridPos.x = baseGridX + gridCellX * gridCellSize;
+        editorGridPos.y = baseGridY;
+        editorGridPos.z = baseGridZ + gridCellZ * gridCellSize;
+    } else {
+        // Free mode: use smooth sideways offset
+        float moveStep = 0.5f;
+        
+        if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS && !leftArrowPressed) {
+            leftArrowPressed = true;
+            sidewaysOffset -= moveStep;
+            std::cout << "Placement left: " << sidewaysOffset << std::endl;
+        } else if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_RELEASE) {
+            leftArrowPressed = false;
+        }
+        
+        if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS && !rightArrowPressed) {
+            rightArrowPressed = true;
+            sidewaysOffset += moveStep;
+            std::cout << "Placement right: " << sidewaysOffset << std::endl;
+        } else if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_RELEASE) {
+            rightArrowPressed = false;
+        }
+        
+        // Use look position + sideways offset
+        glm::vec3 placementPos = lookPos + camera.Right * sidewaysOffset;
+        
+        // Free placement mode: check for snap to existing blocks
+        glm::vec3 snapPos = placementPos;
+        bool snapped = false;
+        float snapDistance = 0.5f; // Distance to snap to block edges
+        
+        if (currentMap) {
+            const auto& blocks = currentMap->getBlocks();
+            for (const auto& block : blocks) {
+                // block.scale is now full size, so half-extents is scale * 0.5
+                glm::vec3 blockHalfSize = block.scale * 0.5f;
+                glm::vec3 blockMin = block.position - blockHalfSize;
+                glm::vec3 blockMax = block.position + blockHalfSize;
+                
+                // Check if close enough to snap to this block's faces
+                // Snap X
+                if (fabs(placementPos.x - blockMin.x) < snapDistance) {
+                    snapPos.x = blockMin.x - editorBlockSize.x * 0.5f;
+                    snapped = true;
+                } else if (fabs(placementPos.x - blockMax.x) < snapDistance) {
+                    snapPos.x = blockMax.x + editorBlockSize.x * 0.5f;
+                    snapped = true;
+                }
+                // Snap Y
+                if (fabs(placementPos.y - blockMin.y) < snapDistance) {
+                    snapPos.y = blockMin.y - editorBlockSize.y * 0.5f;
+                    snapped = true;
+                } else if (fabs(placementPos.y - blockMax.y) < snapDistance) {
+                    snapPos.y = blockMax.y + editorBlockSize.y * 0.5f;
+                    snapped = true;
+                }
+                // Snap Z
+                if (fabs(placementPos.z - blockMin.z) < snapDistance) {
+                    snapPos.z = blockMin.z - editorBlockSize.z * 0.5f;
+                    snapped = true;
+                } else if (fabs(placementPos.z - blockMax.z) < snapDistance) {
+                    snapPos.z = blockMax.z + editorBlockSize.z * 0.5f;
+                    snapped = true;
+                }
+            }
+        }
+        
+        editorGridPos = snapPos;
     }
-    
-    if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS && !rightArrowPressed) {
-        rightArrowPressed = true;
-        sidewaysOffset += editorGridSize;
-        std::cout << "Placement right: " << sidewaysOffset << std::endl;
-    } else if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_RELEASE) {
-        rightArrowPressed = false;
-    }
-    
-    // Calculate placement position based on offset from camera
-    glm::vec3 placementPos = camera.Position + camera.Front * editorBlockOffset + camera.Right * sidewaysOffset;
-    
-    // Snap grid position to grid at the offset distance
-    editorGridPos.x = round(placementPos.x / editorGridSize) * editorGridSize;
-    editorGridPos.y = round(placementPos.y / editorGridSize) * editorGridSize;
-    editorGridPos.z = round(placementPos.z / editorGridSize) * editorGridSize;
     
     // Texture selection (keys 1-8)
     for (int i = 0; i < 8; i++) {
@@ -3199,7 +3286,7 @@ void Game::processEditorInput() {
         if (currentMap) {
             MapBlock block;
             block.position = editorGridPos;
-            block.scale = editorBlockSize * 0.5f; // Half-extents
+            block.scale = editorBlockSize; // Full size (renderer uses this as scale factor)
             block.color = glm::vec3(1.0f, 1.0f, 1.0f);
             block.textureId = editorSelectedTexture;
             block.solid = true;
