@@ -1,5 +1,5 @@
 CXX = g++
-CXXFLAGS = -std=c++11 -Wall -I./include -I./include/stb
+CXXFLAGS = -std=c++11 -Wall -I./include -I./include/stb -I./src
 LDFLAGS = -lglfw -lGL -ldl
 
 SRC_DIR = src

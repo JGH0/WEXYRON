@@ -306,7 +306,7 @@ private:
         uint16_t port;
         float lastSeenSeconds;
     };
-    int discoverySocketFd;
+    socket_t discoverySocketFd;
     float discoveryTimeSeconds;
     float discoverySendCooldown;
     std::vector<DiscoveredServer> discoveredServers;

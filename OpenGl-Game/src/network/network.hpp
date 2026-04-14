@@ -9,13 +9,33 @@
 #include <glm/glm.hpp>
 #include <string>
 #include <cstring>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <unistd.h>
-#include <fcntl.h>
 #include <vector>
 #include <map>
+
+// Platform-specific socket headers
+#ifdef _WIN32
+    #ifndef WIN32_LEAN_AND_MEAN
+        #define WIN32_LEAN_AND_MEAN
+    #endif
+    #include <winsock2.h>
+    #include <ws2tcpip.h>
+    #include <windows.h>
+    typedef int socklen_t;
+    typedef SOCKET socket_t;
+    #define SOCKET_INVALID INVALID_SOCKET
+    #define SOCKET_ERROR_CODE SOCKET_ERROR
+    #define CLOSE_SOCKET closesocket
+#else
+    #include <sys/socket.h>
+    #include <netinet/in.h>
+    #include <arpa/inet.h>
+    #include <unistd.h>
+    #include <fcntl.h>
+    typedef int socket_t;
+    #define SOCKET_INVALID -1
+    #define SOCKET_ERROR_CODE -1
+    #define CLOSE_SOCKET close
+#endif
 
 // Packet types
 enum PacketType : uint8_t {
@@ -131,7 +151,7 @@ public:
     std::function<void(const ProjectileSpawnPacket&)> onProjectileSpawn;
     
 private:
-    int socketFd;
+    socket_t socketFd;
     sockaddr_in serverAddr;
     bool connected;
     bool connecting;
@@ -185,7 +205,7 @@ public:
     std::function<void(uint32_t)> onPlayerDisconnect;
     
 private:
-    int socketFd;
+    socket_t socketFd;
     sockaddr_in serverAddr;
     bool running;
     uint32_t nextClientId;

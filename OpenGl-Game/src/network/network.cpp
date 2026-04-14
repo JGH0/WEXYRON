@@ -10,7 +10,7 @@
 
 // ========== NETWORK CLIENT ==========
 
-NetworkClient::NetworkClient() : socketFd(-1), connected(false), connecting(false), clientId(0), sequence(0) {
+NetworkClient::NetworkClient() : socketFd(SOCKET_INVALID), connected(false), connecting(false), clientId(0), sequence(0) {
     memset(&serverAddr, 0, sizeof(serverAddr));
 }
 
@@ -19,23 +19,39 @@ NetworkClient::~NetworkClient() {
 }
 
 bool NetworkClient::connect(const std::string& serverAddress, uint16_t port) {
+#ifdef _WIN32
+    static bool wsaInitialized = false;
+    if (!wsaInitialized) {
+        WSADATA wsaData;
+        if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+            std::cerr << "Failed to initialize Winsock" << std::endl;
+            return false;
+        }
+        wsaInitialized = true;
+    }
+#endif
     socketFd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (socketFd < 0) {
+    if (socketFd == SOCKET_INVALID) {
         std::cerr << "Failed to create socket" << std::endl;
         return false;
     }
     
     // Set non-blocking
+#ifdef _WIN32
+    u_long nonBlocking = 1;
+    ioctlsocket(socketFd, FIONBIO, &nonBlocking);
+#else
     int flags = fcntl(socketFd, F_GETFL, 0);
     fcntl(socketFd, F_SETFL, flags | O_NONBLOCK);
-    
+#endif
+
     serverAddr.sin_family = AF_INET;
     serverAddr.sin_port = htons(port);
     int ok = inet_pton(AF_INET, serverAddress.c_str(), &serverAddr.sin_addr);
     if (ok != 1) {
         std::cerr << "Invalid server IP address: " << serverAddress << std::endl;
-        close(socketFd);
-        socketFd = -1;
+        CLOSE_SOCKET(socketFd);
+        socketFd = SOCKET_INVALID;
         return false;
     }
     
@@ -50,8 +66,8 @@ bool NetworkClient::connect(const std::string& serverAddress, uint16_t port) {
     
     if (!sendPacket(&header, sizeof(header))) {
         std::cerr << "Failed to send connect packet" << std::endl;
-        close(socketFd);
-        socketFd = -1;
+        CLOSE_SOCKET(socketFd);
+        socketFd = SOCKET_INVALID;
         return false;
     }
     
@@ -76,9 +92,9 @@ void NetworkClient::disconnect() {
         sendPacket(&header, sizeof(header));
     }
     
-    if (socketFd >= 0) {
-        close(socketFd);
-        socketFd = -1;
+    if (socketFd != SOCKET_INVALID) {
+        CLOSE_SOCKET(socketFd);
+        socketFd = SOCKET_INVALID;
     }
     connected = false;
     connecting = false;
@@ -112,7 +128,7 @@ void NetworkClient::sendPlayerInput(float moveX, float moveZ, float yaw, float p
 }
 
 void NetworkClient::update() {
-    if ((!connected && !connecting) || socketFd < 0) return;
+    if ((!connected && !connecting) || socketFd == SOCKET_INVALID) return;
     
     char buffer[MAX_PACKET_SIZE];
     size_t received;
@@ -171,20 +187,30 @@ void NetworkClient::update() {
 }
 
 bool NetworkClient::sendPacket(const void* data, size_t size) {
-    if (socketFd < 0) return false;
-    ssize_t sent = sendto(socketFd, data, size, 0, 
+    if (socketFd == SOCKET_INVALID) return false;
+#ifdef _WIN32
+    int sent = sendto(socketFd, (const char*)data, (int)size, 0,
+                      (sockaddr*)&serverAddr, sizeof(serverAddr));
+    return sent == (int)size;
+#else
+    ssize_t sent = sendto(socketFd, data, size, 0,
                           (sockaddr*)&serverAddr, sizeof(serverAddr));
     return sent == (ssize_t)size;
+#endif
 }
 
 bool NetworkClient::receivePacket(void* buffer, size_t maxSize, size_t& received) {
-    if (socketFd < 0) return false;
-    
+    if (socketFd == SOCKET_INVALID) return false;
+
     sockaddr_in from;
     socklen_t fromLen = sizeof(from);
-    ssize_t bytes = recvfrom(socketFd, buffer, maxSize, 0, 
+#ifdef _WIN32
+    int bytes = recvfrom(socketFd, (char*)buffer, (int)maxSize, 0,
+                         (sockaddr*)&from, &fromLen);
+#else
+    ssize_t bytes = recvfrom(socketFd, buffer, maxSize, 0,
                             (sockaddr*)&from, &fromLen);
-    
+#endif
     if (bytes > 0) {
         received = bytes;
         return true;
@@ -194,7 +220,17 @@ bool NetworkClient::receivePacket(void* buffer, size_t maxSize, size_t& received
 
 // ========== NETWORK SERVER ==========
 
-NetworkServer::NetworkServer() : socketFd(-1), running(false), nextClientId(1) {
+NetworkServer::NetworkServer() : socketFd(SOCKET_INVALID), running(false), nextClientId(1) {
+#ifdef _WIN32
+    static bool wsaInitialized = false;
+    if (!wsaInitialized) {
+        WSADATA wsaData;
+        if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+            std::cerr << "Failed to initialize Winsock" << std::endl;
+        }
+        wsaInitialized = true;
+    }
+#endif
     memset(&serverAddr, 0, sizeof(serverAddr));
 }
 
@@ -223,55 +259,64 @@ void NetworkServer::stop() {
     }
     players.clear();
     
-    if (socketFd >= 0) {
-        close(socketFd);
-        socketFd = -1;
+    if (socketFd != SOCKET_INVALID) {
+        CLOSE_SOCKET(socketFd);
+        socketFd = SOCKET_INVALID;
     }
 }
 
 bool NetworkServer::createSocket(uint16_t port) {
     socketFd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (socketFd < 0) {
+    if (socketFd == SOCKET_INVALID) {
         std::cerr << "Failed to create server socket" << std::endl;
         return false;
     }
-    
+
     // Allow reuse
     int opt = 1;
-    setsockopt(socketFd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-    
+    setsockopt(socketFd, SOL_SOCKET, SO_REUSEADDR, (const char*)&opt, sizeof(opt));
+
     serverAddr.sin_family = AF_INET;
     serverAddr.sin_addr.s_addr = INADDR_ANY;
     serverAddr.sin_port = htons(port);
-    
-    if (bind(socketFd, (sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
+
+    if (bind(socketFd, (sockaddr*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR_CODE) {
         std::cerr << "Failed to bind server socket" << std::endl;
-        close(socketFd);
-        socketFd = -1;
+        CLOSE_SOCKET(socketFd);
+        socketFd = SOCKET_INVALID;
         return false;
     }
-    
+
     // Set non-blocking
+#ifdef _WIN32
+    u_long nonBlocking = 1;
+    ioctlsocket(socketFd, FIONBIO, &nonBlocking);
+#else
     int flags = fcntl(socketFd, F_GETFL, 0);
     fcntl(socketFd, F_SETFL, flags | O_NONBLOCK);
-    
+#endif
+
     return true;
 }
 
 void NetworkServer::update(float deltaTime) {
-    if (!running || socketFd < 0) return;
-    
+    if (!running || socketFd == SOCKET_INVALID) return;
+
     char buffer[MAX_PACKET_SIZE];
     sockaddr_in from;
     socklen_t fromLen = sizeof(from);
-    
+
     // Process all available packets
     while (true) {
+#ifdef _WIN32
+        int bytes = recvfrom(socketFd, (char*)buffer, sizeof(buffer), 0,
+                             (sockaddr*)&from, &fromLen);
+#else
         ssize_t bytes = recvfrom(socketFd, buffer, sizeof(buffer), 0,
                                 (sockaddr*)&from, &fromLen);
-        
+#endif
         if (bytes <= 0) break;
-        
+
         processPacket(buffer, bytes, from);
     }
     
@@ -459,8 +504,12 @@ ServerPlayer* NetworkServer::getPlayer(uint32_t id) {
 }
 
 void NetworkServer::sendPacket(const void* data, size_t size, const sockaddr_in& to) {
-    if (socketFd < 0) return;
+    if (socketFd == SOCKET_INVALID) return;
+#ifdef _WIN32
+    sendto(socketFd, (const char*)data, (int)size, 0, (sockaddr*)&to, sizeof(to));
+#else
     sendto(socketFd, data, size, 0, (sockaddr*)&to, sizeof(to));
+#endif
 }
 
 void NetworkServer::broadcastPacket(const void* data, size_t size, uint32_t excludeId) {

@@ -6,16 +6,12 @@
  */
 
 #include "game.hpp"
+#include "network/network.hpp"
 #include <iostream>
 #include <random>
 #include <cstring>
 #include <algorithm>
 #include <fstream>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <unistd.h>
-#include <fcntl.h>
 #include <glm/gtc/matrix_transform.hpp>
 
 // UI helpers (defined later)
@@ -57,7 +53,7 @@ Game::Game(int width, int height)
       flashbang(nullptr),
       networkClient(nullptr),
       multiplayerMode(false),
-      discoverySocketFd(-1),
+      discoverySocketFd(SOCKET_INVALID),
       discoveryTimeSeconds(0.0f),
       discoverySendCooldown(0.0f),
       discoveredSelection(0),
@@ -131,9 +127,9 @@ Game::Game(int width, int height)
 
 Game::~Game() {
     disconnectFromServer();
-    if (discoverySocketFd >= 0) {
-        close(discoverySocketFd);
-        discoverySocketFd = -1;
+    if (discoverySocketFd != SOCKET_INVALID) {
+        CLOSE_SOCKET(discoverySocketFd);
+        discoverySocketFd = SOCKET_INVALID;
     }
     if (currentMap) delete currentMap;
     glfwTerminate();
@@ -2500,25 +2496,32 @@ bool Game::isConnectedToServer() const {
     return networkClient && networkClient->isConnected();
 }
 
-static bool setNonBlocking(int fd) {
+#ifdef _WIN32
+static bool setNonBlocking(socket_t fd) {
+    u_long nonBlocking = 1;
+    return ioctlsocket(fd, FIONBIO, &nonBlocking) == 0;
+}
+#else
+static bool setNonBlocking(socket_t fd) {
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0) return false;
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
 }
+#endif
 
-void ensureDiscoverySocket(int& sock) {
-    if (sock >= 0) return;
+void ensureDiscoverySocket(socket_t& sock) {
+    if (sock != SOCKET_INVALID) return;
     sock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sock < 0) return;
+    if (sock == SOCKET_INVALID) return;
 
     int opt = 1;
-    setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &opt, sizeof(opt));
-    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    setsockopt(sock, SOL_SOCKET, SO_BROADCAST, (const char*)&opt, sizeof(opt));
+    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (const char*)&opt, sizeof(opt));
     setNonBlocking(sock);
 }
 
-static void sendDiscoverPing(int sock, uint16_t port) {
-    if (sock < 0) return;
+static void sendDiscoverPing(socket_t sock, uint16_t port) {
+    if (sock == SOCKET_INVALID) return;
 
     DiscoverPacket p{};
     p.header.magic = PACKET_MAGIC;
@@ -2532,14 +2535,22 @@ static void sendDiscoverPing(int sock, uint16_t port) {
     local.sin_family = AF_INET;
     local.sin_port = htons(port);
     inet_pton(AF_INET, "127.0.0.1", &local.sin_addr);
+#ifdef _WIN32
+    sendto(sock, (const char*)&p, sizeof(p), 0, (sockaddr*)&local, sizeof(local));
+#else
     sendto(sock, &p, sizeof(p), 0, (sockaddr*)&local, sizeof(local));
+#endif
 
     // Broadcast
     sockaddr_in to{};
     to.sin_family = AF_INET;
     to.sin_port = htons(port);
     to.sin_addr.s_addr = inet_addr("255.255.255.255");
+#ifdef _WIN32
+    sendto(sock, (const char*)&p, sizeof(p), 0, (sockaddr*)&to, sizeof(to));
+#else
     sendto(sock, &p, sizeof(p), 0, (sockaddr*)&to, sizeof(to));
+#endif
 }
 
 static void setVirtualUIProjection(Renderer& renderer, GLFWwindow* window) {
@@ -2802,12 +2813,16 @@ void Game::processServerConnectInput() {
     ensureDiscoverySocket(discoverySocketFd);
 
     // Poll discovery responses (non-blocking)
-    if (discoverySocketFd >= 0) {
+    if (discoverySocketFd != SOCKET_INVALID) {
         char buffer[MAX_PACKET_SIZE];
         sockaddr_in from{};
         socklen_t fromLen = sizeof(from);
         while (true) {
+#ifdef _WIN32
+            int bytes = recvfrom(discoverySocketFd, (char*)buffer, sizeof(buffer), 0, (sockaddr*)&from, &fromLen);
+#else
             ssize_t bytes = recvfrom(discoverySocketFd, buffer, sizeof(buffer), 0, (sockaddr*)&from, &fromLen);
+#endif
             if (bytes <= 0) break;
             if ((size_t)bytes < sizeof(PacketHeader)) continue;
             auto* header = (PacketHeader*)buffer;
@@ -2880,7 +2895,7 @@ void Game::processServerConnectInput() {
     }
 
     // Auto-scan while on this screen (lightweight)
-    if (discoverySocketFd >= 0 && discoverySendCooldown <= 0.0f) {
+    if (discoverySocketFd != SOCKET_INVALID && discoverySendCooldown <= 0.0f) {
         uint16_t port = serverPort == 0 ? DEFAULT_PORT : serverPort;
         sendDiscoverPing(discoverySocketFd, port);
         discoverySendCooldown = 1.0f;
