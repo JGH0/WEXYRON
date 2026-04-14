@@ -53,17 +53,17 @@ int main(int argc, char* argv[]) {
         if (!player) return;
         
         // Update player state based on input
-        // This is where server-side physics would run
-        
-        float moveSpeed = 5.0f;
-        player->velocity.x = input.moveX * moveSpeed;
-        player->velocity.z = input.moveZ * moveSpeed;
+        // Use client position from input packet (client-authoritative movement)
+        player->position.x = input.posX;
+        player->position.y = input.posY;
+        player->position.z = input.posZ;
         player->yaw = input.yaw;
         player->pitch = input.pitch;
         
-        // Simple movement
-        player->position.x += player->velocity.x * 0.016f;
-        player->position.z += player->velocity.z * 0.016f;
+        // Keep velocity for potential server-side physics
+        float moveSpeed = 5.0f;
+        player->velocity.x = input.moveX * moveSpeed;
+        player->velocity.z = input.moveZ * moveSpeed;
         
         // Handle jump
         if (input.jump && player->position.y <= 2.0f) {
@@ -92,6 +92,9 @@ int main(int argc, char* argv[]) {
                 cos(pitchRad) * sin(yawRad)
             );
             
+            // Use client position from input packet for projectile spawning
+            glm::vec3 clientPos(input.posX, input.posY, input.posZ);
+            
             // Weapon-specific projectile spawning
             switch (input.weaponId) {
                 case 1: // PUMP_SHOTGUN - 5 pellets with spread
@@ -104,7 +107,7 @@ int main(int argc, char* argv[]) {
                         );
                         glm::vec3 dir = glm::normalize(front + spread);
                         server.broadcastProjectileSpawn(
-                            player->position + front * 0.5f,
+                            clientPos + front * 0.5f,
                             dir * 50.0f,
                             1.0f,
                             input.weaponId,
@@ -116,7 +119,7 @@ int main(int argc, char* argv[]) {
                 case 2: // GRENADE - slower, longer lifetime
                     player->shootCooldown = 1.0f;
                     server.broadcastProjectileSpawn(
-                        player->position + front * 0.5f,
+                        clientPos + front * 0.5f,
                         front * 30.0f,
                         5.0f,
                         input.weaponId,
@@ -127,7 +130,7 @@ int main(int argc, char* argv[]) {
                 case 3: // FLASHBANG - slower, medium lifetime
                     player->shootCooldown = 1.0f;
                     server.broadcastProjectileSpawn(
-                        player->position + front * 0.5f,
+                        clientPos + front * 0.5f,
                         front * 25.0f,
                         4.0f,
                         input.weaponId,
@@ -139,7 +142,7 @@ int main(int argc, char* argv[]) {
                 default:
                     player->shootCooldown = 0.3f;
                     server.broadcastProjectileSpawn(
-                        player->position + front * 0.5f,
+                        clientPos + front * 0.5f,
                         front * 60.0f,
                         2.0f,
                         input.weaponId,

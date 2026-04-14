@@ -126,7 +126,7 @@ public:
 // Weapon system access
     const glm::vec3& getCameraPosition() const { return camera.Position; }
     const glm::vec3& getCameraFront() const { return camera.Front; }
-    bool createProjectile(const glm::vec3& position, const glm::vec3& velocity, float lifetime);
+    bool createProjectile(const glm::vec3& position, const glm::vec3& velocity, float lifetime, uint32_t owner = 0);
     int getActiveProjectiles() const { return activeProjectiles; }
     
 private:
@@ -213,6 +213,7 @@ private:
         glm::vec3 velocity;
         float lifetime;
         bool active;
+        uint32_t owner; // 0 = local player, other = remote player ID
     };
     
     /// Bullet hole structure for wall impacts
@@ -276,12 +277,14 @@ private:
     /// Network multiplayer
     NetworkClient* networkClient;
     bool multiplayerMode;
+    int playerCount; // Number of connected players including self
     
     /// Remote players (for multiplayer)
     struct RemotePlayer {
         uint32_t id;
         glm::vec3 position;
         glm::vec3 velocity;
+        glm::vec3 renderPosition; // For smooth interpolation
         float yaw, pitch;
         float health;
         bool isDead;
@@ -394,6 +397,21 @@ private:
      * @brief Update flashbang effect
      */
     void updateFlashbangEffect(float deltaTime);
+    
+    /**
+     * @brief Check projectile collision with players (PVP)
+     */
+    void checkProjectilePlayerCollision();
+    
+    /**
+     * @brief Damage local player
+     */
+    void damagePlayer(float damage);
+    
+    /**
+     * @brief Check player vs player collision (PVP)
+     */
+    void checkPlayerPlayerCollision();
     
     /**
      * @brief Render flashbang effect

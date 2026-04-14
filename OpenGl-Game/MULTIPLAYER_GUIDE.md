@@ -1,0 +1,175 @@
+# Local Multiplayer Setup Guide
+
+## Overview
+This OpenGL game supports local multiplayer through LAN (Local Area Network) connections. Multiple players can connect and play together on the same network.
+
+## Connection Types Supported
+
+### 1. Local Network (LAN) - Primary Method
+- **WiFi Network**: All devices connected to the same WiFi router
+- **Ethernet Network**: Devices connected via network cables to the same router/switch
+- **Direct Ethernet**: Cable-to-cable connection between two devices (crossover cable or modern auto-MDIX)
+
+### 2. Additional Methods
+- **Mobile Hotspot**: One device creates a WiFi hotspot, others connect to it
+- **Network Switch**: Multiple devices connected through a network switch
+
+## Quick Start
+
+### Method 1: Automatic LAN Discovery (Recommended)
+1. **Start Server**:
+   ```bash
+   cd OpenGl-Game
+   ./build/bin/server [port]  # Default port: 7777
+   ```
+
+2. **Start Client**:
+   ```bash
+   cd OpenGl-Game
+   ./build/bin/game
+   ```
+
+3. **In Game Client**:
+   - Launch the game
+   - Navigate to "Connect to Server" in the main menu
+   - Press 'R' to scan for local servers automatically
+   - Select discovered server from the list
+   - Press ENTER to connect
+
+### Method 2: Manual Connection
+1. **Find Server IP**:
+   - On server machine, run: `hostname -I` (Linux) or `ipconfig` (Windows)
+   - Note the local IP address (e.g., 192.168.1.100)
+
+2. **Connect Manually**:
+   - In client game, go to "Connect to Server"
+   - Enter server IP address (e.g., 192.168.1.100)
+   - Enter port number (default: 7777)
+   - Press ENTER to connect
+
+## Network Setup Examples
+
+### Home WiFi Network
+```
+Router (192.168.1.1)
+  |
+  +-- Computer A (Server) - 192.168.1.100
+  |
+  +-- Computer B (Client) - 192.168.1.101
+  |
+  +-- Computer C (Client) - 192.168.1.102
+```
+
+### Direct Cable Connection
+```
+Computer A (Server) ---- Ethernet Cable ---- Computer B (Client)
+IP: 192.168.1.100                         IP: 192.168.1.101
+```
+
+### Mobile Hotspot
+```
+Phone A (Hotspot) - 192.168.43.1
+  |
+  +-- Computer A (Server) - 192.168.43.100
+  |
+  +-- Computer B (Client) - 192.168.43.101
+```
+
+## Firewall Configuration
+
+If connection fails, check firewall settings:
+
+### Linux (ufw)
+```bash
+sudo ufw allow 7777/udp
+# Or temporarily disable for testing:
+sudo ufw disable
+```
+
+### Windows Firewall
+1. Open Windows Defender Firewall
+2. Allow "Cube Game" through firewall
+3. Or add UDP port 7777 manually
+
+## Troubleshooting
+
+### Connection Issues
+1. **Check Network Connectivity**:
+   ```bash
+   ping [server_ip]  # From client to server
+   ```
+
+2. **Verify Server is Running**:
+   - Server should show "Server started on port 7777"
+   - Server shows "Player X connected" when client joins
+
+3. **Check Port Availability**:
+   ```bash
+   netstat -uln | grep 7777  # Linux
+   ```
+
+### Performance Tips
+- Use wired Ethernet for best performance
+- WiFi works but may have latency
+- Avoid using VPNs during gameplay
+
+## Game Controls in Multiplayer
+
+### Movement
+- **W/A/S/D**: Move forward/left/backward/right
+- **Mouse**: Look around
+- **Space**: Jump
+- **Left Mouse**: Shoot
+
+### Weapons
+- **1**: Pistol
+- **2**: Pump Shotgun
+- **3**: Grenade
+- **4**: Flashbang
+- **G**: Toggle between Grenade/Flashbang
+
+### Other
+- **ESC**: Menu/Disconnect
+- **U**: Unstuck (move to safe position)
+
+## Server Commands
+
+The server runs in terminal mode and supports:
+- **Ctrl+C**: Graceful shutdown
+- **Port Selection**: `./build/bin/server 7778` for different port
+
+## Advanced Configuration
+
+### Custom Ports
+Both server and client support custom ports:
+```bash
+# Server
+./build/bin/server 8888
+
+# Client (in menu, enter port 8888)
+```
+
+### Multiple Servers
+You can run multiple servers on different ports for different games:
+- Server 1: Port 7777 (Deathmatch)
+- Server 2: Port 7778 (Team Play)
+
+## Security Notes
+
+- Only works on local networks (not over internet)
+- No authentication required for LAN play
+- UDP protocol for low latency
+- Firewall may block connections
+
+## Supported Platforms
+
+- **Linux**: Full support (tested on Ubuntu, Debian, Arch)
+- **Windows**: Should work (may need firewall configuration)
+- **macOS**: Should work (may need firewall configuration)
+
+## Performance Requirements
+
+- **Minimum**: 100 Mbps LAN connection
+- **Recommended**: 1 Gbps Ethernet
+- **WiFi**: 802.11n or better recommended
+- **Latency**: < 50ms for best experience

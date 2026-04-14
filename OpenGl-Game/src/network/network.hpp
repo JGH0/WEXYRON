@@ -55,6 +55,7 @@ struct PlayerInputPacket {
     bool jump;
     bool shoot;
     uint8_t weaponId;
+    float posX, posY, posZ; // Client position for projectile spawning
 };
 
 // Player state from server
@@ -115,7 +116,7 @@ public:
     bool isConnecting() const { return connecting; }
     
     // Send player input to server
-    void sendPlayerInput(float moveX, float moveZ, float yaw, float pitch, bool jump, bool shoot, uint8_t weaponId);
+    void sendPlayerInput(float moveX, float moveZ, float yaw, float pitch, bool jump, bool shoot, uint8_t weaponId, float posX, float posY, float posZ);
     
     // Receive packets from server - call every frame
     void update();

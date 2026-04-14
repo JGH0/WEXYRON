@@ -86,7 +86,7 @@ void NetworkClient::disconnect() {
 }
 
 void NetworkClient::sendPlayerInput(float moveX, float moveZ, float yaw, float pitch, 
-                                     bool jump, bool shoot, uint8_t weaponId) {
+                                     bool jump, bool shoot, uint8_t weaponId, float posX, float posY, float posZ) {
     if (!connected) return;
     
     PlayerInputPacket packet;
@@ -104,6 +104,9 @@ void NetworkClient::sendPlayerInput(float moveX, float moveZ, float yaw, float p
     packet.jump = jump;
     packet.shoot = shoot;
     packet.weaponId = weaponId;
+    packet.posX = posX;
+    packet.posY = posY;
+    packet.posZ = posZ;
     
     sendPacket(&packet, sizeof(packet));
 }
