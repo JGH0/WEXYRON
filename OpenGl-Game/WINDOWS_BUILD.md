@@ -49,7 +49,35 @@ This guide explains how to build and run the game on Windows for development pur
    - Press F5 to run with debugging
    - Or run `game.exe` from the build output directory
 
-### Option 2: Command Line Build
+### Option 2: VS Code with CMake Tools (Recommended for VS Code users)
+
+1. **Install VS Code extensions**:
+   - Open VS Code
+   - Install extensions: `CMake Tools` and `C/C++` (by Microsoft)
+
+2. **Open the project**:
+   - File → Open Folder → Select `OpenGl-Game` directory
+   - VS Code will detect the `CMakeLists.txt`
+
+3. **Configure CMake**:
+   - Press `Ctrl+Shift+P` → type "CMake: Configure"
+   - Select your compiler (e.g., `Visual Studio Community 2022 Release - amd64`)
+   - CMake Tools will automatically configure the project
+
+4. **Build**:
+   - Press `F7` or `Ctrl+Shift+P` → "CMake: Build"
+   - Or click the Build button in the status bar (bottom of VS Code)
+
+5. **Run/Debug**:
+   - Press `Ctrl+Shift+P` → "CMake: Debug" (or "CMake: Run Without Debugging")
+   - Or select target from the status bar (bottom) and click the play button
+
+6. **Set launch target** (if needed):
+   - Click on `[No Active Launch Target]` in the status bar
+   - Select `game` to run the game client
+   - Select `server` to run the dedicated server
+
+### Option 3: Command Line Build
 
 1. **Open Developer Command Prompt**:
    - Open "x64 Native Tools Command Prompt for VS 2022"
