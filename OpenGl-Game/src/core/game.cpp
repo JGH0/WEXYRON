@@ -771,23 +771,34 @@ void Game::updatePlayerPhysics(float deltaTime) {
             footPos + glm::vec3(0, 0, -0.2f)           // Left
         };
         
+        int groundPoints = 0;
+        bool centerOnGround = false;
+        float groundHeight = 0.0f;
+        
         for (int i = 0; i < 5; i++) {
             if (currentMap->checkCollision(checkPoints[i], 0.15f)) {
-                // Check if we're actually on top of the block (not inside it from the side)
-                // by verifying we're above the block's top surface
-                onGround = true;
-                
-                // Set correct Y position when standing on blocks
-                if (playerVelocity.y <= 0.0f) {
-                    playerPos.y = checkPoints[i].y + 1.6f; // Eye level when on ground
+                groundPoints++;
+                if (i == 0) {
+                    centerOnGround = true;
+                    groundHeight = checkPoints[i].y;
                 }
-                
-                // Only stop falling if we're moving downward AND there's actually ground below
-                if (playerVelocity.y <= 0.0f && footPos.y <= checkPoints[i].y + 0.1f) {
-                    playerVelocity.y = 0.0f;
-                    isJumping = false;
-                }
-                break;
+            }
+        }
+        
+        // Only consider on ground if center point is on ground (prevents edge bouncing)
+        // or if majority of points are on ground
+        if (centerOnGround || groundPoints >= 3) {
+            onGround = true;
+            
+            // Only snap Y position when center is on ground (prevents edge bouncing)
+            if (centerOnGround && playerVelocity.y <= 0.0f) {
+                playerPos.y = groundHeight + 1.6f; // Eye level when on ground
+            }
+            
+            // Stop falling if we're moving downward
+            if (playerVelocity.y <= 0.0f) {
+                playerVelocity.y = 0.0f;
+                isJumping = false;
             }
         }
     }
