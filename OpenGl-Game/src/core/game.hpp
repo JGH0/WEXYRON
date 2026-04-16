@@ -128,7 +128,13 @@ public:
     const glm::vec3& getCameraFront() const { return camera.Front; }
     bool createProjectile(const glm::vec3& position, const glm::vec3& velocity, float lifetime, uint32_t owner = 0);
     int getActiveProjectiles() const { return activeProjectiles; }
-    
+
+    /// Game mode type
+    enum GameMode {
+        DEATHMATCH,
+        TEAM_VS_TEAM
+    };
+
 private:
     /// Current game map
     Map* currentMap;
@@ -192,9 +198,18 @@ private:
     
     /// Settings selection
     int settingsSelection;
+
+    /// Death state
+    bool isDead;
     
     /// Map selection
     int mapSelection = 0;
+
+    /// Game mode selection
+    int gameModeSelection = 0; // 0 = Deathmatch, 1 = Team vs Team
+
+    /// Map player counts (received from server)
+    int mapPlayerCounts[6] = {0, 0, 0, 0, 0, 0}; // Player count for each map
     
     /// Key bindings
     struct KeyBindings {
@@ -323,10 +338,16 @@ private:
     bool editorShowGrid = true;
     float editorGridSize = 1.0f;
     float editorBlockOffset = 5.0f;  // Distance in front of player for block placement
-    
-    /// Death state
-    bool isDead;
-    
+
+    /// Editor spawn point placement mode
+    enum EditorSpawnMode {
+        SPAWN_NONE,      // Normal block placement
+        SPAWN_DEATHMATCH, // Place DM spawn points
+        SPAWN_TEAM_A,    // Place Team A (Red) spawn points
+        SPAWN_TEAM_B     // Place Team B (Blue) spawn points
+    };
+    EditorSpawnMode editorSpawnMode = SPAWN_NONE;
+
     /// Shooting cooldown
     float shootCooldown;
     
@@ -350,6 +371,8 @@ private:
     
     /// Game modes
     bool infiniteAmmoMode;
+    GameMode currentGameMode;
+    int playerTeam; // 0 = Team A/Red, 1 = Team B/Blue (for Team vs Team mode)
     
     /**
      * @brief Update player physics including gravity and collisions

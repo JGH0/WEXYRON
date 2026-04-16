@@ -43,6 +43,8 @@ Game::Game(int width, int height)
       flashEffectTime(0.0f),
       isFlashed(false),
       infiniteAmmoMode(false),
+      currentGameMode(DEATHMATCH),
+      playerTeam(0),
       activeProjectiles(0),
       bulletHoleCount(0),
       currentMap(nullptr),
@@ -181,9 +183,18 @@ void Game::processInput(float deltaTime) {
     if (gameState == PLAYING) {
         processGameInput(deltaTime);
     } else if (gameState == MENU) {
+        // Reset key states when entering menu to prevent stuck keys
+        static bool menuJustEntered = true;
+        if (menuJustEntered) {
+            upPressed = false;
+            downPressed = false;
+            enterPressed = false;
+            menuJustEntered = false;
+        }
+
         // Calculate number of menu items (Map Editor hidden when connected)
         int numItems = isConnectedToServer() ? 5 : 6;
-        
+
         // Handle UP key
         if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS && !upPressed) {
             upPressed = true;
@@ -214,20 +225,24 @@ void Game::processInput(float deltaTime) {
             
             switch (actionIndex) {
                 case 0: // Play Game
+                    menuJustEntered = true; // Reset for next menu entry
                     gameState = PLAYING;
                     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
                     break;
                 case 1: // Map Selection
+                    menuJustEntered = true; // Reset for next menu entry
                     std::cout << "ENTERING MAP SELECTION MODE" << std::endl;
                     gameState = MAP_SELECTION;
                     break;
                 case 2: // Map Editor
+                    menuJustEntered = true; // Reset for next menu entry
                     std::cout << "ENTERING MAP EDITOR" << std::endl;
                     gameState = MAP_EDITOR;
                     editorNoclip = true;
                     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
                     break;
                 case 3: // Connect to Server
+                    menuJustEntered = true; // Reset for next menu entry
                     std::cout << "ENTERING SERVER CONNECTION" << std::endl;
                     gameState = SERVER_CONNECT;
                     serverAddress = "";
@@ -236,6 +251,7 @@ void Game::processInput(float deltaTime) {
                     serverConnectSelection = 0;
                     break;
                 case 4: // Settings
+                    menuJustEntered = true; // Reset for next menu entry
                     gameState = SETTINGS;
                     settingsSelection = 0;
                     break;
@@ -319,10 +335,9 @@ void Game::processGameInput(float deltaTime) {
     
     // Shoot input (now uses mouse button)
     if (glfwGetMouseButton(window, keyBindings.shoot) == GLFW_PRESS) {
-        // Only shoot locally if not connected to server
-        if (!isConnectedToServer()) {
-            shoot();
-        }
+        // Always shoot locally for responsiveness
+        // In multiplayer, the server will also broadcast to other players
+        shoot();
         inputProcessed = true;
     }
     
@@ -610,9 +625,9 @@ bool Game::loadMap(const std::string& mapFile) {
     if (currentMap) {
         delete currentMap;
     }
-    
+
     currentMap = new Map("assets/maps/" + mapFile);
-    
+
     // Load textures for the map
     if (currentMap) {
         currentMap->loadTexture("grass.png", 0);
@@ -623,8 +638,11 @@ bool Game::loadMap(const std::string& mapFile) {
         currentMap->loadTexture("sand.png", 5);
         currentMap->loadTexture("ice.png", 6);
         currentMap->loadTexture("dirt.png", 7);
+
+        // Reset game to spawn player at correct spawn point for the new map
+        resetGame();
     }
-    
+
     return currentMap != nullptr;
 }
 
@@ -1252,7 +1270,7 @@ void Game::createSimpleExplosion(glm::vec3 position) {
     float playerDistance = glm::length(position - playerPos);
     if (playerDistance < explosionRadius && !isDead) {
         float damageMultiplier = 1.0f - (playerDistance / explosionRadius);
-        playerHealth -= 40.0f * damageMultiplier; // 40 max damage
+        playerHealth -= 50.0f * damageMultiplier; // 50 max damage for grenade
         damageEffectTime = 1.5f; // Longer screen effect
         std::cout << "Player hit by explosion! Health: " << playerHealth << "/" << playerMaxHealth << std::endl;
         
@@ -1921,16 +1939,47 @@ void Game::renderDeathScreen() {
 }
 
 void Game::resetGame() {
-    // Reset player health and position
+    // Reset player health
     playerHealth = playerMaxHealth;
     playerDamageCooldown = 0.0f;
     damageEffectTime = 0.0f;
     isDead = false;
-    
-    // Reset player position
-    playerPos = glm::vec3(0.0f, 2.0f, 0.0f);
+
+    // Spawn player at appropriate spawn point based on game mode
+    if (currentMap) {
+        if (currentGameMode == TEAM_VS_TEAM) {
+            // Use team spawn point
+            TeamSpawn spawn = currentMap->getRandomTeamSpawn(playerTeam);
+            playerPos = spawn.position;
+            camera.Yaw = spawn.yaw;
+            camera.Pitch = spawn.pitch;
+            std::cout << "Spawning player on Team " << (playerTeam == 0 ? "A (Red)" : "B (Blue)")
+                      << " at (" << playerPos.x << ", " << playerPos.y << ", " << playerPos.z << ")" << std::endl;
+        } else {
+            // Deathmatch mode - use random spawn point
+            SpawnPoint spawn = currentMap->getRandomSpawnPoint();
+            playerPos = spawn.position;
+            camera.Yaw = spawn.yaw;
+            camera.Pitch = spawn.pitch;
+            std::cout << "Spawning player at Deathmatch spawn point ("
+                      << playerPos.x << ", " << playerPos.y << ", " << playerPos.z << ")" << std::endl;
+        }
+
+        // If no spawn points defined, use default position
+        if (playerPos.x == 0.0f && playerPos.y == 0.0f && playerPos.z == 0.0f) {
+            playerPos = glm::vec3(0.0f, 2.0f, 0.0f);
+            camera.Yaw = 0.0f;
+            camera.Pitch = 0.0f;
+        }
+    } else {
+        // No map loaded, use default position
+        playerPos = glm::vec3(0.0f, 2.0f, 0.0f);
+        camera.Yaw = 0.0f;
+        camera.Pitch = 0.0f;
+    }
+
     playerVelocity = glm::vec3(0.0f, 0.0f, 0.0f);
-    
+
     // Check if player spawned inside a block, if so move up until free
     if (currentMap) {
         int safetyCounter = 0;
@@ -1944,11 +1993,9 @@ void Game::resetGame() {
             std::cout << "Player spawned safely at y=" << playerPos.y << std::endl;
         }
     }
-    
+
     // Update camera to match player position
     camera.Position = glm::vec3(playerPos.x, playerPos.y + 1.6f, playerPos.z);
-    camera.Yaw = 0.0f;  // Changed from -90.0f to 0.0f
-    camera.Pitch = 0.0f;
     // Force update camera vectors immediately
     camera.updateCameraVectors();
     
@@ -2272,49 +2319,58 @@ void Game::processSettingsInput() {
 void Game::renderMapSelection() {
     // Clear screen with dark background
     renderer.clear();
-    
+
     setVirtualUIProjection(renderer, window);
-    
+
     // Title bar - orange like settings
     glm::mat4 titleBg = glm::mat4(1.0f);
     titleBg = glm::translate(titleBg, glm::vec3(400.0f, 80.0f, 0.0f));
     titleBg = glm::scale(titleBg, glm::vec3(600.0f, 60.0f, 1.0f));
     renderer.drawColoredQuad(titleBg, glm::vec3(0.8f, 0.4f, 0.1f));
     renderer.drawText("SELECT MAP", 340.0f, 75.0f, 1.5f);
-    
+
     // Map data - styled exactly like settings menu
-    const char* mapNames[] = {"Simple", "Large", "Arena", "Sniper", "Complex"};
-    const char* mapSizes[] = {"Small", "Large", "Medium", "Long Range", "Multi-Level"};
-    const int numMaps = 5;
-    
+    const char* mapNames[] = {"Simple", "Large", "Arena", "Sniper", "Complex", "Team Arena"};
+    const char* mapSizes[] = {"Small", "Large", "Medium", "Long Range", "Multi-Level", "Team vs Team"};
+    const int numMaps = 6;
+
     float menuWidth = 400.0f;
     float menuHeight = 40.0f;
     float menuX = (800.0f - menuWidth) / 2.0f;
     float startY = 150.0f;
     float spacing = 50.0f;
-    
+
     // Draw map boxes like settings items
     for (int i = 0; i < numMaps; i++) {
         float y = startY + i * spacing;
         bool isSelected = (i == mapSelection);
-        
+
         // Create background rectangle for this map
         glm::mat4 bgModel = glm::mat4(1.0f);
         bgModel = glm::translate(bgModel, glm::vec3(menuX + menuWidth/2.0f, y + menuHeight/2.0f, 0.0f));
         bgModel = glm::scale(bgModel, glm::vec3(menuWidth, menuHeight, 1.0f));
-        
+
         // Use blue for normal, green for selected (matching settings style)
         glm::vec3 bgColor = isSelected ? glm::vec3(0.6f, 0.8f, 0.2f) : glm::vec3(0.3f, 0.5f, 0.7f);
-        
+
         renderer.drawColoredQuad(bgModel, bgColor);
-        
-        // Draw map name on the left
-        renderer.drawText(mapNames[i], menuX + 20.0f, y + menuHeight/2.0f - 8.0f, 1.2f);
-        
+
+        // Draw player count before map name
+        char playerCountStr[16];
+        if (isConnectedToServer() && mapPlayerCounts[i] > 0) {
+            snprintf(playerCountStr, sizeof(playerCountStr), "[%d] ", mapPlayerCounts[i]);
+        } else {
+            strcpy(playerCountStr, "    ");
+        }
+        renderer.drawText(playerCountStr, menuX + 20.0f, y + menuHeight/2.0f - 8.0f, 1.2f);
+
+        // Draw map name
+        renderer.drawText(mapNames[i], menuX + 60.0f, y + menuHeight/2.0f - 8.0f, 1.2f);
+
         // Draw map size/type on the right
         float valueWidth = strlen(mapSizes[i]) * 8.0f;
         renderer.drawText(mapSizes[i], menuX + menuWidth - valueWidth - 20.0f, y + menuHeight/2.0f - 8.0f, 1.2f);
-        
+
         // Draw selection indicator
         if (isSelected) {
             glm::mat4 indicatorModel = glm::mat4(1.0f);
@@ -2323,10 +2379,22 @@ void Game::renderMapSelection() {
             renderer.drawColoredQuad(indicatorModel, glm::vec3(1.0f, 1.0f, 1.0f));
         }
     }
-    
+
+    // Game Mode selection row
+    float gameModeY = startY + numMaps * spacing + 20.0f;
+    glm::mat4 gmBg = glm::mat4(1.0f);
+    gmBg = glm::translate(gmBg, glm::vec3(menuX + menuWidth/2.0f, gameModeY + menuHeight/2.0f, 0.0f));
+    gmBg = glm::scale(gmBg, glm::vec3(menuWidth, menuHeight, 1.0f));
+    renderer.drawColoredQuad(gmBg, glm::vec3(0.7f, 0.3f, 0.3f));
+
+    const char* gameModeStr = (currentGameMode == DEATHMATCH) ? "Deathmatch" : "Team vs Team";
+    char gmText[64];
+    snprintf(gmText, sizeof(gmText), "Game Mode: %s", gameModeStr);
+    renderer.drawText(gmText, menuX + 20.0f, gameModeY + menuHeight/2.0f - 8.0f, 1.2f);
+
     // Instructions at bottom
-    renderer.drawText("UP/DOWN = change, ENTER = load, ESC = back", 250.0f, 580.0f, 1.0f);
-    
+    renderer.drawText("UP/DOWN = change map, LEFT/RIGHT = change mode, ENTER = load", 180.0f, 580.0f, 1.0f);
+
     // Only print to console when selection actually changes (to reduce spam)
     static int lastMapSelection = -1;
     if (mapSelection != lastMapSelection) {
@@ -2334,7 +2402,8 @@ void Game::renderMapSelection() {
         for (int i = 0; i < numMaps; i++) {
             std::cout << (i == mapSelection ? "> " : "  ") << mapNames[i] << " - " << mapSizes[i] << std::endl;
         }
-        std::cout << "Use UP/DOWN to select, ENTER to load, ESC to go back" << std::endl;
+        std::cout << "Game Mode: " << gameModeStr << std::endl;
+        std::cout << "Use UP/DOWN to select, LEFT/RIGHT for game mode, ENTER to load, ESC to go back" << std::endl;
         lastMapSelection = mapSelection;
     }
 }
@@ -2342,12 +2411,14 @@ void Game::renderMapSelection() {
 void Game::processMapSelectionInput() {
     static bool upPressed = false;
     static bool downPressed = false;
+    static bool leftPressed = false;
+    static bool rightPressed = false;
     static bool enterPressed = false;
     static bool escapePressed = false;
-    
-    const int numMaps = 5;
-    const char* mapFiles[] = {"simple.map", "large.map", "arena.map", "sniper.map", "complex.map"};
-    
+
+    const int numMaps = 6;
+    const char* mapFiles[] = {"simple.map", "large.map", "arena.map", "sniper.map", "complex.map", "team_arena.map"};
+
     // Handle UP key
     if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS && !upPressed) {
         upPressed = true;
@@ -2355,7 +2426,7 @@ void Game::processMapSelectionInput() {
     } else if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_RELEASE) {
         upPressed = false;
     }
-    
+
     // Handle DOWN key
     if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS && !downPressed) {
         downPressed = true;
@@ -2363,18 +2434,47 @@ void Game::processMapSelectionInput() {
     } else if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_RELEASE) {
         downPressed = false;
     }
-    
+
+    // Handle LEFT/RIGHT for game mode selection
+    if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS && !leftPressed) {
+        leftPressed = true;
+        currentGameMode = (currentGameMode == DEATHMATCH) ? TEAM_VS_TEAM : DEATHMATCH;
+        std::cout << "Game Mode: " << (currentGameMode == DEATHMATCH ? "Deathmatch" : "Team vs Team") << std::endl;
+    } else if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_RELEASE) {
+        leftPressed = false;
+    }
+
+    if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS && !rightPressed) {
+        rightPressed = true;
+        currentGameMode = (currentGameMode == DEATHMATCH) ? TEAM_VS_TEAM : DEATHMATCH;
+        std::cout << "Game Mode: " << (currentGameMode == DEATHMATCH ? "Deathmatch" : "Team vs Team") << std::endl;
+    } else if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_RELEASE) {
+        rightPressed = false;
+    }
+
     // Handle ENTER key
     if (glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS && !enterPressed) {
         enterPressed = true;
-        std::cout << "Loading " << mapFiles[mapSelection] << "..." << std::endl;
+        std::cout << "Loading " << mapFiles[mapSelection] << " with game mode "
+                  << (currentGameMode == DEATHMATCH ? "Deathmatch" : "Team vs Team") << "..." << std::endl;
+
+        // Notify server of map change if connected
+        if (isConnectedToServer() && networkClient) {
+            networkClient->sendMapChange(mapFiles[mapSelection]);
+        }
+
         loadMap(mapFiles[mapSelection]);
+        // In Team vs Team mode, assign player to team (for now, always Team A for single player)
+        if (currentGameMode == TEAM_VS_TEAM) {
+            playerTeam = 0; // Team A (Red) - can be randomized or assigned by server in multiplayer
+        }
+        resetGame(); // Spawn at appropriate spawn point
         gameState = PLAYING;
         glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
     } else if (glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_RELEASE) {
         enterPressed = false;
     }
-    
+
     // Handle ESC key - go back to menu
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS && !escapePressed) {
         escapePressed = true;
@@ -2455,15 +2555,35 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
     };
     
     networkClient->onProjectileSpawn = [this](const ProjectileSpawnPacket& packet) {
-        // Create projectile from other player
-        createProjectile(
-            glm::vec3(packet.posX, packet.posY, packet.posZ),
-            glm::vec3(packet.velX, packet.velY, packet.velZ),
-            packet.lifetime,
-            packet.ownerId // Owner is the player who fired it
-        );
+        // Only create projectile if it's from another player (not ourselves)
+        // We already created our own projectile locally when we shot
+        if (packet.ownerId != networkClient->getClientId()) {
+            createProjectile(
+                glm::vec3(packet.posX, packet.posY, packet.posZ),
+                glm::vec3(packet.velX, packet.velY, packet.velZ),
+                packet.lifetime,
+                packet.ownerId // Owner is the player who fired it
+            );
+        }
     };
-    
+
+    networkClient->onMapPlayerCount = [this](const MapPlayerCountPacket& packet) {
+        // Update map player counts
+        const char* mapFiles[] = {"simple.map", "large.map", "arena.map", "sniper.map", "complex.map", "team_arena.map"};
+        for (int i = 0; i < 6; i++) {
+            mapPlayerCounts[i] = 0;
+        }
+        for (int i = 0; i < packet.mapCount && i < 8; i++) {
+            std::string mapName(packet.maps[i].mapName);
+            for (int j = 0; j < 6; j++) {
+                if (mapName == mapFiles[j]) {
+                    mapPlayerCounts[j] = packet.maps[i].playerCount;
+                    break;
+                }
+            }
+        }
+    };
+
     if (!networkClient->connect(address, port)) {
         delete networkClient;
         networkClient = nullptr;
@@ -3104,7 +3224,8 @@ void Game::renderEditor() {
     renderer.drawText("1-8=texture, E/Q=resize (+X/Y/Z)", startX, startY + lineHeight * 3, textScale);
     renderer.drawText("UP/DOWN=placement dist, arrows=move", startX, startY + lineHeight * 4, textScale);
     renderer.drawText("[,]=grid size, G=grid toggle, N=noclip", startX, startY + lineHeight * 5, textScale);
-    renderer.drawText("F9=save, ESC=exit", startX, startY + lineHeight * 6, textScale);
+    renderer.drawText("F1=DM spawn, F2=Team A, F3=Team B, F4=Block mode", startX, startY + lineHeight * 6, textScale);
+    renderer.drawText("F9=save, ESC=exit", startX, startY + lineHeight * 7, textScale);
     
     // Show current settings
     char buf[128];
@@ -3116,6 +3237,17 @@ void Game::renderEditor() {
     renderer.drawText(buf, startX, startY + lineHeight * 10, textScale);
     snprintf(buf, sizeof(buf), "GRID: %s  NOCLIP: %s", editorShowGrid ? "ON" : "OFF", editorNoclip ? "ON" : "OFF");
     renderer.drawText(buf, startX, startY + lineHeight * 11, textScale);
+
+    // Show spawn mode
+    const char* spawnModeStr = "BLOCK MODE";
+    switch (editorSpawnMode) {
+        case SPAWN_DEATHMATCH: spawnModeStr = "DM SPAWN MODE"; break;
+        case SPAWN_TEAM_A: spawnModeStr = "TEAM A SPAWN (Red)"; break;
+        case SPAWN_TEAM_B: spawnModeStr = "TEAM B SPAWN (Blue)"; break;
+        default: break;
+    }
+    snprintf(buf, sizeof(buf), "MODE: %s", spawnModeStr);
+    renderer.drawText(buf, startX, startY + lineHeight * 12, textScale);
     
     // Texture preview in bottom RIGHT corner - make it larger and more visible
     // Texture color palette (matching the map texture IDs)
@@ -3365,22 +3497,109 @@ void Game::processEditorInput() {
     } else if (glfwGetKey(window, GLFW_KEY_F9) == GLFW_RELEASE) {
         f9Pressed = false;
     }
-    
+
+    // Spawn mode selection (F1-F4)
+    static bool f1Pressed = false;
+    static bool f2Pressed = false;
+    static bool f3Pressed = false;
+    static bool f4Pressed = false;
+
+    if (glfwGetKey(window, GLFW_KEY_F1) == GLFW_PRESS && !f1Pressed) {
+        f1Pressed = true;
+        editorSpawnMode = SPAWN_DEATHMATCH;
+        std::cout << "Editor mode: Deathmatch Spawn Point" << std::endl;
+    } else if (glfwGetKey(window, GLFW_KEY_F1) == GLFW_RELEASE) {
+        f1Pressed = false;
+    }
+
+    if (glfwGetKey(window, GLFW_KEY_F2) == GLFW_PRESS && !f2Pressed) {
+        f2Pressed = true;
+        editorSpawnMode = SPAWN_TEAM_A;
+        std::cout << "Editor mode: Team A (Red) Spawn Point" << std::endl;
+    } else if (glfwGetKey(window, GLFW_KEY_F2) == GLFW_RELEASE) {
+        f2Pressed = false;
+    }
+
+    if (glfwGetKey(window, GLFW_KEY_F3) == GLFW_PRESS && !f3Pressed) {
+        f3Pressed = true;
+        editorSpawnMode = SPAWN_TEAM_B;
+        std::cout << "Editor mode: Team B (Blue) Spawn Point" << std::endl;
+    } else if (glfwGetKey(window, GLFW_KEY_F3) == GLFW_RELEASE) {
+        f3Pressed = false;
+    }
+
+    if (glfwGetKey(window, GLFW_KEY_F4) == GLFW_PRESS && !f4Pressed) {
+        f4Pressed = true;
+        editorSpawnMode = SPAWN_NONE;
+        std::cout << "Editor mode: Block Placement" << std::endl;
+    } else if (glfwGetKey(window, GLFW_KEY_F4) == GLFW_RELEASE) {
+        f4Pressed = false;
+    }
+
     // Block placement (Left mouse button) - hold to keep placing, throttled
     if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
         double now = glfwGetTime();
         if (now - lastPlaceTime >= placeInterval) {
             lastPlaceTime = now;
             if (currentMap) {
-                MapBlock block;
-                block.position = editorGridPos;
-                block.scale = editorBlockSize;
-                block.color = glm::vec3(1.0f, 1.0f, 1.0f);
-                block.textureId = editorSelectedTexture;
-                block.solid = true;
-                currentMap->addBlock(block);
-                std::cout << "Added block at " << editorGridPos.x << "," << editorGridPos.y << "," << editorGridPos.z
-                          << " size " << editorBlockSize.x << "x" << editorBlockSize.y << "x" << editorBlockSize.z << std::endl;
+                // Check if we need to expand map dimensions
+                glm::vec3 halfSize = editorBlockSize * 0.5f;
+                glm::vec3 blockMin = editorGridPos - halfSize;
+                glm::vec3 blockMax = editorGridPos + halfSize;
+                glm::vec3 dims = currentMap->getDimensions();
+
+                // Check if block is outside current map bounds
+                bool needsExpansion = false;
+                float newWidth = dims.x;
+                float newHeight = dims.y;
+                float newDepth = dims.z;
+
+                if (blockMin.x < -dims.x * 0.5f || blockMax.x > dims.x * 0.5f) {
+                    newWidth = glm::max(dims.x, glm::abs(blockMax.x) * 2.0f + 2.0f);
+                    needsExpansion = true;
+                }
+                if (blockMin.y < -dims.y * 0.5f || blockMax.y > dims.y * 0.5f) {
+                    newHeight = glm::max(dims.y, glm::abs(blockMax.y) * 2.0f + 2.0f);
+                    needsExpansion = true;
+                }
+                if (blockMin.z < -dims.z * 0.5f || blockMax.z > dims.z * 0.5f) {
+                    newDepth = glm::max(dims.z, glm::abs(blockMax.z) * 2.0f + 2.0f);
+                    needsExpansion = true;
+                }
+
+                if (needsExpansion) {
+                    currentMap->setDimensions(glm::vec3(newWidth, newHeight, newDepth));
+                    std::cout << "Map expanded to dimensions: " << newWidth << "x" << newHeight << "x" << newDepth << std::endl;
+                }
+
+                // Handle spawn point placement or block placement
+                if (editorSpawnMode == SPAWN_DEATHMATCH) {
+                    // Add deathmatch spawn point
+                    currentMap->addSpawnPoint(SpawnPoint(editorGridPos, camera.Yaw, camera.Pitch));
+                    std::cout << "Added DM spawn point at (" << editorGridPos.x << ", " << editorGridPos.y << ", " << editorGridPos.z
+                              << ") yaw=" << camera.Yaw << " pitch=" << camera.Pitch << std::endl;
+                } else if (editorSpawnMode == SPAWN_TEAM_A) {
+                    // Add Team A spawn point
+                    currentMap->addTeamSpawn(TeamSpawn(editorGridPos, 0, camera.Yaw, camera.Pitch));
+                    std::cout << "Added Team A (Red) spawn point at (" << editorGridPos.x << ", " << editorGridPos.y << ", " << editorGridPos.z
+                              << ") yaw=" << camera.Yaw << " pitch=" << camera.Pitch << std::endl;
+                } else if (editorSpawnMode == SPAWN_TEAM_B) {
+                    // Add Team B spawn point
+                    currentMap->addTeamSpawn(TeamSpawn(editorGridPos, 1, camera.Yaw, camera.Pitch));
+                    std::cout << "Added Team B (Blue) spawn point at (" << editorGridPos.x << ", " << editorGridPos.y << ", " << editorGridPos.z
+                              << ") yaw=" << camera.Yaw << " pitch=" << camera.Pitch << std::endl;
+                } else {
+                    // Normal block placement
+                    MapBlock block;
+                    block.position = editorGridPos;
+                    block.scale = editorBlockSize;
+                    block.color = glm::vec3(1.0f, 1.0f, 1.0f);
+                    block.textureId = editorSelectedTexture;
+                    block.solid = true;
+                    currentMap->addBlock(block);
+                    std::cout << "Added block at " << editorGridPos.x << "," << editorGridPos.y << "," << editorGridPos.z
+                              << " size " << editorBlockSize.x << "x" << editorBlockSize.y << "x" << editorBlockSize.z << std::endl;
+                }
             }
         }
     }
@@ -3487,38 +3706,73 @@ void Game::saveMap(const std::string& filename) {
         std::cerr << "No map to save!" << std::endl;
         return;
     }
-    
+
     std::string filepath = "assets/maps/" + filename;
     std::ofstream file(filepath);
-    
+
     if (!file.is_open()) {
         std::cerr << "Failed to open file for writing: " << filepath << std::endl;
         return;
     }
-    
+
+    glm::vec3 dims = currentMap->getDimensions();
+
     // Write header
     file << "# Custom map created in editor\n";
     file << "name Custom\n";
-    file << "dimensions 100.0 50.0 100.0\n\n";
-    
+    file << "dimensions " << dims.x << " " << dims.y << " " << dims.z << "\n\n";
+
     // Write blocks
     const auto& blocks = currentMap->getBlocks();
     for (const auto& block : blocks) {
         // Format: block x y z width height depth textureId solid visible
-        file << "block " 
+        file << "block "
              << block.position.x << " "
              << block.position.y << " "
              << block.position.z << " "
-             << block.scale.x * 2.0f << " "  // Convert half-extents to full size
-             << block.scale.y * 2.0f << " "
-             << block.scale.z * 2.0f << " "
+             << block.scale.x << " "
+             << block.scale.y << " "
+             << block.scale.z << " "
              << block.textureId << " "
+             << block.blockType << " "
              << (block.solid ? "1" : "0") << " "
-             << "1\n"; // visible
+             << block.color.r << " "
+             << block.color.g << " "
+             << block.color.b << "\n";
     }
-    
+
+    // Write deathmatch spawn points
+    const auto& spawns = currentMap->getSpawnPoints();
+    if (!spawns.empty()) {
+        file << "\n# Deathmatch spawn points\n";
+        for (const auto& spawn : spawns) {
+            file << "spawn "
+                 << spawn.position.x << " "
+                 << spawn.position.y << " "
+                 << spawn.position.z << " "
+                 << spawn.yaw << " "
+                 << spawn.pitch << "\n";
+        }
+    }
+
+    // Write team spawn points
+    const auto& teamSpawns = currentMap->getTeamSpawns();
+    if (!teamSpawns.empty()) {
+        file << "\n# Team spawn points\n";
+        for (const auto& spawn : teamSpawns) {
+            file << "team_spawn "
+                 << spawn.position.x << " "
+                 << spawn.position.y << " "
+                 << spawn.position.z << " "
+                 << spawn.teamId << " "
+                 << spawn.yaw << " "
+                 << spawn.pitch << "\n";
+        }
+    }
+
     file.close();
-    std::cout << "Map saved to " << filepath << " with " << blocks.size() << " blocks" << std::endl;
+    std::cout << "Map saved to " << filepath << " with " << blocks.size() << " blocks, "
+              << spawns.size() << " DM spawns, " << teamSpawns.size() << " team spawns" << std::endl;
 }
 
 // ========== PVP MULTIPLAYER FUNCTIONS ==========
@@ -3541,12 +3795,15 @@ void Game::checkProjectilePlayerCollision() {
             bool isPistolBullet = glm::length(projectiles[i].velocity) > 35.0f;
             
             float damage = 0.0f;
-            if (isPistolBullet) {
-                damage = 20.0f; // Pistol damage
+            float velocity = glm::length(projectiles[i].velocity);
+            if (velocity > 100.0f) {
+                damage = 25.0f; // Pistol bullet (velocity ~120)
+            } else if (velocity > 40.0f && velocity < 60.0f) {
+                damage = 10.0f; // Shotgun pellet (velocity ~50)
             } else {
-                // Grenade/flashbang explosion damage
+                // Grenade/flashbang explosion damage (velocity ~25-30)
                 createSimpleExplosion(projectiles[i].position);
-                damage = 40.0f; // Explosion damage
+                damage = 50.0f; // Explosion damage
             }
             
             damagePlayer(damage);

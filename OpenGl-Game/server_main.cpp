@@ -106,7 +106,8 @@ int main(int argc, char* argv[]) {
                             0.0f
                         );
                         glm::vec3 dir = glm::normalize(front + spread);
-                        server.broadcastProjectileSpawn(
+                        server.broadcastProjectileSpawnToMap(
+                            player->mapName,
                             clientPos + front * 0.5f,
                             dir * 50.0f,
                             1.0f,
@@ -118,7 +119,8 @@ int main(int argc, char* argv[]) {
                     
                 case 2: // GRENADE - slower, longer lifetime
                     player->shootCooldown = 1.0f;
-                    server.broadcastProjectileSpawn(
+                    server.broadcastProjectileSpawnToMap(
+                        player->mapName,
                         clientPos + front * 0.5f,
                         front * 30.0f,
                         5.0f,
@@ -126,10 +128,11 @@ int main(int argc, char* argv[]) {
                         id
                     );
                     break;
-                    
+
                 case 3: // FLASHBANG - slower, medium lifetime
                     player->shootCooldown = 1.0f;
-                    server.broadcastProjectileSpawn(
+                    server.broadcastProjectileSpawnToMap(
+                        player->mapName,
                         clientPos + front * 0.5f,
                         front * 25.0f,
                         4.0f,
@@ -141,7 +144,8 @@ int main(int argc, char* argv[]) {
                 case 0: // PISTOL (default)
                 default:
                     player->shootCooldown = 0.3f;
-                    server.broadcastProjectileSpawn(
+                    server.broadcastProjectileSpawnToMap(
+                        player->mapName,
                         clientPos + front * 0.5f,
                         front * 60.0f,
                         2.0f,

@@ -101,10 +101,10 @@ void NetworkClient::disconnect() {
     clientId = 0;
 }
 
-void NetworkClient::sendPlayerInput(float moveX, float moveZ, float yaw, float pitch, 
+void NetworkClient::sendPlayerInput(float moveX, float moveZ, float yaw, float pitch,
                                      bool jump, bool shoot, uint8_t weaponId, float posX, float posY, float posZ) {
     if (!connected) return;
-    
+
     PlayerInputPacket packet;
     packet.header.magic = PACKET_MAGIC;
     packet.header.type = PACKET_PLAYER_INPUT;
@@ -112,7 +112,7 @@ void NetworkClient::sendPlayerInput(float moveX, float moveZ, float yaw, float p
     packet.header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
     packet.header.clientId = clientId;
-    
+
     packet.moveX = moveX;
     packet.moveZ = moveZ;
     packet.yaw = yaw;
@@ -123,8 +123,26 @@ void NetworkClient::sendPlayerInput(float moveX, float moveZ, float yaw, float p
     packet.posX = posX;
     packet.posY = posY;
     packet.posZ = posZ;
-    
+
     sendPacket(&packet, sizeof(packet));
+}
+
+void NetworkClient::sendMapChange(const std::string& mapName) {
+    if (!connected) return;
+
+    MapChangePacket packet;
+    packet.header.magic = PACKET_MAGIC;
+    packet.header.type = PACKET_MAP_CHANGE;
+    packet.header.sequence = sequence++;
+    packet.header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    packet.header.clientId = clientId;
+
+    strncpy(packet.mapName, mapName.c_str(), sizeof(packet.mapName) - 1);
+    packet.mapName[sizeof(packet.mapName) - 1] = '\0';
+
+    sendPacket(&packet, sizeof(packet));
+    std::cout << "Sent map change request: " << mapName << std::endl;
 }
 
 void NetworkClient::update() {
@@ -171,7 +189,13 @@ void NetworkClient::update() {
                     onProjectileSpawn(*(ProjectileSpawnPacket*)buffer);
                 }
                 break;
-                
+
+            case PACKET_MAP_PLAYER_COUNT:
+                if (received >= sizeof(MapPlayerCountPacket) && onMapPlayerCount) {
+                    onMapPlayerCount(*(MapPlayerCountPacket*)buffer);
+                }
+                break;
+
             case PACKET_PING:
                 // Send pong
                 PacketHeader pong;
@@ -369,6 +393,7 @@ void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_
             player.active = true;
             player.lastInputSequence = 0;
             player.shootCooldown = 0.0f;
+            strcpy(player.mapName, "simple.map"); // Default map
             
             // Send connect ack
             PacketHeader ack;
@@ -433,10 +458,42 @@ void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_
             // Update player ping/latency if needed
             break;
         }
+
+        case PACKET_MAP_CHANGE: {
+            if (size < sizeof(MapChangePacket)) return;
+
+            MapChangePacket* mapChange = (MapChangePacket*)data;
+            uint32_t id = mapChange->header.clientId;
+
+            if (players.find(id) != players.end()) {
+                std::string newMap(mapChange->mapName);
+                std::string oldMap(players[id].mapName);
+
+                // Update player's map
+                strncpy(players[id].mapName, newMap.c_str(), sizeof(players[id].mapName) - 1);
+                players[id].mapName[sizeof(players[id].mapName) - 1] = '\0';
+
+                std::cout << "Player " << id << " changed map from " << oldMap << " to " << newMap << std::endl;
+
+                // Notify other players on the old map that this player left
+                PlayerLeavePacket leave;
+                leave.header.magic = PACKET_MAGIC;
+                leave.header.type = PACKET_PLAYER_LEAVE;
+                leave.header.sequence = 0;
+                leave.header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count();
+                leave.header.clientId = id;
+                broadcastToMap(oldMap, &leave, sizeof(leave), id);
+
+                // Broadcast updated player counts to all clients
+                broadcastMapPlayerCounts();
+            }
+            break;
+        }
     }
 }
 
-void NetworkServer::broadcastPlayerState(uint32_t playerId, const glm::vec3& pos, 
+void NetworkServer::broadcastPlayerState(uint32_t playerId, const glm::vec3& pos,
                                           const glm::vec3& vel, float yaw, float pitch,
                                           float health, bool isDead) {
     PlayerStatePacket packet;
@@ -446,7 +503,7 @@ void NetworkServer::broadcastPlayerState(uint32_t playerId, const glm::vec3& pos
     packet.header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
     packet.header.clientId = playerId;
-    
+
     packet.playerId = playerId;
     packet.posX = pos.x;
     packet.posY = pos.y;
@@ -458,8 +515,13 @@ void NetworkServer::broadcastPlayerState(uint32_t playerId, const glm::vec3& pos
     packet.pitch = pitch;
     packet.health = health;
     packet.isDead = isDead;
-    
-    broadcastPacket(&packet, sizeof(packet));
+
+    // Only broadcast to players on the same map
+    if (players.find(playerId) != players.end()) {
+        broadcastToMap(players[playerId].mapName, &packet, sizeof(packet), playerId);
+    } else {
+        broadcastPacket(&packet, sizeof(packet), playerId);
+    }
 }
 
 void NetworkServer::broadcastProjectileSpawn(const glm::vec3& pos, const glm::vec3& vel,
@@ -518,6 +580,118 @@ void NetworkServer::broadcastPacket(const void* data, size_t size, uint32_t excl
             sendPacket(data, size, pair.second.address);
         }
     }
+}
+
+void NetworkServer::broadcastToMap(const std::string& mapName, const void* data, size_t size, uint32_t excludeId) {
+    for (auto& pair : players) {
+        if (pair.first != excludeId && pair.second.active) {
+            if (mapName == pair.second.mapName) {
+                sendPacket(data, size, pair.second.address);
+            }
+        }
+    }
+}
+
+void NetworkServer::broadcastPlayerStateToMap(uint32_t playerId, const std::string& mapName,
+                                               const glm::vec3& pos, const glm::vec3& vel,
+                                               float yaw, float pitch, float health, bool isDead) {
+    PlayerStatePacket packet;
+    packet.header.magic = PACKET_MAGIC;
+    packet.header.type = PACKET_PLAYER_STATE;
+    packet.header.sequence = 0;
+    packet.header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    packet.header.clientId = playerId;
+
+    packet.playerId = playerId;
+    packet.posX = pos.x;
+    packet.posY = pos.y;
+    packet.posZ = pos.z;
+    packet.velX = vel.x;
+    packet.velY = vel.y;
+    packet.velZ = vel.z;
+    packet.yaw = yaw;
+    packet.pitch = pitch;
+    packet.health = health;
+    packet.isDead = isDead;
+
+    broadcastToMap(mapName, &packet, sizeof(packet), playerId);
+}
+
+void NetworkServer::broadcastProjectileSpawnToMap(const std::string& mapName, const glm::vec3& pos,
+                                                 const glm::vec3& vel, float lifetime,
+                                                 uint8_t type, uint32_t ownerId) {
+    ProjectileSpawnPacket packet;
+    packet.header.magic = PACKET_MAGIC;
+    packet.header.type = PACKET_PROJECTILE_SPAWN;
+    packet.header.sequence = 0;
+    packet.header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    packet.header.clientId = ownerId;
+
+    packet.posX = pos.x;
+    packet.posY = pos.y;
+    packet.posZ = pos.z;
+    packet.velX = vel.x;
+    packet.velY = vel.y;
+    packet.velZ = vel.z;
+    packet.lifetime = lifetime;
+    packet.projectileType = type;
+    packet.ownerId = ownerId;
+
+    broadcastToMap(mapName, &packet, sizeof(packet), ownerId);
+}
+
+void NetworkServer::broadcastMapPlayerCounts() {
+    MapPlayerCountPacket packet;
+    packet.header.magic = PACKET_MAGIC;
+    packet.header.type = PACKET_MAP_PLAYER_COUNT;
+    packet.header.sequence = 0;
+    packet.header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    packet.header.clientId = 0;
+
+    // Count players per map
+    std::map<std::string, int> mapCounts;
+    for (auto& pair : players) {
+        if (pair.second.active) {
+            std::string mapName(pair.second.mapName);
+            if (mapName.empty()) {
+                mapName = "simple.map"; // Default map
+            }
+            mapCounts[mapName]++;
+        }
+    }
+
+    // Fill packet
+    packet.mapCount = 0;
+    for (auto& pair : mapCounts) {
+        if (packet.mapCount >= 8) break;
+        strncpy(packet.maps[packet.mapCount].mapName, pair.first.c_str(), 31);
+        packet.maps[packet.mapCount].mapName[31] = '\0';
+        packet.maps[packet.mapCount].playerCount = pair.second;
+        packet.mapCount++;
+    }
+
+    broadcastPacket(&packet, sizeof(packet));
+}
+
+void NetworkServer::setPlayerMap(uint32_t playerId, const std::string& mapName) {
+    auto it = players.find(playerId);
+    if (it != players.end()) {
+        strncpy(it->second.mapName, mapName.c_str(), sizeof(it->second.mapName) - 1);
+        it->second.mapName[sizeof(it->second.mapName) - 1] = '\0';
+    }
+}
+
+int NetworkServer::getPlayerCountOnMap(const std::string& mapName) {
+    int count = 0;
+    for (auto& pair : players) {
+        if (pair.second.active && mapName == pair.second.mapName) {
+            count++;
+        }
+    }
+    return count;
 }
 
 void NetworkServer::removePlayer(uint32_t id) {

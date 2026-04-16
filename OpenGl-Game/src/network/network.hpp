@@ -53,7 +53,9 @@ enum PacketType : uint8_t {
     PACKET_PONG = 12,
     // LAN discovery (client broadcast -> server response)
     PACKET_DISCOVER = 13,
-    PACKET_DISCOVER_RESPONSE = 14
+    PACKET_DISCOVER_RESPONSE = 14,
+    PACKET_MAP_CHANGE = 15,        // Client requesting map change
+    PACKET_MAP_PLAYER_COUNT = 16   // Server sending player counts per map
 };
 
 #pragma pack(push, 1)
@@ -96,6 +98,12 @@ struct PlayerJoinPacket {
     float spawnX, spawnY, spawnZ;
 };
 
+// Player left
+struct PlayerLeavePacket {
+    PacketHeader header;
+    uint32_t playerId;
+};
+
 // Projectile spawn
 struct ProjectileSpawnPacket {
     PacketHeader header;
@@ -116,6 +124,24 @@ struct DiscoverResponsePacket {
     PacketHeader header;
     uint16_t port;
     char name[32];
+};
+
+// Map change request (client -> server)
+struct MapChangePacket {
+    PacketHeader header;
+    char mapName[32];
+};
+
+// Map player count (server -> client)
+struct MapPlayerCountPacket {
+    PacketHeader header;
+    // Array of map names and player counts
+    struct MapInfo {
+        char mapName[32];
+        uint8_t playerCount;
+    };
+    MapInfo maps[8];  // Support up to 8 maps
+    uint8_t mapCount;
 };
 
 #pragma pack(pop)
@@ -149,7 +175,11 @@ public:
     std::function<void(const PlayerJoinPacket&)> onPlayerJoin;
     std::function<void(uint32_t)> onPlayerLeave;
     std::function<void(const ProjectileSpawnPacket&)> onProjectileSpawn;
-    
+    std::function<void(const MapPlayerCountPacket&)> onMapPlayerCount;
+
+    // Send map change request to server
+    void sendMapChange(const std::string& mapName);
+
 private:
     socket_t socketFd;
     sockaddr_in serverAddr;
@@ -175,6 +205,7 @@ struct ServerPlayer {
     uint32_t lastInputSequence;
     float lastPingTime;
     float shootCooldown;  // Shooting cooldown timer
+    char mapName[32];     // Current map the player is on
 };
 
 class NetworkServer {
@@ -190,14 +221,32 @@ public:
     void update(float deltaTime);
     
     // Send game state to all clients
-    void broadcastPlayerState(uint32_t playerId, const glm::vec3& pos, const glm::vec3& vel, 
+    void broadcastPlayerState(uint32_t playerId, const glm::vec3& pos, const glm::vec3& vel,
                                float yaw, float pitch, float health, bool isDead);
-    void broadcastProjectileSpawn(const glm::vec3& pos, const glm::vec3& vel, float lifetime, 
+    void broadcastProjectileSpawn(const glm::vec3& pos, const glm::vec3& vel, float lifetime,
                                    uint8_t type, uint32_t ownerId);
-    
+
+    // Map-based broadcasting - only sends to players on the same map
+    void broadcastToMap(const std::string& mapName, const void* data, size_t size, uint32_t excludeId);
+    void broadcastPlayerStateToMap(uint32_t playerId, const std::string& mapName,
+                                    const glm::vec3& pos, const glm::vec3& vel,
+                                    float yaw, float pitch, float health, bool isDead);
+    void broadcastProjectileSpawnToMap(const std::string& mapName, const glm::vec3& pos,
+                                        const glm::vec3& vel, float lifetime,
+                                        uint8_t type, uint32_t ownerId);
+
+    // Send map player counts to all clients
+    void broadcastMapPlayerCounts();
+
+    // Change player's map
+    void setPlayerMap(uint32_t playerId, const std::string& mapName);
+
     // Get connected players
     std::vector<ServerPlayer*> getPlayers();
     ServerPlayer* getPlayer(uint32_t id);
+
+    // Get player count for a specific map
+    int getPlayerCountOnMap(const std::string& mapName);
     
     // Callbacks
     std::function<void(uint32_t, const PlayerInputPacket&)> onPlayerInput;

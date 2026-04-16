@@ -10,6 +10,7 @@
 #include <fstream>
 #include <sstream>
 #include <algorithm>
+#include <cstdlib>
 
 Map::Map(const std::string& mapFile) 
     : dimensions(20.0f, 5.0f, 20.0f), mapName("Default") {
@@ -42,17 +43,17 @@ bool Map::loadFromFile(const std::string& filename) {
 bool Map::parseMapData(const std::string& data) {
     std::istringstream stream(data);
     std::string line;
-    
+
     clear();
-    
+
     while (std::getline(stream, line)) {
         // Skip comments and empty lines
         if (line.empty() || line[0] == '#') continue;
-        
+
         std::istringstream lineStream(line);
         std::string command;
         lineStream >> command;
-        
+
         if (command == "texture") {
             std::string texturePath;
             int textureId;
@@ -64,14 +65,14 @@ bool Map::parseMapData(const std::string& data) {
             int textureId, blockType;
             bool solid;
             float r, g, b;
-            
+
             // Try to parse with color (new format)
             lineStream >> x >> y >> z >> sx >> sy >> sz >> textureId >> blockType >> solid;
-            
+
             // Check if color values are present
             if (lineStream >> r >> g >> b) {
                 // New format with color
-                addBlock(MapBlock(glm::vec3(x, y, z), glm::vec3(sx, sy, sz), 
+                addBlock(MapBlock(glm::vec3(x, y, z), glm::vec3(sx, sy, sz),
                                  textureId, blockType, solid, glm::vec3(r, g, b)));
             } else {
                 // Old format - assign default colors based on blockType
@@ -86,9 +87,9 @@ bool Map::parseMapData(const std::string& data) {
                     glm::vec3(0.7f, 0.7f, 0.7f)    // 7: Default gray
                 };
                 glm::vec3 color = defaultColors[blockType % 8];
-                
+
                 // Ensure ALL blocks have collision
-                addBlock(MapBlock(glm::vec3(x, y, z), glm::vec3(sx, sy, sz), 
+                addBlock(MapBlock(glm::vec3(x, y, z), glm::vec3(sx, sy, sz),
                                  textureId, blockType, true, color)); // Force solid=true
             }
         }
@@ -102,9 +103,23 @@ bool Map::parseMapData(const std::string& data) {
             lineStream >> name;
             mapName = name;
         }
+        else if (command == "spawn") {
+            // Deathmatch spawn point: spawn x y z yaw pitch
+            float x, y, z, yaw, pitch;
+            lineStream >> x >> y >> z >> yaw >> pitch;
+            addSpawnPoint(SpawnPoint(glm::vec3(x, y, z), yaw, pitch));
+        }
+        else if (command == "team_spawn") {
+            // Team spawn point: team_spawn x y z teamId yaw pitch
+            float x, y, z, yaw, pitch;
+            int teamId;
+            lineStream >> x >> y >> z >> teamId >> yaw >> pitch;
+            addTeamSpawn(TeamSpawn(glm::vec3(x, y, z), teamId, yaw, pitch));
+        }
     }
-    
-    std::cout << "Loaded map: " << mapName << " with " << blocks.size() << " blocks" << std::endl;
+
+    std::cout << "Loaded map: " << mapName << " with " << blocks.size() << " blocks, "
+              << spawnPoints.size() << " DM spawns, " << teamSpawns.size() << " team spawns" << std::endl;
     return true;
 }
 
@@ -198,7 +213,9 @@ glm::vec3 Map::getDimensions() const {
 
 void Map::clear() {
     blocks.clear();
-    
+    spawnPoints.clear();
+    teamSpawns.clear();
+
     // Clean up textures
     for (auto* texture : textures) {
         if (texture != nullptr) {
@@ -206,6 +223,50 @@ void Map::clear() {
         }
     }
     textures.clear();
+}
+
+void Map::setDimensions(const glm::vec3& dims) {
+    dimensions = dims;
+}
+
+void Map::addSpawnPoint(const SpawnPoint& spawn) {
+    spawnPoints.push_back(spawn);
+}
+
+void Map::addTeamSpawn(const TeamSpawn& spawn) {
+    teamSpawns.push_back(spawn);
+}
+
+const std::vector<SpawnPoint>& Map::getSpawnPoints() const {
+    return spawnPoints;
+}
+
+const std::vector<TeamSpawn>& Map::getTeamSpawns() const {
+    return teamSpawns;
+}
+
+SpawnPoint Map::getRandomSpawnPoint() const {
+    if (spawnPoints.empty()) {
+        return SpawnPoint(); // Return default spawn
+    }
+    int index = rand() % spawnPoints.size();
+    return spawnPoints[index];
+}
+
+TeamSpawn Map::getRandomTeamSpawn(int teamId) const {
+    std::vector<const TeamSpawn*> teamSpawnsForTeam;
+    for (const auto& spawn : teamSpawns) {
+        if (spawn.teamId == teamId) {
+            teamSpawnsForTeam.push_back(&spawn);
+        }
+    }
+
+    if (teamSpawnsForTeam.empty()) {
+        return TeamSpawn(); // Return default spawn
+    }
+
+    int index = rand() % teamSpawnsForTeam.size();
+    return *teamSpawnsForTeam[index];
 }
 
 void Map::generateTestMap() {
