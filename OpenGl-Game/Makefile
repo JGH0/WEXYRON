@@ -15,7 +15,7 @@ TARGET = $(BIN_DIR)/game
 SERVER_TARGET = $(BIN_DIR)/server
 
 # Source files
-CORE_SOURCES = $(CORE_DIR)/game.cpp $(CORE_DIR)/renderer.cpp $(CORE_DIR)/camera.cpp $(CORE_DIR)/map.cpp $(CORE_DIR)/shader.cpp $(CORE_DIR)/texture.cpp
+CORE_SOURCES = $(CORE_DIR)/game.cpp $(CORE_DIR)/game_input.cpp $(CORE_DIR)/game_loop.cpp $(CORE_DIR)/game_gameplay.cpp $(CORE_DIR)/game_hud.cpp $(CORE_DIR)/game_menus.cpp $(CORE_DIR)/game_server.cpp $(CORE_DIR)/game_editor.cpp $(CORE_DIR)/renderer.cpp $(CORE_DIR)/camera.cpp $(CORE_DIR)/map.cpp $(CORE_DIR)/shader.cpp $(CORE_DIR)/texture.cpp
 SYSTEMS_SOURCES = $(SYSTEMS_DIR)/input.cpp $(SYSTEMS_DIR)/weapon.cpp $(SYSTEMS_DIR)/physics.cpp $(SYSTEMS_DIR)/enemy.cpp $(SYSTEMS_DIR)/projectile.cpp $(SYSTEMS_DIR)/player.cpp $(SYSTEMS_DIR)/game_state.cpp
 NETWORK_SOURCES = $(NETWORK_DIR)/network.cpp
 UI_SOURCES = $(UI_DIR)/menu.cpp $(UI_DIR)/menu_item.cpp $(UI_DIR)/text_renderer.cpp

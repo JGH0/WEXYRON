@@ -70,7 +70,18 @@ public:
      * @param scale Text scale factor
      */
     void drawText(const std::string& text, float x, float y, float scale = 1.0f);
-    
+
+    /// Measure how wide a string will be at the given scale (design-space pixels)
+    float getTextWidth(const std::string& text, float scale = 1.0f) const;
+
+    /// Draw text but automatically shrink the scale so the text fits within maxWidth.
+    void drawTextFit(const std::string& text, float x, float y,
+                     float maxWidth, float scale = 1.0f);
+
+    /// Draw text centred horizontally at centreX.
+    void drawTextCentered(const std::string& text, float centreX, float y,
+                          float scale = 1.0f);
+
     /**
      * @brief Render an entire map
      * 

@@ -13,6 +13,7 @@
 #include <vector>
 #include <glm/glm.hpp>
 #include <unordered_map>
+#include <cstring>
 #include "camera.hpp"
 #include "renderer.hpp"
 #include "map.hpp"
@@ -210,7 +211,70 @@ private:
 
     /// Map player counts (received from server)
     int mapPlayerCounts[6] = {0, 0, 0, 0, 0, 0}; // Player count for each map
-    
+
+    /// Menu state tracking
+    bool menuJustEntered = true; // Reset key states when entering menu
+
+    // ---------------------------------------------------------------
+    // All per-frame key-state booleans live here so they can be reset
+    // atomically when the game changes state – the root cause of the
+    // "stuck navigation after visiting server menu" bug.
+    // ---------------------------------------------------------------
+    struct InputState {
+        // Shared navigation (MENU / MAP_SELECTION / SETTINGS / SERVER_CONNECT)
+        bool escapePressed  = false;
+        bool upPressed      = false;
+        bool downPressed    = false;
+        bool enterPressed   = false;
+        bool leftPressed    = false;
+        bool rightPressed   = false;
+
+        // Server-connect specific
+        bool tabPressed       = false;
+        bool backspacePressed = false;
+        bool periodPressed    = false;
+        bool rPressed         = false;
+        bool digitPressed[10];
+
+        // Editor specific
+        bool gPressed         = false;
+        bool nPressed         = false;
+        bool f9Pressed        = false;
+        bool texKeyPressed[8];
+        bool rmbPressed       = false;
+        bool qPressed         = false;
+        bool ePressed         = false;
+        bool lbracketPressed  = false;
+        bool rbracketPressed  = false;
+        bool upArrowPressed   = false;
+        bool downArrowPressed = false;
+        bool leftArrowPressed = false;
+        bool rightArrowPressed= false;
+        bool f1Pressed = false, f2Pressed = false;
+        bool f3Pressed = false, f4Pressed = false;
+        double lastPlaceTime  = 0.0;
+        float sidewaysOffset  = 0.0f;
+
+        InputState() {
+            memset(digitPressed,  0, sizeof(digitPressed));
+            memset(texKeyPressed, 0, sizeof(texKeyPressed));
+        }
+
+        /// Reset navigation keys used by menus. Call whenever switching state.
+        /// NOTE: enterPressed is intentionally NOT reset here - it must stay true
+        /// until the key is physically released so destination states cannot react
+        /// to a still-held ENTER (prevents instant map/option selection on entry).
+        /// NOTE: escapePressed is intentionally NOT reset here – it has its own
+        /// release handler in processInput and must stay true until the key is
+        /// physically released, otherwise the menu opens and immediately closes.
+        void resetNavKeys() {
+            upPressed     = false;
+            downPressed   = false;
+            leftPressed   = false;
+            rightPressed  = false;
+        }
+    } inp;
+
     /// Key bindings
     struct KeyBindings {
         int forward;

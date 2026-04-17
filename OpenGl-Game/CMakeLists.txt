@@ -32,6 +32,8 @@ include_directories(
 # Source files
 set(CORE_SOURCES
     src/core/game.cpp
+    src/core/game_menus.cpp
+    src/core/game_server.cpp
     src/core/renderer.cpp
     src/core/camera.cpp
     src/core/map.cpp

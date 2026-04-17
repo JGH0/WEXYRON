@@ -405,7 +405,7 @@ void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_
             ack.clientId = newId;
             sendPacket(&ack, sizeof(ack), from);
             
-            // Notify other players
+            // Notify other players on the same map only
             PlayerJoinPacket join;
             join.header.magic = PACKET_MAGIC;
             join.header.type = PACKET_PLAYER_JOIN;
@@ -416,7 +416,7 @@ void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_
             join.spawnX = player.position.x;
             join.spawnY = player.position.y;
             join.spawnZ = player.position.z;
-            broadcastPacket(&join, sizeof(join), newId);
+            broadcastToMap(player.mapName, &join, sizeof(join), newId);
             
             // Notify callback
             if (onPlayerConnect) {
@@ -475,7 +475,7 @@ void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_
 
                 std::cout << "Player " << id << " changed map from " << oldMap << " to " << newMap << std::endl;
 
-                // Notify other players on the old map that this player left
+                // Notify players on old map that this player left
                 PlayerLeavePacket leave;
                 leave.header.magic = PACKET_MAGIC;
                 leave.header.type = PACKET_PLAYER_LEAVE;
@@ -483,7 +483,21 @@ void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_
                 leave.header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now().time_since_epoch()).count();
                 leave.header.clientId = id;
+                leave.playerId = id;
                 broadcastToMap(oldMap, &leave, sizeof(leave), id);
+
+                // Notify players on new map that this player joined
+                PlayerJoinPacket join;
+                join.header.magic = PACKET_MAGIC;
+                join.header.type = PACKET_PLAYER_JOIN;
+                join.header.sequence = 0;
+                join.header.timestamp = leave.header.timestamp;
+                join.header.clientId = id;
+                join.playerId = id;
+                join.spawnX = players[id].position.x;
+                join.spawnY = players[id].position.y;
+                join.spawnZ = players[id].position.z;
+                broadcastToMap(newMap, &join, sizeof(join), id);
 
                 // Broadcast updated player counts to all clients
                 broadcastMapPlayerCounts();
@@ -697,15 +711,18 @@ int NetworkServer::getPlayerCountOnMap(const std::string& mapName) {
 void NetworkServer::removePlayer(uint32_t id) {
     auto it = players.find(id);
     if (it != players.end()) {
-        // Notify other players
-        PacketHeader leave;
-        leave.magic = PACKET_MAGIC;
-        leave.type = PACKET_PLAYER_LEAVE;
-        leave.sequence = 0;
-        leave.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::string oldMap(it->second.mapName);
+
+        // Notify players on the same map only
+        PlayerLeavePacket leave;
+        leave.header.magic = PACKET_MAGIC;
+        leave.header.type = PACKET_PLAYER_LEAVE;
+        leave.header.sequence = 0;
+        leave.header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
-        leave.clientId = id;
-        broadcastPacket(&leave, sizeof(leave), id);
+        leave.header.clientId = id;
+        leave.playerId = id;
+        broadcastToMap(oldMap, &leave, sizeof(leave), id);
         
         // Notify callback
         if (onPlayerDisconnect) {
@@ -713,6 +730,10 @@ void NetworkServer::removePlayer(uint32_t id) {
         }
         
         players.erase(it);
+
+        // Refresh map population counts after disconnect
+        broadcastMapPlayerCounts();
+
         std::cout << "Player " << id << " disconnected" << std::endl;
     }
 }

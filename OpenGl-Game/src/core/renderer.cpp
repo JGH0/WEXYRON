@@ -365,3 +365,29 @@ glm::mat4 Renderer::createQuadModel(float x, float y, float width, float height)
     model = glm::scale(model, glm::vec3(width, height, 1.0f));
     return model;
 }
+
+float Renderer::getTextWidth(const std::string& text, float scale) const {
+    // Each character is a 3-pixel wide glyph + 2-pixel spacing = 5 units,
+    // scaled by pixelSize = 8 * scale.
+    float pixelSize = 8.0f * scale;
+    float charWidth  = pixelSize * 4.0f; // 3 pixels + 1 spacing col
+    float charSpacing = pixelSize * 2.0f;
+    if (text.empty()) return 0.0f;
+    return (float)text.size() * (charWidth + charSpacing) - charSpacing;
+}
+
+void Renderer::drawTextFit(const std::string& text, float x, float y,
+                            float maxWidth, float scale) {
+    if (text.empty()) return;
+    float needed = getTextWidth(text, scale);
+    if (needed > maxWidth && needed > 0.0f)
+        scale *= maxWidth / needed;
+    drawText(text, x, y, scale);
+}
+
+void Renderer::drawTextCentered(const std::string& text, float centreX, float y,
+                                 float scale) {
+    if (text.empty()) return;
+    float w = getTextWidth(text, scale);
+    drawText(text, centreX - w * 0.5f, y, scale);
+}

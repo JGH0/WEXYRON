@@ -156,9 +156,10 @@ int main(int argc, char* argv[]) {
             }
         }
         
-        // Broadcast updated state to all clients
-        server.broadcastPlayerState(
+        // Broadcast updated state only to clients on the same map
+        server.broadcastPlayerStateToMap(
             id,
+            player->mapName,
             player->position,
             player->velocity,
             player->yaw,
