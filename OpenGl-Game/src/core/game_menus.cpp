@@ -160,20 +160,31 @@ void Game::renderSettings() {
 
         renderer.drawColoredQuad(bgModel, bgColor);
 
-        // Draw setting name — use drawTextFit to prevent overflow in the button box
-        float textX = menuX + 20.0f;
-        renderer.drawTextFit(settingItems[i], textX, y + menuHeight/2.0f - 8.0f, menuWidth - 40.0f, 1.2f);
+        // Calculate text layout similar to map selection menu
+        float pad = 6.0f;
+        float boxL = menuX + pad;
+        float boxR = menuX + menuWidth - pad;
+        float rowTextScale = std::max(0.65f, std::min(0.82f, 1.0f));
+        float textH = 5.0f * 8.0f * rowTextScale;
+        float textY = y + (menuHeight - textH) * 0.5f;
 
-        // Draw key assignment on the right — also clamped to box width
+        // Draw key assignment on the right (right-aligned)
         const char* keyText = keyNames[i];
-        float keyTextWidth = strlen(keyText) * 8.0f; // Approximate width
-        renderer.drawTextFit(keyText, menuX + menuWidth - keyTextWidth - 20.0f, y + menuHeight/2.0f - 8.0f, menuWidth - 40.0f, 1.2f);
+        float keyScale = rowTextScale * 0.85f;
+        float keyW = renderer.getTextWidth(keyText, keyScale);
+        float keyX = boxR - keyW;
+        renderer.drawText(keyText, keyX, textY, keyScale);
 
-        // Draw selection indicator
+        // Draw setting name on the left, using remaining space
+        float nameL = boxL + 12.0f; // Extra space for indicator
+        float nameMaxW = keyX - nameL - 8.0f; // Gap before key text
+        renderer.drawTextFit(settingItems[i], nameL, textY, nameMaxW, rowTextScale);
+
+        // Draw selection indicator on the left edge
         if (i == settingsSelection) {
             glm::mat4 indicatorModel = glm::mat4(1.0f);
-            indicatorModel = glm::translate(indicatorModel, glm::vec3(menuX + 10.0f, y + menuHeight/2.0f, 0.0f));
-            indicatorModel = glm::scale(indicatorModel, glm::vec3(8.0f, 8.0f, 1.0f));
+            indicatorModel = glm::translate(indicatorModel, glm::vec3(menuX + 4.0f, y + menuHeight/2.0f, 0.0f));
+            indicatorModel = glm::scale(indicatorModel, glm::vec3(6.0f, 6.0f, 1.0f));
             renderer.drawColoredQuad(indicatorModel, glm::vec3(1.0f, 1.0f, 1.0f));
         }
     }
@@ -294,10 +305,13 @@ void Game::renderMapSelection() {
     float titleScale = std::max(1.0f, std::min(1.5f, std::min(uiWidth / 800.0f, uiHeight / 600.0f) * 1.2f));
     renderer.drawTextCentered("SELECT MAP", 400.0f, 75.0f, titleScale);
 
-    // Map data - styled exactly like settings menu
-    const char* mapNames[] = {"Simple", "Large", "Arena", "Sniper", "Complex", "Team Arena"};
-    const char* mapSizes[] = {"Small", "Large", "Medium", "Long Range", "Multi-Level", "Team vs Team"};
-    const int numMaps = 6;
+    // Map data - loaded dynamically from assets/maps folder
+    const int numMaps = mapDisplayNames.size();
+
+    // Ensure mapSelection is within bounds
+    if (numMaps > 0 && mapSelection >= numMaps) {
+        mapSelection = numMaps - 1;
+    }
 
     float menuWidth = 400.0f;
     float menuHeight = 40.0f;
@@ -336,7 +350,7 @@ void Game::renderMapSelection() {
 
         // Optional player-count badge on the far left (only when online with players)
         float nameL = boxL;                                 // map name starts here
-        if (isConnectedToServer() && mapPlayerCounts[i] > 0) {
+        if (isConnectedToServer() && i < (int)mapPlayerCounts.size() && mapPlayerCounts[i] > 0) {
             char countStr[8];
             snprintf(countStr, sizeof(countStr), "[%d]", mapPlayerCounts[i]);
             float cw = renderer.getTextWidth(countStr, rowTextScale * 0.85f);
@@ -344,17 +358,9 @@ void Game::renderMapSelection() {
             nameL = boxL + cw + 6.0f;
         }
 
-        // Map-size label on the far right, right-aligned
-        float sizeScale = rowTextScale * 0.85f;
-        float sizeW     = renderer.getTextWidth(mapSizes[i], sizeScale);
-        float sizeX     = boxR - sizeW;
-
-        // Map name fills the remaining centre space, shrunk to fit if needed
-        float nameMaxW  = sizeX - nameL - 8.0f;            // gap of 8 px before size label
-        renderer.drawTextFit(mapNames[i], nameL, textY, nameMaxW, rowTextScale);
-
-        // Draw size label (right-aligned)
-        renderer.drawText(mapSizes[i], sizeX, textY, sizeScale);
+        // Map name fills the remaining space, shrunk to fit if needed
+        float nameMaxW  = boxR - nameL;                     // use full remaining width
+        renderer.drawTextFit(mapDisplayNames[i].c_str(), nameL, textY, nameMaxW, rowTextScale);
 
         // Selection indicator square on the left edge
         if (isSelected) {
@@ -391,7 +397,7 @@ void Game::renderMapSelection() {
     if (mapSelection != lastMapSelection) {
         std::cout << "\n=== MAP SELECTION ===" << std::endl;
         for (int i = 0; i < numMaps; i++) {
-            std::cout << (i == mapSelection ? "> " : "  ") << mapNames[i] << " - " << mapSizes[i] << std::endl;
+            std::cout << (i == mapSelection ? "> " : "  ") << mapDisplayNames[i] << std::endl;
         }
         std::cout << "Game Mode: " << gameModeStr << std::endl;
         std::cout << "Use UP/DOWN to select, LEFT/RIGHT for game mode, ENTER to load, ESC to go back" << std::endl;
@@ -414,13 +420,21 @@ void Game::processMapSelectionInput() {
         return;
     }
 
-    const int numMaps = 6;
-    const char* mapFiles[] = {"simple.map", "large.map", "arena.map", "sniper.map", "complex.map", "team_arena.map"};
+    const int numMaps = mapFiles.size();
+
+    // Ensure mapSelection is within bounds
+    if (numMaps == 0) {
+        mapSelection = 0;
+    } else if (mapSelection >= numMaps) {
+        mapSelection = numMaps - 1;
+    }
 
     // Handle UP key
     if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS && !inp.upPressed) {
         inp.upPressed = true;
-        mapSelection = (mapSelection - 1 + numMaps) % numMaps;
+        if (numMaps > 0) {
+            mapSelection = (mapSelection - 1 + numMaps) % numMaps;
+        }
     } else if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_RELEASE) {
         inp.upPressed = false;
     }
@@ -428,7 +442,9 @@ void Game::processMapSelectionInput() {
     // Handle DOWN key
     if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS && !inp.downPressed) {
         inp.downPressed = true;
-        mapSelection = (mapSelection + 1) % numMaps;
+        if (numMaps > 0) {
+            mapSelection = (mapSelection + 1) % numMaps;
+        }
     } else if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_RELEASE) {
         inp.downPressed = false;
     }
@@ -453,12 +469,13 @@ void Game::processMapSelectionInput() {
     // Handle ENTER key
     if (glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS && !inp.enterPressed) {
         inp.enterPressed = true;
-        std::cout << "Loading " << mapFiles[mapSelection] << " with game mode "
-                  << (currentGameMode == DEATHMATCH ? "Deathmatch" : "Team vs Team") << "..." << std::endl;
+        if (mapSelection < (int)mapFiles.size()) {
+            std::cout << "Loading " << mapFiles[mapSelection] << " with game mode "
+                      << (currentGameMode == DEATHMATCH ? "Deathmatch" : "Team vs Team") << "..." << std::endl;
 
-        // Notify server of map change if connected
-        if (isConnectedToServer() && networkClient) {
-            networkClient->sendMapChange(mapFiles[mapSelection]);
+            // Notify server of map change if connected
+            if (isConnectedToServer() && networkClient) {
+                networkClient->sendMapChange(mapFiles[mapSelection]);
 
             // Local cleanup: when switching maps online, clear remote players from previous map
             for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
@@ -473,19 +490,20 @@ void Game::processMapSelectionInput() {
                 remotePlayers[i].isDead   = true;
             }
             playerCount = 1; // self only until same-map players stream in
-        }
+            }
 
-        loadMap(mapFiles[mapSelection]);
-        // In Team vs Team mode, assign player to team
-        if (currentGameMode == TEAM_VS_TEAM) {
-            playerTeam = 0; // Team A (Red)
-        }
-        resetGame(); // Spawn at appropriate spawn point
+            loadMap(mapFiles[mapSelection]);
+            // In Team vs Team mode, assign player to team
+            if (currentGameMode == TEAM_VS_TEAM) {
+                playerTeam = 0; // Team A (Red)
+            }
+            resetGame(); // Spawn at appropriate spawn point
 
-        // Stabilize transition to PLAYING to avoid accidental second-trigger behavior.
-        menuJustEntered = true;
-        gameState = PLAYING;
-        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+            // Stabilize transition to PLAYING to avoid accidental second-trigger behavior.
+            menuJustEntered = true;
+            gameState = PLAYING;
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        }
     } else if (glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_RELEASE) {
         inp.enterPressed = false;
     }

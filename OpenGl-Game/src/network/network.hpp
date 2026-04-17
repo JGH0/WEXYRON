@@ -247,7 +247,11 @@ public:
 
     // Get player count for a specific map
     int getPlayerCountOnMap(const std::string& mapName);
-    
+
+    // Set server name for discovery
+    void setServerName(const std::string& name) { serverName = name; }
+    std::string getServerName() const { return serverName; }
+
     // Callbacks
     std::function<void(uint32_t, const PlayerInputPacket&)> onPlayerInput;
     std::function<void(uint32_t)> onPlayerConnect;
@@ -259,6 +263,7 @@ private:
     bool running;
     uint32_t nextClientId;
     std::map<uint32_t, ServerPlayer> players;
+    std::string serverName;
     
     bool createSocket(uint16_t port);
     void processPacket(const void* data, size_t size, const sockaddr_in& from);

@@ -17,6 +17,9 @@
 #include <iostream>
 #include <cstring>
 #include <glm/gtc/matrix_transform.hpp>
+#include <filesystem>
+#include <algorithm>
+#include <cctype>
 
 // ---------------------------------------------------------------------------
 // Constructor
@@ -153,8 +156,11 @@ void Game::init() {
     renderer.init();
     std::cout << "Renderer initialized." << std::endl;
 
-    if (!currentMap)
-        loadMap("simple.map");
+    // Scan maps folder for available maps
+    scanMapsFolder();
+
+    if (!currentMap && !mapFiles.empty())
+        loadMap(mapFiles[0]);
 
     playerVelocity = glm::vec3(0.0f);
     isJumping = false;
@@ -191,6 +197,90 @@ bool Game::loadMap(const std::string& mapFile) {
 
 Map* Game::getCurrentMap() {
     return currentMap;
+}
+
+// ---------------------------------------------------------------------------
+// formatMapDisplayName – Convert filename to display name
+// ---------------------------------------------------------------------------
+std::string Game::formatMapDisplayName(const std::string& filename) {
+    // Remove .map extension
+    std::string name = filename;
+    size_t extPos = name.find(".map");
+    if (extPos != std::string::npos) {
+        name = name.substr(0, extPos);
+    }
+
+    // Replace underscores with spaces
+    std::replace(name.begin(), name.end(), '_', ' ');
+
+    // Capitalize first letter of each word
+    bool capitalizeNext = true;
+    for (char& c : name) {
+        if (capitalizeNext && c >= 'a' && c <= 'z') {
+            c = std::toupper(c);
+            capitalizeNext = false;
+        } else if (c == ' ') {
+            capitalizeNext = true;
+        }
+    }
+
+    return name;
+}
+
+// ---------------------------------------------------------------------------
+// scanMapsFolder – Scan assets/maps folder for .map files
+// ---------------------------------------------------------------------------
+void Game::scanMapsFolder() {
+    mapFiles.clear();
+    mapDisplayNames.clear();
+    mapPlayerCounts.clear();
+
+    std::string mapsPath = "assets/maps";
+
+    try {
+        if (std::filesystem::exists(mapsPath) && std::filesystem::is_directory(mapsPath)) {
+            for (const auto& entry : std::filesystem::directory_iterator(mapsPath)) {
+                if (entry.is_regular_file()) {
+                    std::string filename = entry.path().filename().string();
+                    // Check if it's a .map file
+                    if (filename.size() >= 4 && filename.substr(filename.size() - 4) == ".map") {
+                        mapFiles.push_back(filename);
+                        mapDisplayNames.push_back(formatMapDisplayName(filename));
+                        mapPlayerCounts.push_back(0);
+                    }
+                }
+            }
+        }
+
+        // Sort maps alphabetically by display name
+        std::vector<size_t> indices(mapFiles.size());
+        for (size_t i = 0; i < indices.size(); i++) indices[i] = i;
+        std::sort(indices.begin(), indices.end(), [this](size_t a, size_t b) {
+            return mapDisplayNames[a] < mapDisplayNames[b];
+        });
+
+        // Reorder vectors based on sorted indices
+        std::vector<std::string> sortedFiles = mapFiles;
+        std::vector<std::string> sortedNames = mapDisplayNames;
+        std::vector<int> sortedCounts = mapPlayerCounts;
+
+        for (size_t i = 0; i < indices.size(); i++) {
+            mapFiles[i] = sortedFiles[indices[i]];
+            mapDisplayNames[i] = sortedNames[indices[i]];
+            mapPlayerCounts[i] = sortedCounts[indices[i]];
+        }
+
+        std::cout << "Loaded " << mapFiles.size() << " maps from " << mapsPath << std::endl;
+        for (size_t i = 0; i < mapFiles.size(); i++) {
+            std::cout << "  " << mapDisplayNames[i] << " (" << mapFiles[i] << ")" << std::endl;
+        }
+    } catch (const std::filesystem::filesystem_error& e) {
+        std::cerr << "Error scanning maps folder: " << e.what() << std::endl;
+        // Fallback to hardcoded maps if scanning fails
+        mapFiles = {"simple.map", "large.map", "arena.map", "sniper.map", "complex.map", "team_arena.map"};
+        mapDisplayNames = {"Simple", "Large", "Arena", "Sniper", "Complex", "Team Arena"};
+        mapPlayerCounts = {0, 0, 0, 0, 0, 0};
+    }
 }
 
 

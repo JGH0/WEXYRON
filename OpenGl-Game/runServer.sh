@@ -1,2 +1,2 @@
 #!/bin/bash
-make && ./build/bin/server
+make && ./build/bin/server "$@"

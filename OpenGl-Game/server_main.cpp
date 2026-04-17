@@ -20,23 +20,28 @@ void signalHandler(int sig) {
 
 int main(int argc, char* argv[]) {
     uint16_t port = 7777;
-    
+    std::string serverName = "Cube Game Server";
+
     if (argc > 1) {
         port = static_cast<uint16_t>(std::atoi(argv[1]));
     }
-    
+    if (argc > 2) {
+        serverName = argv[2];
+    }
+
     std::cout << "========================================" << std::endl;
-    std::cout << "  Cube Game Server" << std::endl;
+    std::cout << "  " << serverName << std::endl;
     std::cout << "========================================" << std::endl;
     std::cout << "Port: " << port << std::endl;
     std::cout << "Press Ctrl+C to stop" << std::endl;
     std::cout << "========================================" << std::endl;
-    
+
     signal(SIGINT, signalHandler);
     signal(SIGTERM, signalHandler);
-    
+
     NetworkServer server;
     g_server = &server;
+    server.setServerName(serverName);
     
     // Set up callbacks
     server.onPlayerConnect = [](uint32_t id) {

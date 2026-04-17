@@ -210,7 +210,11 @@ private:
     int gameModeSelection = 0; // 0 = Deathmatch, 1 = Team vs Team
 
     /// Map player counts (received from server)
-    int mapPlayerCounts[6] = {0, 0, 0, 0, 0, 0}; // Player count for each map
+    std::vector<int> mapPlayerCounts; // Player count for each map
+
+    /// Dynamic map list loaded from assets/maps folder
+    std::vector<std::string> mapFiles;    // Actual filenames (e.g., "simple.map")
+    std::vector<std::string> mapDisplayNames; // Display names (e.g., "Simple")
 
     /// Menu state tracking
     bool menuJustEntered = true; // Reset key states when entering menu
@@ -720,6 +724,16 @@ private:
      * @brief Load key bindings from file
      */
     void loadKeyBindings();
+
+    /**
+     * @brief Scan assets/maps folder for .map files and populate map lists
+     */
+    void scanMapsFolder();
+
+    /**
+     * @brief Format a map filename for display (e.g., "simple.map" -> "Simple")
+     */
+    std::string formatMapDisplayName(const std::string& filename);
 };
 
 #endif

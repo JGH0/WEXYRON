@@ -373,7 +373,7 @@ void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_
             resp.header.clientId = 0;
             resp.port = ntohs(serverAddr.sin_port);
             std::memset(resp.name, 0, sizeof(resp.name));
-            std::strncpy(resp.name, "Cube Game Server", sizeof(resp.name) - 1);
+            std::strncpy(resp.name, serverName.c_str(), sizeof(resp.name) - 1);
             sendPacket(&resp, sizeof(resp), from);
             break;
         }

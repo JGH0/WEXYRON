@@ -5,42 +5,41 @@
 
 void Game::update(float deltaTime) {
     if (gameState == PLAYING) {
-        // Update player physics (always run, client controls own movement in multiplayer)
-        updatePlayerPhysics(deltaTime);
-
         // Update network client
         if (networkClient && (networkClient->isConnected() || networkClient->isConnecting())) {
             networkClient->update();
+        }
+        // Update player physics (always run, client controls own movement in multiplayer)
+        updatePlayerPhysics(deltaTime);
 
-            // Send player input to server
-            if (networkClient->isConnected()) {
-                float moveX = 0.0f, moveZ = 0.0f;
-                if (glfwGetKey(window, keyBindings.forward) == GLFW_PRESS) {
-                    moveX += cos(glm::radians(camera.Yaw));
-                    moveZ += sin(glm::radians(camera.Yaw));
-                }
-                if (glfwGetKey(window, keyBindings.backward) == GLFW_PRESS) {
-                    moveX -= cos(glm::radians(camera.Yaw));
-                    moveZ -= sin(glm::radians(camera.Yaw));
-                }
-                if (glfwGetKey(window, keyBindings.left) == GLFW_PRESS) {
-                    moveX += cos(glm::radians(camera.Yaw - 90.0f));
-                    moveZ += sin(glm::radians(camera.Yaw - 90.0f));
-                }
-                if (glfwGetKey(window, keyBindings.right) == GLFW_PRESS) {
-                    moveX += cos(glm::radians(camera.Yaw + 90.0f));
-                    moveZ += sin(glm::radians(camera.Yaw + 90.0f));
-                }
-
-                bool jump  = glfwGetKey(window, keyBindings.jump) == GLFW_PRESS;
-                bool shoot = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
-
-                // Send eye-level position for projectile spawning (playerPos + eye height)
-                glm::vec3 eyePos = playerPos + glm::vec3(0.0f, 1.6f, 0.0f);
-                networkClient->sendPlayerInput(moveX, moveZ, camera.Yaw, camera.Pitch, jump, shoot,
-                                               static_cast<uint8_t>(currentWeapon),
-                                               eyePos.x, eyePos.y, eyePos.z);
+        // Send player input to server
+        if (networkClient && networkClient->isConnected()) {
+            float moveX = 0.0f, moveZ = 0.0f;
+            if (glfwGetKey(window, keyBindings.forward) == GLFW_PRESS) {
+                moveX += cos(glm::radians(camera.Yaw));
+                moveZ += sin(glm::radians(camera.Yaw));
             }
+            if (glfwGetKey(window, keyBindings.backward) == GLFW_PRESS) {
+                moveX -= cos(glm::radians(camera.Yaw));
+                moveZ -= sin(glm::radians(camera.Yaw));
+            }
+            if (glfwGetKey(window, keyBindings.left) == GLFW_PRESS) {
+                moveX += cos(glm::radians(camera.Yaw - 90.0f));
+                moveZ += sin(glm::radians(camera.Yaw - 90.0f));
+            }
+            if (glfwGetKey(window, keyBindings.right) == GLFW_PRESS) {
+                moveX += cos(glm::radians(camera.Yaw + 90.0f));
+                moveZ += sin(glm::radians(camera.Yaw + 90.0f));
+            }
+
+            bool jump  = glfwGetKey(window, keyBindings.jump) == GLFW_PRESS;
+            bool shoot = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+
+            // Send eye-level position for projectile spawning (playerPos + eye height)
+            glm::vec3 eyePos = playerPos + glm::vec3(0.0f, 1.6f, 0.0f);
+            networkClient->sendPlayerInput(moveX, moveZ, camera.Yaw, camera.Pitch, jump, shoot,
+                                           static_cast<uint8_t>(currentWeapon),
+                                           eyePos.x, eyePos.y, eyePos.z);
         }
 
         // Update weapon cooldowns
