@@ -19,7 +19,7 @@ if not exist "%MSYS2_PATH%\msys2.exe" set MSYS2_PATH=C:\msys2
 if exist "%MSYS2_PATH%\msys2.exe" (
     echo Launching MSYS2...
     set CURRENT_DIR=%CD%
-    "%MSYS2_PATH%\msys2.exe" -mingw64 -defterm -here -no-start -ucrt64 -shell bash -lc "cd '%CURRENT_DIR%' && mingw32-make -f Makefile.windows clean && mingw32-make -f Makefile.windows"
+    "%MSYS2_PATH%\msys2.exe" -mingw64 -defterm -here -no-start -ucrt64 -shell bash -lc "cd '%CURRENT_DIR%' && mingw32-make -f Makefile.windows clean && mingw32-make -f Makefile.windows && echo '' && echo === Build Complete! === && echo To run the game: && echo   ./build/bin/game.exe && echo '' && echo To run the server: && echo   ./build/bin/server.exe && echo '' && bash"
     goto :end
 )
 
