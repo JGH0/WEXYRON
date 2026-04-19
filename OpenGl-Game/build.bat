@@ -1,47 +1,46 @@
 @echo off
-REM Windows Build Script for OpenGL Game
-REM Requires MinGW-w64 and MSYS2
+REM Auto-build script for OpenGL Game
 
-echo === Building OpenGL Game for Windows ===
+echo === Building OpenGL Game ===
 echo.
 
-REM Check if MinGW is available
+REM If already in MSYS2, build directly
+if defined MSYSTEM (
+    echo Building in MSYS2...
+    mingw32-make -f Makefile.windows clean
+    mingw32-make -f Makefile.windows
+    goto :end
+)
+
+REM Try to find and launch MSYS2
+set MSYS2_PATH=C:\msys64
+if not exist "%MSYS2_PATH%\msys2.exe" set MSYS2_PATH=C:\msys2
+
+if exist "%MSYS2_PATH%\msys2.exe" (
+    echo Launching MSYS2...
+    set CURRENT_DIR=%CD%
+    "%MSYS2_PATH%\msys2.exe" -mingw64 -defterm -here -no-start -ucrt64 -shell bash -lc "cd '%CURRENT_DIR%' && mingw32-make -f Makefile.windows clean && mingw32-make -f Makefile.windows"
+    goto :end
+)
+
+REM Fallback: try regular Windows build
+echo MSYS2 not found, trying Windows build...
 where mingw32-make >nul 2>nul
 if %errorlevel% neq 0 (
-    echo Error: mingw32-make not found in PATH
-    echo Please install MinGW-w64 and ensure it's in your PATH
-    echo Recommended: Install MSYS2 and MinGW-w64
+    echo ERROR: Install MSYS2 from https://www.msys2.org/
     pause
     exit /b 1
 )
 
-REM Clean previous build
-echo Cleaning previous build...
 mingw32-make -f Makefile.windows clean
-
-REM Build the game
-echo Building game and server...
 mingw32-make -f Makefile.windows
 
+:end
 if %errorlevel% equ 0 (
     echo.
     echo === Build Successful! ===
-    echo Executables created in build/bin/
-    echo   - game.exe
-    echo   - server.exe
-    echo.
-    echo To run the game:
-    echo   build\bin\game.exe
-    echo.
-    echo To run the server:
-    echo   build\bin\server.exe
-    echo.
+    echo Executables in build/bin/
 ) else (
-    echo.
     echo === Build Failed! ===
-    echo Please check error messages above.
-    pause
-    exit /b 1
 )
-
 pause
