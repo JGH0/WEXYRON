@@ -88,7 +88,7 @@ void Game::renderEditor() {
 
     // Render editor UI overlay (single pass)
     auto _b = UIHelpers::getBounds(window);
-    float left=_b.left, right=_b.right, top=_b.top, bottom=_b.bottom;
+    float left=_b.left, top=_b.top;
 
     float textScale  = UIHelpers::uiScale(window, 0.65f, 0.5f, 0.9f);
     float lineHeight = std::max(18.0f, 22.0f * UIHelpers::uiScale(window));

@@ -114,15 +114,6 @@ bool Physics::isOnGround() const {
     glm::vec3 belowPlayer = player.position;
     belowPlayer.y -= 0.2f; // Check slightly below player
     
-    // Check multiple points around player's feet for better detection
-    glm::vec3 checkPoints[5] = {
-        belowPlayer,                                    // Center
-        belowPlayer + glm::vec3(0.15f, 0, 0),       // Forward
-        belowPlayer + glm::vec3(-0.15f, 0, 0),      // Back
-        belowPlayer + glm::vec3(0, 0, 0.15f),       // Right
-        belowPlayer + glm::vec3(0, 0, -0.15f)       // Left
-    };
-    
     // Check if any of these points would collide with a block
     // This is a simplified check - in a full implementation we'd pass map to this function
     // For now, just use ground level detection

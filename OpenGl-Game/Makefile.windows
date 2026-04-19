@@ -1,0 +1,133 @@
+# Windows Makefile for OpenGL Game (MinGW)
+# Usage: mingw32-make -f Makefile.windows
+
+CXX = g++
+CXXFLAGS = -std=c++11 -Wall -I./include -I./include/stb -DGLFW_INCLUDE_NONE
+LDFLAGS = -lglfw3 -lopengl32 -lgdi32 -luser32 -lkernel32 -lshell32 -lws2_32
+
+SRC_DIR = src
+CORE_DIR = src/core
+SYSTEMS_DIR = src/systems
+ENGINE_DIR = src/engine
+GAME_DIR = src/game
+NETWORK_DIR = src/network
+UI_DIR = src/ui
+BUILD_DIR = build/obj
+BIN_DIR = build/bin
+TARGET = $(BIN_DIR)/game.exe
+SERVER_TARGET = $(BIN_DIR)/server.exe
+
+# Source files
+CORE_SOURCES = $(CORE_DIR)/game.cpp $(CORE_DIR)/renderer.cpp $(CORE_DIR)/camera.cpp $(CORE_DIR)/map.cpp $(CORE_DIR)/shader.cpp $(CORE_DIR)/texture.cpp
+SYSTEMS_SOURCES = $(SYSTEMS_DIR)/input.cpp $(SYSTEMS_DIR)/weapon.cpp $(SYSTEMS_DIR)/physics.cpp $(SYSTEMS_DIR)/enemy.cpp $(SYSTEMS_DIR)/projectile.cpp $(SYSTEMS_DIR)/player.cpp $(SYSTEMS_DIR)/game_state.cpp
+NETWORK_SOURCES = $(NETWORK_DIR)/network.cpp
+UI_SOURCES = $(UI_DIR)/menu.cpp $(UI_DIR)/menu_item.cpp $(UI_DIR)/text_renderer.cpp
+ENGINE_SOURCES =
+MAIN_SOURCES = $(SRC_DIR)/main.cpp
+SERVER_SOURCES = server_main.cpp $(NETWORK_SOURCES)
+GLAD_SOURCES = glad.c
+ALL_SOURCES = $(CORE_SOURCES) $(SYSTEMS_SOURCES) $(NETWORK_SOURCES) $(UI_SOURCES) $(ENGINE_SOURCES) $(MAIN_SOURCES) $(GLAD_SOURCES)
+
+# Object files
+CORE_OBJECTS = $(addprefix $(BUILD_DIR)/core/, $(notdir $(CORE_SOURCES:.cpp=.o)))
+SYSTEMS_OBJECTS = $(addprefix $(BUILD_DIR)/systems/, $(notdir $(SYSTEMS_SOURCES:.cpp=.o)))
+NETWORK_OBJECTS = $(addprefix $(BUILD_DIR)/network/, $(notdir $(NETWORK_SOURCES:.cpp=.o)))
+UI_OBJECTS = $(addprefix $(BUILD_DIR)/ui/, $(notdir $(UI_SOURCES:.cpp=.o)))
+ENGINE_OBJECTS = $(addprefix $(BUILD_DIR)/engine/, $(notdir $(ENGINE_SOURCES:.cpp=.o)))
+MAIN_OBJECT = $(BUILD_DIR)/main.o
+SERVER_MAIN_OBJECT = $(BUILD_DIR)/server_main.o
+GLAD_OBJECT = $(BUILD_DIR)/glad.o
+ALL_OBJECTS = $(CORE_OBJECTS) $(SYSTEMS_OBJECTS) $(NETWORK_OBJECTS) $(UI_OBJECTS) $(ENGINE_OBJECTS) $(MAIN_OBJECT) $(GLAD_OBJECT)
+SERVER_OBJECTS = $(SERVER_MAIN_OBJECT) $(NETWORK_OBJECTS)
+
+all: $(TARGET) $(SERVER_TARGET)
+
+client: $(TARGET)
+
+server: $(SERVER_TARGET)
+
+$(TARGET): $(ALL_OBJECTS) | $(BIN_DIR)
+	$(CXX) $^ -o $@ $(LDFLAGS)
+
+$(SERVER_TARGET): $(SERVER_OBJECTS) | $(BIN_DIR)
+	$(CXX) $^ -o $@ $(LDFLAGS)
+
+# Core object files
+$(BUILD_DIR)/core/%.o: $(CORE_DIR)/%.cpp | $(BUILD_DIR)/core
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# Systems object files
+$(BUILD_DIR)/systems/%.o: $(SYSTEMS_DIR)/%.cpp | $(BUILD_DIR)/systems
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# Network object files
+$(BUILD_DIR)/network/%.o: $(NETWORK_DIR)/%.cpp | $(BUILD_DIR)/network
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# UI object files
+$(BUILD_DIR)/ui/%.o: $(UI_DIR)/%.cpp | $(BUILD_DIR)/ui
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# Engine object files
+$(BUILD_DIR)/engine/%.o: $(ENGINE_DIR)/%.cpp | $(BUILD_DIR)/engine
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# Game object files
+$(BUILD_DIR)/game/%.o: $(GAME_DIR)/%.cpp | $(BUILD_DIR)/game
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# Main object file
+$(BUILD_DIR)/main_new.o: $(SRC_DIR)/main_new.cpp | $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# Main object file
+$(BUILD_DIR)/main.o: $(SRC_DIR)/main.cpp | $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# Server main object file
+$(BUILD_DIR)/server_main.o: server_main.cpp | $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# GLAD object file
+$(GLAD_OBJECT): $(GLAD_SOURCES) | $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+# Create directories
+$(BUILD_DIR):
+	if not exist $(BUILD_DIR) mkdir $(BUILD_DIR)
+
+$(BUILD_DIR)/core: $(BUILD_DIR)
+	if not exist $(BUILD_DIR)\core mkdir $(BUILD_DIR)\core
+
+$(BUILD_DIR)/systems: $(BUILD_DIR)
+	if not exist $(BUILD_DIR)\systems mkdir $(BUILD_DIR)\systems
+
+$(BUILD_DIR)/network: $(BUILD_DIR)
+	if not exist $(BUILD_DIR)\network mkdir $(BUILD_DIR)\network
+
+$(BUILD_DIR)/ui: $(BUILD_DIR)
+	if not exist $(BUILD_DIR)\ui mkdir $(BUILD_DIR)\ui
+
+$(BUILD_DIR)/engine: $(BUILD_DIR)
+	if not exist $(BUILD_DIR)\engine mkdir $(BUILD_DIR)\engine
+
+$(BUILD_DIR)/game: $(BUILD_DIR)
+	if not exist $(BUILD_DIR)\game mkdir $(BUILD_DIR)\game
+
+$(BIN_DIR): $(BUILD_DIR)
+	if not exist $(BIN_DIR) mkdir $(BIN_DIR)
+
+clean:
+	if exist $(BUILD_DIR) rmdir /s /q $(BUILD_DIR)
+	if exist $(BIN_DIR) rmdir /s /q $(BIN_DIR)
+
+run: $(TARGET)
+	$(TARGET)
+
+run-server: $(SERVER_TARGET)
+	$(SERVER_TARGET)
+
+debug: CXXFLAGS += -g -DDEBUG
+debug: $(TARGET)
+
+.PHONY: all clean run run-server debug client server

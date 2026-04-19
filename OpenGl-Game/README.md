@@ -25,7 +25,12 @@ A multiplayer-enabled 3D first-person shooter game built with OpenGL and C++.
 
 ## Quick Start
 
-### Build the Game
+### Windows (VS Code + MinGW)
+1. Install MSYS2 and MinGW-w64 (see [WINDOWS_SETUP.md](WINDOWS_SETUP.md))
+2. Build with: `build.bat` or `mingw32-make -f Makefile.windows`
+3. Run with: `run_game.bat`
+
+### Linux/macOS
 ```bash
 cd OpenGl-Game
 make clean && make
@@ -35,14 +40,12 @@ make clean && make
 
 #### Method 1: Automatic LAN Discovery (Recommended)
 1. **Start Server**:
-   ```bash
-   ./build/bin/server
-   ```
+   - **Windows**: `run_server.bat` or `build\bin\server.exe`
+   - **Linux/macOS**: `./build/bin/server`
 
 2. **Start Client**:
-   ```bash
-   ./build/bin/game
-   ```
+   - **Windows**: `run_game.bat` or `build\bin\game.exe`
+   - **Linux/macOS**: `./build/bin/game`
 
 3. **Connect**:
    - In game menu, select "Connect to Server"
@@ -54,9 +57,8 @@ make clean && make
 2. In client, enter IP and port (default: 7777)
 
 ### Single Player
-```bash
-./build/bin/game
-```
+- **Windows**: `run_game.bat` or `build\bin\game.exe`
+- **Linux/macOS**: `./build/bin/game`
 
 ## Controls
 
@@ -94,10 +96,8 @@ sudo ufw disable
 ```
 
 ### Testing Multiplayer
-```bash
-# Use included test script
-./test_multiplayer.sh
-```
+- **Windows**: `test_multiplayer.bat`
+- **Linux/macOS**: `./test_multiplayer.sh`
 
 ## Game Modes
 
@@ -124,10 +124,34 @@ sudo ufw disable
 - OpenGL 3.3+
 - GLFW3
 - GLAD
-- C++11 compiler (g++ recommended)
-- Linux/Windows/macOS
+- C++11 compiler (g++/MinGW recommended)
+- **Windows**: MSYS2 + MinGW-w64
+- **Linux**: g++ build-essential
+- **macOS**: Xcode Command Line Tools
 
 ### Build Commands
+
+#### Windows (MinGW)
+```bash
+# Build everything
+mingw32-make -f Makefile.windows
+
+# Build only client
+mingw32-make -f Makefile.windows client
+
+# Build only server
+mingw32-make -f Makefile.windows server
+
+# Clean build
+mingw32-make -f Makefile.windows clean
+
+# Or use batch scripts:
+build.bat              # Build everything
+run_game.bat          # Build and run game
+run_server.bat        # Build and run server
+```
+
+#### Linux/macOS
 ```bash
 # Build everything
 make
@@ -177,8 +201,18 @@ OpenGl-Game/
 |   `-- main.cpp           # Game entry point
 |-- assets/                # Game assets (textures, maps)
 |-- build/                 # Compiled binaries
+|-- .vscode/               # VS Code configuration
+|   |-- c_cpp_properties_windows.json  # Windows IntelliSense
+|   |-- launch_windows.json            # Windows debug configs
+|   `-- tasks.json                    # Build tasks
+|-- Makefile.windows         # Windows Makefile (MinGW)
+|-- WINDOWS_SETUP.md        # Windows setup guide
+|-- build.bat              # Windows build script
+|-- run_game.bat           # Windows game launcher
+|-- run_server.bat         # Windows server launcher
+|-- test_multiplayer.bat   # Windows multiplayer test
 |-- MULTIPLAYER_GUIDE.md   # Detailed multiplayer setup
-`-- test_multiplayer.sh   # Multiplayer test script
+`-- test_multiplayer.sh   # Linux multiplayer test script
 ```
 
 ## Contributing
@@ -194,4 +228,6 @@ OpenGl-Game/
 
 ## Support
 
-For multiplayer setup issues, see `MULTIPLAYER_GUIDE.md` for detailed instructions.
+- **Windows Setup**: See `WINDOWS_SETUP.md` for detailed Windows installation and troubleshooting
+- **Multiplayer Setup**: See `MULTIPLAYER_GUIDE.md` for detailed multiplayer instructions
+- **VS Code Configuration**: Use the provided `.vscode/` configurations for Windows development

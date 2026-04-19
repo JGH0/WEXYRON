@@ -1,0 +1,83 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build Game (Windows)",
+      "type": "shell",
+      "command": "mingw32-make",
+      "args": [
+        "-f",
+        "Makefile.windows"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": [
+        "$gcc"
+      ],
+      "detail": "Build the game using MinGW on Windows"
+    },
+    {
+      "label": "Build Server (Windows)",
+      "type": "shell",
+      "command": "mingw32-make",
+      "args": [
+        "-f",
+        "Makefile.windows",
+        "server"
+      ],
+      "group": "build",
+      "problemMatcher": [
+        "$gcc"
+      ],
+      "detail": "Build only the server using MinGW on Windows"
+    },
+    {
+      "label": "Clean Build (Windows)",
+      "type": "shell",
+      "command": "mingw32-make",
+      "args": [
+        "-f",
+        "Makefile.windows",
+        "clean"
+      ],
+      "group": "build",
+      "problemMatcher": [
+        "$gcc"
+      ],
+      "detail": "Clean build directory using MinGW on Windows"
+    },
+    {
+      "label": "Run Game (Windows)",
+      "type": "shell",
+      "command": "${workspaceFolder}/build/bin/game.exe",
+      "group": "test",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared",
+        "showReuseMessage": true,
+        "clear": false
+      },
+      "detail": "Run the game executable on Windows"
+    },
+    {
+      "label": "Run Server (Windows)",
+      "type": "shell",
+      "command": "${workspaceFolder}/build/bin/server.exe",
+      "args": ["7777"],
+      "group": "test",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared",
+        "showReuseMessage": true,
+        "clear": false
+      },
+      "detail": "Run the server executable on Windows"
+    }
+  ]
+}

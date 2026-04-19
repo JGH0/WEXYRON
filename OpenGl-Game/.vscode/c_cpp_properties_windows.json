@@ -1,0 +1,27 @@
+{
+  "configurations": [
+    {
+      "name": "win32-gcc-x64",
+      "includePath": [
+        "${workspaceFolder}/**",
+        "C:/msys64/mingw64/include",
+        "C:/msys64/mingw64/include/GL",
+        "C:/msys64/mingw64/include/GLFW"
+      ],
+      "compilerPath": "C:/msys64/mingw64/bin/gcc.exe",
+      "cStandard": "${default}",
+      "cppStandard": "gnu++11",
+      "intelliSenseMode": "windows-gcc-x64",
+      "compilerArgs": [
+        "-std=c++11",
+        "-Wall",
+        "-DGLFW_INCLUDE_NONE"
+      ],
+      "defines": [
+        "_WIN32",
+        "WIN32_LEAN_AND_MEAN"
+      ]
+    }
+  ],
+  "version": 4
+}

@@ -954,9 +954,6 @@ void Game::checkProjectilePlayerCollision() {
         // Check collision with local player
         float distance = glm::length(projectiles[i].position - playerPos);
         if (distance < 0.5f) { // Hit radius of 0.5 units
-            // Check projectile type by velocity
-            bool isPistolBullet = glm::length(projectiles[i].velocity) > 35.0f;
-            
             float damage = 0.0f;
             float velocity = glm::length(projectiles[i].velocity);
             if (velocity > 100.0f) {

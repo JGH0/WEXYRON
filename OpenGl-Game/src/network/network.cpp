@@ -345,14 +345,8 @@ void NetworkServer::update(float deltaTime) {
     }
     
     // Check for timed out players
-    auto now = std::chrono::steady_clock::now();
-    std::vector<uint32_t> toRemove;
-    
-    for (auto& pair : players) {
-        // Check if player hasn't sent anything in 10 seconds
-        // (simplified timeout check)
-        // In production, track last packet time per player
-    }
+    // TODO: Implement player timeout checking
+    // In production, track last packet time per player
 }
 
 void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_in& from) {
