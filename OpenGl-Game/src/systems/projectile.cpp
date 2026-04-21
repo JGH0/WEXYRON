@@ -26,6 +26,9 @@ void ProjectileSystem::updateProjectiles(float deltaTime, Map* map) {
     for (int i = 0; i < MAX_PROJECTILES; i++) {
         if (!projectiles[i].active) continue;
         
+        // Store old position for collision detection
+        glm::vec3 oldPosition = projectiles[i].position;
+        
         // Update position
         projectiles[i].position += projectiles[i].velocity * deltaTime;
         
@@ -34,7 +37,15 @@ void ProjectileSystem::updateProjectiles(float deltaTime, Map* map) {
         
         // Check collision with map blocks
         if (map) {
-            // Simple boundary check for now
+            // Check block collision with small radius (projectile size)
+            if (map->checkCollision(projectiles[i].position, 0.1f)) {
+                projectiles[i].active = false;
+                activeProjectiles--;
+                std::cout << "Projectile hit block! Active: " << activeProjectiles << std::endl;
+                continue;
+            }
+            
+            // Boundary check as fallback
             if (projectiles[i].position.y < -10.0f || projectiles[i].position.y > 20.0f ||
                 abs(projectiles[i].position.x) > 50.0f || abs(projectiles[i].position.z) > 50.0f) {
                 projectiles[i].active = false;

@@ -94,32 +94,31 @@ $(GLAD_OBJECT): $(GLAD_SOURCES) | $(BUILD_DIR)
 
 # Create directories
 $(BUILD_DIR):
-	if not exist $(BUILD_DIR) mkdir $(BUILD_DIR)
+	mkdir -p $(BUILD_DIR)
 
 $(BUILD_DIR)/core: $(BUILD_DIR)
-	if not exist $(BUILD_DIR)\core mkdir $(BUILD_DIR)\core
+	mkdir -p $(BUILD_DIR)/core
 
 $(BUILD_DIR)/systems: $(BUILD_DIR)
-	if not exist $(BUILD_DIR)\systems mkdir $(BUILD_DIR)\systems
+	mkdir -p $(BUILD_DIR)/systems
 
 $(BUILD_DIR)/network: $(BUILD_DIR)
-	if not exist $(BUILD_DIR)\network mkdir $(BUILD_DIR)\network
+	mkdir -p $(BUILD_DIR)/network
 
 $(BUILD_DIR)/ui: $(BUILD_DIR)
-	if not exist $(BUILD_DIR)\ui mkdir $(BUILD_DIR)\ui
+	mkdir -p $(BUILD_DIR)/ui
 
 $(BUILD_DIR)/engine: $(BUILD_DIR)
-	if not exist $(BUILD_DIR)\engine mkdir $(BUILD_DIR)\engine
+	mkdir -p $(BUILD_DIR)/engine
 
 $(BUILD_DIR)/game: $(BUILD_DIR)
-	if not exist $(BUILD_DIR)\game mkdir $(BUILD_DIR)\game
+	mkdir -p $(BUILD_DIR)/game
 
 $(BIN_DIR): $(BUILD_DIR)
-	if not exist $(BIN_DIR) mkdir $(BIN_DIR)
+	mkdir -p $(BIN_DIR)
 
 clean:
-	if exist $(BUILD_DIR) rmdir /s /q $(BUILD_DIR)
-	if exist $(BIN_DIR) rmdir /s /q $(BIN_DIR)
+	rm -rf $(BUILD_DIR) $(BIN_DIR)
 
 run: $(TARGET)
 	$(TARGET)

@@ -6,6 +6,7 @@
 #include <iostream>
 #include <signal.h>
 #include <chrono>
+#include <unistd.h>
 #include "../src/network/network.hpp"
 
 NetworkServer* g_server = nullptr;
