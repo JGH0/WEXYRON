@@ -1,46 +1,62 @@
 @echo off
-REM Auto-build script for OpenGL Game
-
-echo === Building OpenGL Game ===
+echo Building OpenGL Game for Windows...
 echo.
 
-REM If already in MSYS2, build directly
-if defined MSYSTEM (
-    echo Building in MSYS2...
-    mingw32-make -f Makefile.windows clean
-    mingw32-make -f Makefile.windows
-    goto :end
-)
-
-REM Try to find and launch MSYS2
-set MSYS2_PATH=C:\msys64
-if not exist "%MSYS2_PATH%\msys2.exe" set MSYS2_PATH=C:\msys2
-
-if exist "%MSYS2_PATH%\msys2.exe" (
-    echo Launching MSYS2...
-    set CURRENT_DIR=%CD%
-    "%MSYS2_PATH%\msys2.exe" -mingw64 -defterm -here -no-start -ucrt64 -shell bash -lc "cd '%CURRENT_DIR%' && mingw32-make -f Makefile.windows clean && mingw32-make -f Makefile.windows && echo '' && echo === Build Complete! === && echo To run the game: && echo   ./build/bin/game.exe && echo '' && echo To run the server: && echo   ./build/bin/server.exe && echo '' && bash"
-    goto :end
-)
-
-REM Fallback: try regular Windows build
-echo MSYS2 not found, trying Windows build...
-where mingw32-make >nul 2>nul
-if %errorlevel% neq 0 (
-    echo ERROR: Install MSYS2 from https://www.msys2.org/
+REM Check if MSYS2 is installed
+if not exist "C:\msys64\msys2.exe" (
+    echo ERROR: MSYS2 not found at C:\msys64\msys2.exe
+    echo Please install MSYS2 from https://www.msys2.org/
     pause
     exit /b 1
 )
 
-mingw32-make -f Makefile.windows clean
-mingw32-make -f Makefile.windows
+echo Starting build process...
+echo This will take a few minutes on first run.
+echo.
 
-:end
-if %errorlevel% equ 0 (
+REM Direct MSYS2 execution
+"C:\msys64\msys2.exe" -ucrt64 -shell bash -lc "cd '%CD%' && echo 'Installing dependencies...' && pacman -Sy --noconfirm && pacman -S --noconfirm mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-make mingw-w64-ucrt-x86_64-glfw mingw-w64-ucrt-x86_64-glm && echo 'Building project...' && mingw32-make -f Makefile.windows && echo 'Copying DLLs...' && cp /ucrt64/bin/libgcc_s_seh-1.dll build/bin/ && cp /ucrt64/bin/libstdc++-6.dll build/bin/ && cp /ucrt64/bin/libwinpthread-1.dll build/bin/ && cp /ucrt64/bin/glfw3.dll build/bin/ && echo 'BUILD COMPLETED SUCCESSFULLY!'"
+
+echo.
+echo Checking build results...
+
+if exist "build\bin\game.exe" (
     echo.
-    echo === Build Successful! ===
-    echo Executables in build/bin/
+    echo ========================================
+    echo BUILD SUCCESSFUL!
+    echo ========================================
+    echo.
+    echo Your OpenGL Game is ready!
+    echo Executable: build\bin\game.exe
+    
+    if exist "build\bin\libgcc_s_seh-1.dll" (
+        echo All required DLLs are included.
+        echo Ready to run on any Windows PC!
+    ) else (
+        echo WARNING: Some DLLs may be missing.
+    )
+    
+    echo.
+    echo To run the game:
+    echo   - run_game.bat
+    echo   - Or: build\bin\game.exe
 ) else (
-    echo === Build Failed! ===
+    echo.
+    echo ========================================
+    echo BUILD FAILED
+    echo ========================================
+    echo.
+    echo Possible issues:
+    echo - MSYS2 installation problems
+    echo - Network issues during package download
+    echo - Compilation errors
+    echo.
+    echo Try running these commands manually in MSYS2:
+    echo   cd "%CD%"
+    echo   pacman -Sy --noconfirm
+    echo   pacman -S --noconfirm mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-make mingw-w64-ucrt-x86_64-glfw mingw-w64-ucrt-x86_64-glm
+    echo   mingw32-make -f Makefile.windows
 )
+
+echo.
 pause
