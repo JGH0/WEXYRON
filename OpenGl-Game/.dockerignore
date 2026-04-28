@@ -1,0 +1,54 @@
+# Build directories
+build/
+bin/
+lib/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Documentation
+*.md
+!README.md
+
+# Test files
+test_*.cpp
+test_*.sh
+
+# Logs
+*.log
+server_logs/
+
+# Environment files
+.env
+.env.local
+
+# Docker files (don't copy into container)
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Windows files
+*.bat
+*.ps1
+*.exe
+*.dll
+
+# Temporary files
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile

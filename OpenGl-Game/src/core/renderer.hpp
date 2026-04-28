@@ -88,6 +88,14 @@ public:
      * @param map Pointer to the map to render
      */
     void renderMap(Map* map);
+
+    /**
+     * @brief Render spawn points (for editor mode)
+     * 
+     * @param map Pointer to the map containing spawn points
+     * @param showSpawnPoints Whether to render spawn points
+     */
+    void renderSpawnPoints(Map* map, bool showSpawnPoints);
     
     /**
      * @brief Create a quad model matrix for 2D rendering

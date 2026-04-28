@@ -15,6 +15,7 @@ endif()
 # Find packages
 find_package(OpenGL REQUIRED)
 find_package(glfw3 REQUIRED)
+find_package(glm REQUIRED)
 
 # Include directories
 include_directories(
@@ -105,6 +106,7 @@ target_include_directories(server PRIVATE
 )
 
 target_link_libraries(server
+    glm::glm
     ${PLATFORM_LIBS}
 )
 

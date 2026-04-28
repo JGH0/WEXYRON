@@ -223,20 +223,47 @@ void Renderer::drawTexturedCube(const glm::mat4& model, Texture* texture) {
 
 void Renderer::renderMap(Map* map) {
     if (!map) return;
-    
+
     const auto& blocks = map->getBlocks();
-    
+
     for (const auto& block : blocks) {
         glm::mat4 model = glm::mat4(1.0f);
         model = glm::translate(model, block.position);
         model = glm::scale(model, block.scale);
-        
+
         Texture* texture = map->getTexture(block.textureId);
         if (texture) {
             drawTexturedCube(model, texture);
         } else {
             // Use the block's defined color
             drawCube(model, block.color);
+        }
+    }
+}
+
+void Renderer::renderSpawnPoints(Map* map, bool showSpawnPoints) {
+    if (!map || !showSpawnPoints) return;
+
+    // Render deathmatch spawn points as yellow cubes
+    const auto& spawns = map->getSpawnPoints();
+    for (const auto& spawn : spawns) {
+        glm::mat4 model = glm::mat4(1.0f);
+        model = glm::translate(model, spawn.position);
+        model = glm::scale(model, glm::vec3(0.5f, 0.5f, 0.5f));
+        drawCube(model, glm::vec3(1.0f, 1.0f, 0.0f)); // Yellow
+    }
+
+    // Render team spawn points
+    const auto& teamSpawns = map->getTeamSpawns();
+    for (const auto& spawn : teamSpawns) {
+        glm::mat4 model = glm::mat4(1.0f);
+        model = glm::translate(model, spawn.position);
+        model = glm::scale(model, glm::vec3(0.5f, 0.5f, 0.5f));
+
+        if (spawn.teamId == 0) {
+            drawCube(model, glm::vec3(1.0f, 0.0f, 0.0f)); // Red for Team A
+        } else {
+            drawCube(model, glm::vec3(0.0f, 0.0f, 1.0f)); // Blue for Team B
         }
     }
 }

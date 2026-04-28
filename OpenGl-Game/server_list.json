@@ -1,0 +1,28 @@
+{
+  "servers": [
+    {
+      "name": "Official Cube Game Server",
+      "address": "cube-game.example.com",
+      "port": 7777,
+      "region": "US-East",
+      "description": "Official game server"
+    },
+    {
+      "name": "Community Server EU",
+      "address": "eu-cube.example.com",
+      "port": 7777,
+      "region": "EU-West",
+      "description": "Community hosted server in Europe"
+    },
+    {
+      "name": "Asia Pacific Server",
+      "address": "ap-cube.example.com",
+      "port": 7777,
+      "region": "AP-Southeast",
+      "description": "Server for Asia Pacific players"
+    }
+  ],
+  "autoConnectOnFail": true,
+  "attemptLocalConnection": true,
+  "connectionTimeout": 5000
+}

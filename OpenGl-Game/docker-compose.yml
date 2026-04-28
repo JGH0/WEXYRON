@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  cube-game-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cube-game-server
+    ports:
+      - "${SERVER_PORT:-7777}:7777/udp"
+    environment:
+      - SERVER_NAME=${SERVER_NAME:-Cube Game Server}
+      - SERVER_PORT=${SERVER_PORT:-7777}
+      - MAX_PLAYERS=${MAX_PLAYERS:-16}
+      - SERVER_REGION=${SERVER_REGION:-US-East}
+      - SERVER_DESCRIPTION=${SERVER_DESCRIPTION:-Custom game server}
+      - DEFAULT_MAP=${DEFAULT_MAP:-simple.map}
+      - ALLOW_MAP_CHANGE=${ALLOW_MAP_CHANGE:-true}
+      - FRIENDLY_FIRE=${FRIENDLY_FIRE:-false}
+      - RESPAWN_TIME=${RESPAWN_TIME:-5.0}
+      - TICK_RATE=${TICK_RATE:-60}
+      - TIMEOUT=${TIMEOUT:-30.0}
+      - MAX_PING=${MAX_PING:-500}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    volumes:
+      - ./server_config.json:/app/server_config.json:ro
+      - ./assets:/app/assets:ro
+      - ./server_logs:/app/logs
+    restart: unless-stopped
+    networks:
+      - cube-game-net
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 7777 || timeout 5 bash -c 'cat < /dev/null > /dev/udp/127.0.0.1/7777' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+networks:
+  cube-game-net:
+    driver: bridge

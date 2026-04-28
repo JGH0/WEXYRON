@@ -1,0 +1,26 @@
+{
+  "server": {
+    "name": "Cube Game Server",
+    "port": 7777,
+    "maxPlayers": 16,
+    "region": "US-East",
+    "description": "Custom game server"
+  },
+  "gameplay": {
+    "defaultMap": "simple.map",
+    "allowMapChange": true,
+    "friendlyFire": false,
+    "respawnTime": 5.0
+  },
+  "network": {
+    "tickRate": 60,
+    "timeout": 30.0,
+    "maxPing": 500
+  },
+  "logging": {
+    "enableConsole": true,
+    "enableFile": false,
+    "logFile": "server.log",
+    "logLevel": "info"
+  }
+}

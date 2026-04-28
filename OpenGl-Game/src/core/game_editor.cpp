@@ -22,6 +22,8 @@ void Game::renderEditor() {
     // Render the map
     if (currentMap) {
         renderer.renderMap(currentMap);
+        // Render spawn points (only visible in editor mode)
+        renderer.renderSpawnPoints(currentMap, true);
     }
 
     // Render grid lines on ground - grid size now matches block size

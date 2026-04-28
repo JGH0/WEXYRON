@@ -244,7 +244,7 @@ bool NetworkClient::receivePacket(void* buffer, size_t maxSize, size_t& received
 
 // ========== NETWORK SERVER ==========
 
-NetworkServer::NetworkServer() : socketFd(SOCKET_INVALID), running(false), nextClientId(1) {
+NetworkServer::NetworkServer() : socketFd(SOCKET_INVALID), running(false), nextClientId(1), maxPlayers(16) {
 #ifdef _WIN32
     static bool wsaInitialized = false;
     if (!wsaInitialized) {
@@ -373,6 +373,21 @@ void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_
         }
 
         case PACKET_CONNECT: {
+            // Check if server is full
+            if (players.size() >= static_cast<size_t>(maxPlayers)) {
+                std::cout << "Connection rejected: Server is full (" << players.size() << "/" << maxPlayers << ")" << std::endl;
+                // Send a rejection packet (reuse CONNECT_ACK with clientId = 0 to indicate rejection)
+                PacketHeader reject;
+                reject.magic = PACKET_MAGIC;
+                reject.type = PACKET_CONNECT_ACK;
+                reject.sequence = 0;
+                reject.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count();
+                reject.clientId = 0; // 0 indicates rejection
+                sendPacket(&reject, sizeof(reject), from);
+                break;
+            }
+
             // New player connecting
             uint32_t newId = nextClientId++;
             ServerPlayer& player = players[newId];

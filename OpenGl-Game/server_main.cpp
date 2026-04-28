@@ -7,9 +7,39 @@
 #include <signal.h>
 #include <chrono>
 #include <unistd.h>
+#include <fstream>
+#include <sstream>
+#include <algorithm>
 #include "../src/network/network.hpp"
 
 NetworkServer* g_server = nullptr;
+
+// Helper function to get environment variable with default
+std::string getEnv(const std::string& key, const std::string& defaultValue = "") {
+    const char* value = std::getenv(key.c_str());
+    return value ? value : defaultValue;
+}
+
+// Helper function to get environment variable as int
+int getEnvInt(const std::string& key, int defaultValue) {
+    const char* value = std::getenv(key.c_str());
+    return value ? std::atoi(value) : defaultValue;
+}
+
+// Helper function to get environment variable as float
+float getEnvFloat(const std::string& key, float defaultValue) {
+    const char* value = std::getenv(key.c_str());
+    return value ? std::atof(value) : defaultValue;
+}
+
+// Helper function to get environment variable as bool
+bool getEnvBool(const std::string& key, bool defaultValue) {
+    const char* value = std::getenv(key.c_str());
+    if (!value) return defaultValue;
+    std::string val(value);
+    std::transform(val.begin(), val.end(), val.begin(), ::tolower);
+    return val == "true" || val == "1" || val == "yes";
+}
 
 void signalHandler(int sig) {
     std::cout << "\nShutting down server..." << std::endl;
@@ -20,9 +50,15 @@ void signalHandler(int sig) {
 }
 
 int main(int argc, char* argv[]) {
-    uint16_t port = 7777;
-    std::string serverName = "Cube Game Server";
+    // Read configuration from environment variables (for Docker)
+    // Command line args take precedence over environment variables
+    uint16_t port = static_cast<uint16_t>(getEnvInt("SERVER_PORT", 7777));
+    std::string serverName = getEnv("SERVER_NAME", "Cube Game Server");
+    int maxPlayers = getEnvInt("MAX_PLAYERS", 16);
+    std::string region = getEnv("SERVER_REGION", "US-East");
+    std::string description = getEnv("SERVER_DESCRIPTION", "Custom game server");
 
+    // Override with command line arguments if provided
     if (argc > 1) {
         port = static_cast<uint16_t>(std::atoi(argv[1]));
     }
@@ -34,6 +70,9 @@ int main(int argc, char* argv[]) {
     std::cout << "  " << serverName << std::endl;
     std::cout << "========================================" << std::endl;
     std::cout << "Port: " << port << std::endl;
+    std::cout << "Max Players: " << maxPlayers << std::endl;
+    std::cout << "Region: " << region << std::endl;
+    std::cout << "Description: " << description << std::endl;
     std::cout << "Press Ctrl+C to stop" << std::endl;
     std::cout << "========================================" << std::endl;
 
@@ -43,14 +82,15 @@ int main(int argc, char* argv[]) {
     NetworkServer server;
     g_server = &server;
     server.setServerName(serverName);
+    server.setMaxPlayers(maxPlayers);
     
     // Set up callbacks
-    server.onPlayerConnect = [](uint32_t id) {
-        std::cout << "[Server] Player " << id << " connected" << std::endl;
+    server.onPlayerConnect = [&server](uint32_t id) {
+        std::cout << "[Server] Player " << id << " connected (" << server.getCurrentPlayerCount() << "/" << server.getMaxPlayers() << ")" << std::endl;
     };
-    
-    server.onPlayerDisconnect = [](uint32_t id) {
-        std::cout << "[Server] Player " << id << " disconnected" << std::endl;
+
+    server.onPlayerDisconnect = [&server](uint32_t id) {
+        std::cout << "[Server] Player " << id << " disconnected (" << server.getCurrentPlayerCount() << "/" << server.getMaxPlayers() << ")" << std::endl;
     };
     
     server.onPlayerInput = [&server](uint32_t id, const PlayerInputPacket& input) {
