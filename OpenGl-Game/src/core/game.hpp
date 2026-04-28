@@ -630,6 +630,7 @@ private:
      * @brief Render damage screen effect when player takes damage
      */
     void renderDamageEffect();
+    void renderHealthEffect();
     
     /**
      * @brief Render death screen when player dies

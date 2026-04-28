@@ -73,19 +73,22 @@ void Game::update(float deltaTime) {
         // Update flashbang effect
         updateFlashbangEffect(deltaTime);
 
-        // Update explosions
-        updateExplosions(deltaTime);
-
         // Update damage effect
         if (damageEffectTime > 0.0f) {
             damageEffectTime -= deltaTime;
         }
 
-        // PVP collision checks (only in multiplayer)
-        if (isConnectedToServer()) {
-            checkProjectilePlayerCollision();
-            checkPlayerPlayerCollision();
-        }
+    } else if (gameState == DEAD) {
+        // No updates needed in dead state
+    }
+
+    // Update explosions (always run)
+    updateExplosions(deltaTime);
+
+    // PVP collision checks (only in multiplayer)
+    if (isConnectedToServer()) {
+        checkProjectilePlayerCollision();
+        checkPlayerPlayerCollision();
     }
 }
 
@@ -177,6 +180,9 @@ void Game::render() {
 
         // Render damage effect
         renderDamageEffect();
+
+        // Render health-based red screen effect
+        renderHealthEffect();
 
         // Render flashbang effect
         renderFlashbangEffect();
