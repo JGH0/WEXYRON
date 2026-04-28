@@ -11,6 +11,8 @@
 #include <sstream>
 #include <algorithm>
 #include <cstdlib>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
 
 Map::Map(const std::string& mapFile) 
     : dimensions(20.0f, 5.0f, 20.0f), mapName("Default") {
@@ -65,15 +67,25 @@ bool Map::parseMapData(const std::string& data) {
             int textureId, blockType;
             bool solid;
             float r, g, b;
+            float rotation = 0.0f;
+            float pitch = 0.0f;
 
             // Try to parse with color (new format)
             lineStream >> x >> y >> z >> sx >> sy >> sz >> textureId >> blockType >> solid;
 
             // Check if color values are present
             if (lineStream >> r >> g >> b) {
-                // New format with color
-                addBlock(MapBlock(glm::vec3(x, y, z), glm::vec3(sx, sy, sz),
-                                 textureId, blockType, solid, glm::vec3(r, g, b)));
+                // Check if rotation and pitch are present (newest format)
+                if (lineStream >> rotation >> pitch) {
+                    // New format with color, rotation, and pitch
+                    addBlock(MapBlock(glm::vec3(x, y, z), glm::vec3(sx, sy, sz),
+                                     textureId, blockType, solid, glm::vec3(r, g, b),
+                                     rotation, pitch));
+                } else {
+                    // New format with color only
+                    addBlock(MapBlock(glm::vec3(x, y, z), glm::vec3(sx, sy, sz),
+                                     textureId, blockType, solid, glm::vec3(r, g, b)));
+                }
             } else {
                 // Old format - assign default colors based on blockType
                 glm::vec3 defaultColors[] = {
@@ -168,6 +180,30 @@ bool Map::deleteBlockAt(const glm::vec3& position, float tolerance) {
     return false;
 }
 
+bool Map::deleteBlockExact(const glm::vec3& position, const glm::vec3& scale, float rotation, float pitch, float tolerance) {
+    for (int i = 0; i < (int)blocks.size(); ++i) {
+        // Check position match (with tolerance)
+        glm::vec3 posDiff = glm::abs(blocks[i].position - position);
+        if (posDiff.x <= tolerance && posDiff.y <= tolerance && posDiff.z <= tolerance) {
+            // Check scale match (with tolerance)
+            glm::vec3 scaleDiff = glm::abs(blocks[i].scale - scale);
+            if (scaleDiff.x <= tolerance && scaleDiff.y <= tolerance && scaleDiff.z <= tolerance) {
+                // Check rotation match (with tolerance)
+                float rotDiff = std::abs(blocks[i].rotation - rotation);
+                float pitchDiff = std::abs(blocks[i].pitch - pitch);
+                // Normalize rotation difference (handle 0/360 wraparound)
+                if (rotDiff > 180.0f) rotDiff = 360.0f - rotDiff;
+
+                if (rotDiff <= 5.0f && pitchDiff <= 5.0f) {
+                    blocks.erase(blocks.begin() + i);
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 bool Map::replaceTextureAt(const glm::vec3& position, int newTextureId) {
     int idx = findBlockAt(position, 0.15f);
     if (idx >= 0) {
@@ -191,13 +227,20 @@ Texture* Map::getTexture(int textureId) {
 bool Map::checkCollision(const glm::vec3& position, float radius) const {
     for (const auto& block : blocks) {
         if (!block.solid) continue;
-        
-        // Simple AABB collision detection
+
+        // Transform player position into block's local space to account for rotation
+        glm::mat4 invRotation = glm::mat4(1.0f);
+        invRotation = glm::rotate(invRotation, glm::radians(-block.pitch), glm::vec3(1.0f, 0.0f, 0.0f));
+        invRotation = glm::rotate(invRotation, glm::radians(-block.rotation), glm::vec3(0.0f, 1.0f, 0.0f));
+
+        glm::vec3 localPos = glm::vec3(invRotation * glm::vec4(position - block.position, 1.0f)) + block.position;
+
+        // AABB collision detection in local space
         glm::vec3 blockMin = block.position - block.scale * 0.5f;
         glm::vec3 blockMax = block.position + block.scale * 0.5f;
-        glm::vec3 posMin = position - glm::vec3(radius);
-        glm::vec3 posMax = position + glm::vec3(radius);
-        
+        glm::vec3 posMin = localPos - glm::vec3(radius);
+        glm::vec3 posMax = localPos + glm::vec3(radius);
+
         if (posMin.x < blockMax.x && posMax.x > blockMin.x &&
             posMin.y < blockMax.y && posMax.y > blockMin.y &&
             posMin.z < blockMax.z && posMax.z > blockMin.z) {
@@ -205,6 +248,59 @@ bool Map::checkCollision(const glm::vec3& position, float radius) const {
         }
     }
     return false;
+}
+
+bool Map::getGroundAt(const glm::vec3& position, float radius, float& groundHeight, glm::vec3& groundNormal) const {
+    groundHeight = -1000.0f;
+    groundNormal = glm::vec3(0.0f, 1.0f, 0.0f);
+    bool foundGround = false;
+
+    for (const auto& block : blocks) {
+        if (!block.solid) continue;
+
+        // Transform player position into block's local space
+        glm::mat4 invRotation = glm::mat4(1.0f);
+        invRotation = glm::rotate(invRotation, glm::radians(-block.pitch), glm::vec3(1.0f, 0.0f, 0.0f));
+        invRotation = glm::rotate(invRotation, glm::radians(-block.rotation), glm::vec3(0.0f, 1.0f, 0.0f));
+
+        glm::vec3 localPos = glm::vec3(invRotation * glm::vec4(position - block.position, 1.0f)) + block.position;
+
+        // Block bounds in local space
+        glm::vec3 blockMin = block.position - block.scale * 0.5f;
+        glm::vec3 blockMax = block.position + block.scale * 0.5f;
+
+        // Check if player is horizontally within the block (with radius)
+        if (localPos.x + radius > blockMin.x && localPos.x - radius < blockMax.x &&
+            localPos.z + radius > blockMin.z && localPos.z - radius < blockMax.z) {
+
+            // Check if player is above the block
+            if (localPos.y > blockMin.y) {
+                // Calculate ground height in local space (top of block)
+                float localGroundHeight = blockMax.y;
+
+                // Transform ground height back to world space
+                glm::mat4 rotation = glm::mat4(1.0f);
+                rotation = glm::rotate(rotation, glm::radians(block.pitch), glm::vec3(1.0f, 0.0f, 0.0f));
+                rotation = glm::rotate(rotation, glm::radians(block.rotation), glm::vec3(0.0f, 1.0f, 0.0f));
+
+                glm::vec3 localGroundPos = glm::vec3(localPos.x, localGroundHeight, localPos.z);
+                glm::vec3 worldGroundPos = glm::vec3(rotation * glm::vec4(localGroundPos - block.position, 1.0f)) + block.position;
+
+                // Transform the local up normal to world space
+                glm::vec3 localNormal = glm::vec3(0.0f, 1.0f, 0.0f);
+                glm::vec3 worldNormal = glm::vec3(rotation * glm::vec4(localNormal, 0.0f));
+
+                // Keep the highest ground
+                if (worldGroundPos.y > groundHeight) {
+                    groundHeight = worldGroundPos.y;
+                    groundNormal = glm::normalize(worldNormal);
+                    foundGround = true;
+                }
+            }
+        }
+    }
+
+    return foundGround;
 }
 
 glm::vec3 Map::getDimensions() const {
@@ -233,8 +329,20 @@ void Map::addSpawnPoint(const SpawnPoint& spawn) {
     spawnPoints.push_back(spawn);
 }
 
+void Map::removeSpawnPoint(size_t index) {
+    if (index < spawnPoints.size()) {
+        spawnPoints.erase(spawnPoints.begin() + index);
+    }
+}
+
 void Map::addTeamSpawn(const TeamSpawn& spawn) {
     teamSpawns.push_back(spawn);
+}
+
+void Map::removeTeamSpawn(size_t index) {
+    if (index < teamSpawns.size()) {
+        teamSpawns.erase(teamSpawns.begin() + index);
+    }
 }
 
 const std::vector<SpawnPoint>& Map::getSpawnPoints() const {

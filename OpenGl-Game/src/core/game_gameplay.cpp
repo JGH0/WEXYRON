@@ -1,9 +1,11 @@
 #include "game.hpp"
-#include "network/network.hpp"
-#include <iostream>
-#include <cstring>
-#include <algorithm>
+#include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <algorithm>
+#include <cstdlib>
+#include <iostream>
+#include <cmath>
+#include <limits>
 
 void Game::updatePlayerPhysics(float deltaTime) {
     // AUTOMATIC UNSTUCK: Check if player is inside a block and move them out
@@ -47,37 +49,56 @@ void Game::updatePlayerPhysics(float deltaTime) {
     if (currentMap) {
         collision = currentMap->checkCollision(newPos, 0.2f); // Smaller collision radius for accurate hit detection
     }
-    
+
     if (collision) {
         // Try X axis movement only
         glm::vec3 testPosX = originalPos;
         testPosX.x = newPos.x;
         bool xCollision = currentMap->checkCollision(testPosX, 0.2f);
-        
-        // Try Z axis movement only  
+
+        // Try Z axis movement only
         glm::vec3 testPosZ = originalPos;
         testPosZ.z = newPos.z;
         bool zCollision = currentMap->checkCollision(testPosZ, 0.2f);
-        
+
         // Apply horizontal movement first (walls should stop horizontal movement)
         if (!xCollision) {
             playerPos.x = newPos.x;
         } else {
             playerVelocity.x = 0.0f;
         }
-        
+
         if (!zCollision) {
             playerPos.z = newPos.z;
         } else {
             playerVelocity.z = 0.0f;
         }
-        
+
+        // Get ground information at the new horizontal position for slope handling
+        float groundHeight;
+        glm::vec3 groundNormal;
+        bool foundGround = currentMap->getGroundAt(playerPos, 0.2f, groundHeight, groundNormal);
+
+        // If on a slope, adjust Y position to follow the slope when walking
+        if (foundGround && (playerVelocity.x != 0.0f || playerVelocity.z != 0.0f)) {
+            float slopeStrength = 1.0f - groundNormal.y;
+            if (slopeStrength > 0.0f) {
+                // Calculate target Y based on ground height at current position
+                float targetY = groundHeight + 1.6f;
+                if (targetY > playerPos.y && targetY - playerPos.y < 0.5f) {
+                    // Allow walking up the slope
+                    playerPos.y = targetY;
+                    playerVelocity.y = 0.0f;
+                }
+            }
+        }
+
         // Now check Y axis movement only if horizontal movement was successful
         // This prevents getting pushed up when hitting walls
         glm::vec3 testPosY = playerPos; // Use updated position after horizontal movement
         testPosY.y = newPos.y;
         bool yCollision = currentMap->checkCollision(testPosY, 0.2f);
-        
+
         if (!yCollision) {
             playerPos.y = newPos.y;
         } else {
@@ -85,6 +106,13 @@ void Game::updatePlayerPhysics(float deltaTime) {
             if (playerVelocity.y < 0.0f) {
                 playerVelocity.y = 0.0f;
                 isJumping = false;
+
+                // If on a slope, add some velocity to slide down
+                if (foundGround && groundNormal.y < 0.95f) {
+                    float slopeStrength = 1.0f - groundNormal.y;
+                    playerVelocity.x -= groundNormal.x * slopeStrength * 5.0f;
+                    playerVelocity.z -= groundNormal.z * slopeStrength * 5.0f;
+                }
             } else if (playerVelocity.y > 0.0f) {
                 // Hitting ceiling
                 playerVelocity.y = 0.0f;
@@ -98,47 +126,30 @@ void Game::updatePlayerPhysics(float deltaTime) {
     // Ground detection - check if we're standing on a solid block
     bool onGround = false;
     if (currentMap) {
-        // Check if standing on a block - cast down from feet
-        glm::vec3 footPos = playerPos;
-        footPos.y -= 0.05f; // Just below feet
-        
-        // Check multiple points around the player's feet for better detection
-        glm::vec3 checkPoints[5] = {
-            footPos,                                    // Center
-            footPos + glm::vec3(0.2f, 0, 0),           // Forward
-            footPos + glm::vec3(-0.2f, 0, 0),          // Back
-            footPos + glm::vec3(0, 0, 0.2f),           // Right
-            footPos + glm::vec3(0, 0, -0.2f)           // Left
-        };
-        
-        int groundPoints = 0;
-        bool centerOnGround = false;
-        float groundHeight = 0.0f;
-        
-        for (int i = 0; i < 5; i++) {
-            if (currentMap->checkCollision(checkPoints[i], 0.15f)) {
-                groundPoints++;
-                if (i == 0) {
-                    centerOnGround = true;
-                    groundHeight = checkPoints[i].y;
+        // Check if standing on a block - use the new getGroundAt function for rotated blocks
+        float groundHeight;
+        glm::vec3 groundNormal;
+        bool foundGround = currentMap->getGroundAt(playerPos, 0.2f, groundHeight, groundNormal);
+
+        if (foundGround) {
+            // Check if player is close enough to the ground
+            float heightAboveGround = playerPos.y - groundHeight;
+            if (heightAboveGround < 1.7f && heightAboveGround > 0.0f) {
+                onGround = true;
+
+                // Snap to ground height if falling
+                if (playerVelocity.y <= 0.0f) {
+                    playerPos.y = groundHeight + 1.6f; // Eye level when on ground
+                    playerVelocity.y = 0.0f;
+                    isJumping = false;
+
+                    // Adjust velocity based on ground normal (for walking on slopes)
+                    float slopeFactor = 1.0f - groundNormal.y;
+                    if (slopeFactor > 0.0f) {
+                        // Add a small upward force based on slope
+                        playerVelocity.y += slopeFactor * 2.0f;
+                    }
                 }
-            }
-        }
-        
-        // Only consider on ground if center point is on ground (prevents edge bouncing)
-        // or if majority of points are on ground
-        if (centerOnGround || groundPoints >= 3) {
-            onGround = true;
-            
-            // Only snap Y position when center is on ground (prevents edge bouncing)
-            if (centerOnGround && playerVelocity.y <= 0.0f) {
-                playerPos.y = groundHeight + 1.6f; // Eye level when on ground
-            }
-            
-            // Stop falling if we're moving downward
-            if (playerVelocity.y <= 0.0f) {
-                playerVelocity.y = 0.0f;
-                isJumping = false;
             }
         }
     }
@@ -157,36 +168,22 @@ void Game::updatePlayerPhysics(float deltaTime) {
 }
 
 void Game::handleJump() {
-    // Collision-based ground detection - check if there's a block under player's feet
+    // Use the new getGroundAt function for rotated blocks
     bool onGround = false;
-    
+
     if (currentMap) {
-        // Check if standing on a block - cast a small ray down from feet
-        // Use a small box below player's feet for better detection
-        glm::vec3 footPos = playerPos;
-        footPos.y -= 0.3f; // Further below feet for better detection
-        
-        // Check multiple points around the player's feet
-        glm::vec3 checkPoints[9] = {
-            footPos,                                    // Center
-            footPos + glm::vec3(0.2f, 0, 0),           // Forward
-            footPos + glm::vec3(-0.2f, 0, 0),          // Back
-            footPos + glm::vec3(0, 0, 0.2f),           // Right
-            footPos + glm::vec3(0, 0, -0.2f),          // Left
-            footPos + glm::vec3(0.15f, 0, 0.15f),     // Forward-Right
-            footPos + glm::vec3(-0.15f, 0, 0.15f),    // Forward-Left
-            footPos + glm::vec3(0.15f, 0, -0.15f),    // Back-Right
-            footPos + glm::vec3(-0.15f, 0, -0.15f)    // Back-Left
-        };
-        
-        for (int i = 0; i < 9; i++) {
-            if (currentMap->checkCollision(checkPoints[i], 0.15f)) {
+        float groundHeight;
+        glm::vec3 groundNormal;
+        bool foundGround = currentMap->getGroundAt(playerPos, 0.2f, groundHeight, groundNormal);
+
+        if (foundGround) {
+            float heightAboveGround = playerPos.y - groundHeight;
+            if (heightAboveGround < 1.7f && heightAboveGround > 0.0f) {
                 onGround = true;
-                break;
             }
         }
     }
-    
+
     if (onGround && !isJumping && jumpCooldown <= 0.0f) {
         playerVelocity.y = 4.0f; // Jump velocity
         isJumping = true;
@@ -195,7 +192,7 @@ void Game::handleJump() {
     }
 }
 
-bool Game::createProjectile(const glm::vec3& position, const glm::vec3& velocity, float lifetime, uint32_t owner) {
+bool Game::createProjectile(const glm::vec3& position, const glm::vec3& velocity, float lifetime, uint32_t owner, int type) {
     // Find an inactive projectile slot
     for (int i = 0; i < MAX_PROJECTILES; i++) {
         if (!projectiles[i].active) {
@@ -203,7 +200,9 @@ bool Game::createProjectile(const glm::vec3& position, const glm::vec3& velocity
             projectiles[i].velocity = velocity;
             projectiles[i].lifetime = lifetime;
             projectiles[i].active = true;
+            projectiles[i].detonated = false;
             projectiles[i].owner = owner;
+            projectiles[i].type = type;
             activeProjectiles++;
             return true;
         }
@@ -258,7 +257,7 @@ void Game::shootPistol() {
         return;
     }
     
-    createProjectile(camera.Position, camera.Front * 120.0f, 3.0f, 0); // owner=0 for local player
+    createProjectile(camera.Position, camera.Front * 120.0f, 3.0f, 0, 0); // owner=0, type=0 (pistol) for local player
     if (!infiniteAmmoMode) {
         pistolAmmo--;
     }
@@ -288,7 +287,7 @@ void Game::shootShotgun() {
                 (rand() % 100 - 50) * 0.002f, // -0.1 to 0.1 (reduced from 0.5)
                 0.0f
             );
-            createProjectile(camera.Position, (camera.Front + spread) * 50.0f, 1.0f, 0); // owner=0 for local player
+            createProjectile(camera.Position, (camera.Front + spread) * 50.0f, 1.0f, 0, 3); // owner=0, type=3 (shotgun) for local player
             pelletsShot++;
         }
     }
@@ -311,7 +310,7 @@ void Game::throwGrenade() {
         return;
     }
     
-    createProjectile(camera.Position, camera.Front * 30.0f, 5.0f, 0); // owner=0 for local player
+    createProjectile(camera.Position, camera.Front * 30.0f, 5.0f, 0, 1); // owner=0, type=1 (grenade) for local player
     if (!infiniteAmmoMode) {
         grenadeCount--;
     }
@@ -331,7 +330,7 @@ void Game::throwFlashbang() {
         return;
     }
     
-    createProjectile(camera.Position, camera.Front * 25.0f, 4.0f, 0); // owner=0 for local player
+    createProjectile(camera.Position, camera.Front * 25.0f, 4.0f, 0, 2); // owner=0, type=2 (flashbang) for local player
     if (!infiniteAmmoMode) {
         flashbangCount--;
     }
@@ -356,12 +355,16 @@ void Game::updateProjectiles(float deltaTime) {
             
             // Simple position update
             projectiles[i].position += projectiles[i].velocity * deltaTime;
-            
-            // Check if this is a grenade or flashbang
-            bool isGrenade = glm::length(projectiles[i].velocity) < 35.0f && projectiles[i].lifetime > 4.0f;
-            bool isFlashbang = glm::length(projectiles[i].velocity) < 35.0f && projectiles[i].lifetime <= 4.0f;
+
+            // Check projectile type using the type field
+            bool isGrenade = projectiles[i].type == 1;
+            bool isFlashbang = projectiles[i].type == 2;
 
             auto detonateAndDeactivate = [&](const glm::vec3& atPos) {
+                if (projectiles[i].detonated || !projectiles[i].active) return; // Prevent double detonation
+                projectiles[i].detonated = true;
+                projectiles[i].active = false;
+
                 if (isGrenade) {
                     createSimpleExplosion(atPos);
                 } else if (isFlashbang) {
@@ -370,7 +373,6 @@ void Game::updateProjectiles(float deltaTime) {
                     // Bullets: no explosion, no bounce. Just leave a mark.
                     createBulletHole(atPos, glm::vec3(0.0f, 1.0f, 0.0f));
                 }
-                projectiles[i].active = false;
                 activeProjectiles--;
             };
             
@@ -496,30 +498,48 @@ void Game::updateProjectiles(float deltaTime) {
             }
 
             // Check collision with enemies first
-            if (checkProjectileEnemyCollision(projectiles[i])) {
+            if (checkProjectileEnemyCollision(projectiles[i]) && projectiles[i].active) {
                 // Create simple explosion for grenades
-                if (glm::length(projectiles[i].velocity) < 35.0f && projectiles[i].lifetime > 4.0f) {
-                    createSimpleExplosion(projectiles[i].position);
+                bool isGrenade = projectiles[i].type == 1;
+                bool isFlashbang = projectiles[i].type == 2;
+
+                if (isGrenade) {
+                    if (!projectiles[i].detonated) {
+                        projectiles[i].detonated = true;
+                        projectiles[i].active = false;
+                        activeProjectiles--;
+                        createSimpleExplosion(projectiles[i].position);
+                    }
                 }
                 // Create flashbang effect for flashbangs when they expire
-                else if (glm::length(projectiles[i].velocity) < 35.0f && projectiles[i].lifetime <= 4.0f) {
-                    createFlashbangEffect(projectiles[i].position);
+                else if (isFlashbang) {
+                    if (!projectiles[i].detonated) {
+                        projectiles[i].detonated = true;
+                        projectiles[i].active = false;
+                        activeProjectiles--;
+                        createFlashbangEffect(projectiles[i].position);
+                    }
                 }
-                // Deactivate projectile
-                projectiles[i].active = false;
-                activeProjectiles--;
+                // Deactivate projectile (bullets)
+                else {
+                    if (projectiles[i].active) {
+                        projectiles[i].active = false;
+                        activeProjectiles--;
+                    }
+                }
                 std::cout << "Projectile hit enemy! Active: " << activeProjectiles << std::endl;
             }
             
             // Check collision with walls (different behavior for different projectile types)
-            if (checkProjectileCollision(projectiles[i])) {
-                // Check projectile type by velocity
-                bool isGrenade = glm::length(projectiles[i].velocity) < 35.0f && projectiles[i].lifetime > 4.0f;
-                bool isFlashbang = glm::length(projectiles[i].velocity) < 35.0f && projectiles[i].lifetime <= 4.0f;
-                bool isPistolBullet = glm::length(projectiles[i].velocity) > 35.0f; // Fast velocity = pistol bullet
-                
-                if (isPistolBullet) {
-                    // Pistol bullets: simple damage, no bounce, no explosion
+            if (checkProjectileCollision(projectiles[i]) && projectiles[i].active) {
+                // Check projectile type by type field
+                bool isGrenade = projectiles[i].type == 1;
+                bool isFlashbang = projectiles[i].type == 2;
+                bool isPistolBullet = projectiles[i].type == 0;
+                bool isShotgun = projectiles[i].type == 3;
+
+                if (isPistolBullet || isShotgun) {
+                    // Pistol/shotgun bullets: simple damage, no bounce, no explosion
                     createBulletHole(projectiles[i].position, glm::vec3(0.0f, 1.0f, 0.0f)); // Default normal up
                     projectiles[i].active = false;
                     activeProjectiles--;
@@ -527,16 +547,22 @@ void Game::updateProjectiles(float deltaTime) {
                 }
                 else if (isGrenade) {
                     // Grenades: explode on wall hit
-                    createSimpleExplosion(projectiles[i].position);
-                    projectiles[i].active = false;
-                    activeProjectiles--;
+                    if (!projectiles[i].detonated) {
+                        projectiles[i].detonated = true;
+                        projectiles[i].active = false;
+                        activeProjectiles--;
+                        createSimpleExplosion(projectiles[i].position);
+                    }
                     std::cout << "Grenade exploded on wall! Active: " << activeProjectiles << std::endl;
                 }
                 else if (isFlashbang) {
                     // Flashbangs: flash effect on wall hit
-                    createFlashbangEffect(projectiles[i].position);
-                    projectiles[i].active = false;
-                    activeProjectiles--;
+                    if (!projectiles[i].detonated) {
+                        projectiles[i].detonated = true;
+                        projectiles[i].active = false;
+                        activeProjectiles--;
+                        createFlashbangEffect(projectiles[i].position);
+                    }
                     std::cout << "Flashbang hit wall! Active: " << activeProjectiles << std::endl;
                 }
             }
@@ -611,37 +637,89 @@ void Game::createSimpleExplosion(glm::vec3 position) {
 
 void Game::createFlashbangEffect(glm::vec3 position) {
     std::cout << "FLASH! Flashbang detonated at: (" << position.x << ", " << position.y << ", " << position.z << ")" << std::endl;
-    
+
     // Calculate distance from player to flashbang
     float playerDistance = glm::length(position - playerPos);
-    float flashRadius = 5.0f; // 5 unit flash radius
+    float flashRadius = 12.0f; // 12 unit flash radius (increased for more aggressive effect)
 
-    // Require the player to be looking roughly toward the flash to get flashed.
+    // Check if there's a wall between player and flashbang (but ignore walls very close to flashbang)
+    bool hasLineOfSight = true;
+    if (currentMap) {
+        glm::vec3 rayDir = glm::normalize(position - playerPos);
+        float rayLength = playerDistance;
+        const std::vector<MapBlock>& blocks = currentMap->getBlocks();
+
+        for (const MapBlock& block : blocks) {
+            if (!block.solid) continue;
+
+            // Simple ray-box intersection check
+            glm::vec3 blockMin = block.position - block.scale * 0.5f;
+            glm::vec3 blockMax = block.position + block.scale * 0.5f;
+
+            // Check if ray intersects block
+            float tMin = 0.0f, tMax = rayLength;
+            for (int axis = 0; axis < 3; axis++) {
+                if (rayDir[axis] != 0.0f) {
+                    float t1 = (blockMin[axis] - playerPos[axis]) / rayDir[axis];
+                    float t2 = (blockMax[axis] - playerPos[axis]) / rayDir[axis];
+                    tMin = std::max(tMin, std::min(t1, t2));
+                    tMax = std::min(tMax, std::max(t1, t2));
+                }
+            }
+
+            // Only block if the wall is NOT very close to the flashbang (flashbang is touching the wall)
+            // If tMax is very close to rayLength, the flashbang is right next to the wall
+            if (tMin < tMax && tMin < rayLength && tMax > 0.0f) {
+                float distanceFromFlashbang = rayLength - tMax;
+                if (distanceFromFlashbang > 0.5f) {
+                    // Wall is significantly between player and flashbang
+                    hasLineOfSight = false;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (!hasLineOfSight) {
+        std::cout << "Flashbang blocked by wall - no effect" << std::endl;
+        return;
+    }
+
+    // Calculate facing direction
     glm::vec3 toFlash = position - camera.Position;
     float toLen = glm::length(toFlash);
     if (toLen < 0.001f) toLen = 0.001f;
     toFlash /= toLen;
     float facing = glm::dot(glm::normalize(camera.Front), toFlash); // 1=looking at it, 0=90deg, -1=behind
-    if (facing < 0.2f) {
-        // Not looking at the flash: no effect.
-        return;
-    }
 
-    // Scale strength by distance and facing.
+    // Scale strength by distance
     float flashIntensity = 1.0f - (playerDistance / flashRadius);
     if (flashIntensity < 0.0f) flashIntensity = 0.0f;
     if (flashIntensity > 1.0f) flashIntensity = 1.0f;
-    if (facing > 1.0f) facing = 1.0f;
-    flashIntensity *= facing;
 
-    // Up to 3 seconds when close; minimal flash even if just outside radius.
-    float duration = 3.0f * flashIntensity;
-    if (duration < 0.35f) duration = 0.35f;
+    // Calculate duration based on facing and distance
+    float duration;
+    if (facing > 0.3f) {
+        // Looking at flashbang: very aggressive duration
+        // Close range: up to 5 seconds, distant: up to 3 seconds
+        duration = (5.0f * flashIntensity) + (3.0f * (1.0f - flashIntensity));
+        // Add facing bonus
+        duration *= (0.5f + facing * 0.5f);
+    } else if (facing > 0.0f) {
+        // Partially looking: moderate duration
+        duration = (3.0f * flashIntensity) + (1.5f * (1.0f - flashIntensity));
+    } else {
+        // Not looking at it: very short duration but still effective
+        duration = 0.5f * flashIntensity;
+    }
+
+    // Minimum duration for any flash
+    if (duration < 0.2f) duration = 0.2f;
 
     flashEffectTime = duration;
     isFlashed = true;
-    std::cout << "Player flashed! Duration: " << flashEffectTime << " seconds" << std::endl;
-    
+    std::cout << "Player flashed! Duration: " << flashEffectTime << " seconds (facing: " << facing << ", distance: " << playerDistance << ")" << std::endl;
+
     // Disorient enemies temporarily (log-only for now)
     for (int j = 0; j < MAX_ENEMIES; j++) {
         if (enemies[j].active && enemies[j].alive) {
@@ -711,23 +789,24 @@ void Game::renderExplosions() {
 bool Game::checkProjectileCollision(Projectile& projectile) {
     // Simple boundary check - treat world edges as walls
     float boundary = 50.0f;
-    
+
     // Only check boundaries if projectile has moved significantly from spawn
     float distanceFromPlayer = glm::length(projectile.position - camera.Position);
     if (distanceFromPlayer > 1.0f) { // Only check boundaries after moving 1 unit
-        if (abs(projectile.position.x) >= boundary || 
+        if (abs(projectile.position.x) >= boundary ||
             abs(projectile.position.z) >= boundary ||
             projectile.position.y <= -10.0f) {
             return true;
         }
     }
-    
+
     // Check collision with map blocks if map is loaded
-    if (currentMap) {
+    if (currentMap && distanceFromPlayer > 0.5f) {
         const std::vector<MapBlock>& blocks = currentMap->getBlocks();
-        
+
         // Store previous position for swept collision
-        static glm::vec3 prevPositions[MAX_PROJECTILES];
+        static glm::vec3 prevPositions[MAX_PROJECTILES] = {glm::vec3(0.0f)};
+        static bool prevPositionsInitialized[MAX_PROJECTILES] = {false};
         int projIndex = -1;
         for (int i = 0; i < MAX_PROJECTILES; i++) {
             if (&projectiles[i] == &projectile) {
@@ -735,30 +814,39 @@ bool Game::checkProjectileCollision(Projectile& projectile) {
                 break;
             }
         }
-        
-        glm::vec3 prevPos = (projIndex >= 0) ? prevPositions[projIndex] : projectile.position;
+
+        glm::vec3 prevPos;
+        if (projIndex >= 0 && prevPositionsInitialized[projIndex]) {
+            prevPos = prevPositions[projIndex];
+        } else {
+            prevPos = projectile.position;
+            if (projIndex >= 0) {
+                prevPositionsInitialized[projIndex] = true;
+            }
+        }
+
         glm::vec3 currPos = projectile.position;
         glm::vec3 rayDir = currPos - prevPos;
         float rayLength = glm::length(rayDir);
-        
+
         if (rayLength > 0.001f) {
             rayDir = rayDir / rayLength; // Normalize
         }
-        
+
         // Check each block with swept collision (ray-box intersection)
         for (const MapBlock& block : blocks) {
             if (!block.solid) continue;
-            
-            // Block bounds
+
+            // Block bounds (axis-aligned in world space)
             glm::vec3 blockMin = block.position - block.scale * 0.5f;
             glm::vec3 blockMax = block.position + block.scale * 0.5f;
-            
-            // Only check collision if projectile is moving fast enough and has traveled some distance
-            if (rayLength > 0.1f && distanceFromPlayer > 0.5f) {
+
+            // Only check collision if projectile has traveled some distance
+            if (rayLength > 0.1f) {
                 // Swept collision for fast projectiles - ray-box intersection
                 float tmin = 0.0f;
                 float tmax = rayLength;
-                
+
                 // Check X slab
                 if (abs(rayDir.x) < 0.0001f) {
                     if (currPos.x < blockMin.x || currPos.x > blockMax.x) continue;
@@ -768,7 +856,7 @@ bool Game::checkProjectileCollision(Projectile& projectile) {
                     tmin = std::max(tmin, std::min(t1, t2));
                     tmax = std::min(tmax, std::max(t1, t2));
                 }
-                
+
                 // Check Y slab
                 if (abs(rayDir.y) < 0.0001f) {
                     if (currPos.y < blockMin.y || currPos.y > blockMax.y) continue;
@@ -778,7 +866,7 @@ bool Game::checkProjectileCollision(Projectile& projectile) {
                     tmin = std::max(tmin, std::min(t1, t2));
                     tmax = std::min(tmax, std::max(t1, t2));
                 }
-                
+
                 // Check Z slab
                 if (abs(rayDir.z) < 0.0001f) {
                     if (currPos.z < blockMin.z || currPos.z > blockMax.z) continue;
@@ -788,36 +876,48 @@ bool Game::checkProjectileCollision(Projectile& projectile) {
                     tmin = std::max(tmin, std::min(t1, t2));
                     tmax = std::min(tmax, std::max(t1, t2));
                 }
-                
+
                 // Check if ray intersects block
                 if (tmin <= tmax && tmin >= 0.0f && tmin <= rayLength) {
-                    if (projIndex >= 0) prevPositions[projIndex] = currPos;
                     return true;
                 }
             }
         }
-        
-        // Store current position for next frame
-        if (projIndex >= 0) prevPositions[projIndex] = currPos;
+
+        // Store current position for next frame (only if no collision)
+        if (projIndex >= 0) {
+            prevPositions[projIndex] = currPos;
+        }
     }
-    
+
     return false;
 }
 
 void Game::createBulletHole(const glm::vec3& position, const glm::vec3& normal) {
     // Find an inactive bullet hole slot or replace oldest
     int index = -1;
-    if (bulletHoleCount < MAX_BULLET_HOLES) {
-        index = bulletHoleCount;
-        bulletHoleCount++;
-    } else {
-        // Replace oldest bullet hole
+    
+    // First, try to find an inactive slot
+    for (int i = 0; i < MAX_BULLET_HOLES; i++) {
+        if (bulletHoles[i].lifetime <= 0.0f) {
+            index = i;
+            break;
+        }
+    }
+    
+    // If no inactive slot, replace the oldest
+    if (index == -1) {
         index = 0;
         for (int i = 0; i < MAX_BULLET_HOLES; i++) {
             if (bulletHoles[i].lifetime < bulletHoles[index].lifetime) {
                 index = i;
             }
         }
+    }
+    
+    // Update bullet hole count if we're using a new slot
+    if (index >= bulletHoleCount && bulletHoleCount < MAX_BULLET_HOLES) {
+        bulletHoleCount = index + 1;
     }
     
     // Create bullet hole

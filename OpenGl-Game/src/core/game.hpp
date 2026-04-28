@@ -120,15 +120,18 @@ public:
     void setMultiplayerMode(bool enabled) { multiplayerMode = enabled; }
     
     /**
-     * @brief Check if in multiplayer mode
+     * @brief Create a new projectile
+     *
+     * @param position Starting position
+     * @param velocity Initial velocity
+     * @param lifetime How long the projectile exists
+     * @param owner Owner ID (0 for local player)
+     * @param type Projectile type (0=pistol, 1=grenade, 2=flashbang, 3=shotgun)
+     * @return true if projectile was created, false if max projectiles reached
      */
-    bool isMultiplayerMode() const { return multiplayerMode; }
-
-// Weapon system access
-    const glm::vec3& getCameraPosition() const { return camera.Position; }
-    const glm::vec3& getCameraFront() const { return camera.Front; }
-    bool createProjectile(const glm::vec3& position, const glm::vec3& velocity, float lifetime, uint32_t owner = 0);
+    bool createProjectile(const glm::vec3& position, const glm::vec3& velocity, float lifetime, uint32_t owner, int type = 0);
     int getActiveProjectiles() const { return activeProjectiles; }
+    const Camera& getCamera() const { return camera; }
 
     /// Game mode type
     enum GameMode {
@@ -242,9 +245,11 @@ private:
 
         // Editor specific
         bool gPressed         = false;
+        bool mPressed         = false;
+        bool shapeResetPressed = false;
         bool nPressed         = false;
         bool f9Pressed        = false;
-        bool texKeyPressed[8];
+        bool texKeyPressed[10]; // Now used for texture (1-4) keys
         bool rmbPressed       = false;
         bool qPressed         = false;
         bool ePressed         = false;
@@ -258,6 +263,9 @@ private:
         bool f3Pressed = false, f4Pressed = false;
         double lastPlaceTime  = 0.0;
         float sidewaysOffset  = 0.0f;
+
+        // Gameplay specific
+        bool gameplayGPressed  = false;
 
         InputState() {
             memset(digitPressed,  0, sizeof(digitPressed));
@@ -276,6 +284,8 @@ private:
             downPressed   = false;
             leftPressed   = false;
             rightPressed  = false;
+            shapeResetPressed = false;
+            gameplayGPressed = false;
         }
     } inp;
 
@@ -296,7 +306,9 @@ private:
         glm::vec3 velocity;
         float lifetime;
         bool active;
+        bool detonated; // Prevents double detonation
         uint32_t owner; // 0 = local player, other = remote player ID
+        int type; // 0=pistol bullet, 1=grenade, 2=flashbang, 3=shotgun pellet
     };
     
     /// Bullet hole structure for wall impacts
@@ -406,6 +418,8 @@ private:
     bool editorShowGrid = true;
     float editorGridSize = 1.0f;
     float editorBlockOffset = 5.0f;  // Distance in front of player for block placement
+    float editorBlockRotation = 0.0f;  // Y-axis rotation for blocks
+    float editorBlockPitch = 0.0f;      // X-axis rotation (pitch) for blocks
 
     /// Editor spawn point placement mode
     enum EditorSpawnMode {
@@ -415,6 +429,22 @@ private:
         SPAWN_TEAM_B     // Place Team B (Blue) spawn points
     };
     EditorSpawnMode editorSpawnMode = SPAWN_NONE;
+
+    /// Editor mode (block placement vs shape creation)
+    enum EditorMode {
+        MODE_BLOCK,      // Place individual blocks
+        MODE_SHAPE       // Create shapes by selecting points
+    };
+    EditorMode editorMode = MODE_BLOCK;
+
+    /// Shape creation state
+    struct ShapeCreation {
+        int selectedPoints = 0;  // Number of points selected (0-3 for corners)
+        glm::vec3 corners[3] = {glm::vec3(0.0f), glm::vec3(0.0f), glm::vec3(0.0f)};    // Corner positions
+        std::vector<glm::vec3> nodes;  // Control points for curvature
+        bool editingNodes = false;     // Whether editing nodes after corners selected
+    };
+    ShapeCreation shapeCreation;
 
     /// Shooting cooldown
     float shootCooldown;

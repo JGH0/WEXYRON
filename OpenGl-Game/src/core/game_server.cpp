@@ -125,7 +125,8 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
                 glm::vec3(packet.posX, packet.posY, packet.posZ),
                 glm::vec3(packet.velX, packet.velY, packet.velZ),
                 packet.lifetime,
-                packet.ownerId // Owner is the player who fired it
+                packet.ownerId,
+                packet.projectileType // Use the projectile type from the packet
             );
         }
     };

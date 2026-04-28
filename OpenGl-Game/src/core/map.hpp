@@ -11,6 +11,8 @@
 #include <vector>
 #include <string>
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
 #include "texture.hpp"
 
 /**
@@ -29,14 +31,20 @@ struct MapBlock {
     bool solid;
     /// Color of the block (RGB)
     glm::vec3 color;
+    /// Y-axis rotation (degrees)
+    float rotation;
+    /// X-axis rotation (pitch) (degrees)
+    float pitch;
 
     MapBlock(glm::vec3 pos = glm::vec3(0.0f),
              glm::vec3 scl = glm::vec3(1.0f),
              int texId = 0,
              int type = 0,
              bool isSolid = true,
-             glm::vec3 col = glm::vec3(0.7f, 0.7f, 0.7f))
-        : position(pos), scale(scl), textureId(texId), blockType(type), solid(isSolid), color(col) {}
+             glm::vec3 col = glm::vec3(0.7f, 0.7f, 0.7f),
+             float rot = 0.0f,
+             float pit = 0.0f)
+        : position(pos), scale(scl), textureId(texId), blockType(type), solid(isSolid), color(col), rotation(rot), pitch(pit) {}
 };
 
 /**
@@ -123,6 +131,18 @@ public:
      * @return true if a block was deleted, false otherwise
      */
     bool deleteBlockAt(const glm::vec3& position, float tolerance = 0.1f);
+    
+    /**
+     * @brief Find and delete a block with exact position, scale, and orientation match
+     *
+     * @param position Position to match
+     * @param scale Scale to match
+     * @param rotation Rotation (yaw) to match
+     * @param pitch Pitch to match
+     * @param tolerance Distance tolerance for position matching
+     * @return true if a block was deleted, false otherwise
+     */
+    bool deleteBlockExact(const glm::vec3& position, const glm::vec3& scale, float rotation, float pitch, float tolerance = 0.05f);
 
     /**
      * @brief Replace the texture of a block at the specified position
@@ -158,13 +178,24 @@ public:
     Texture* getTexture(int textureId);
     
     /**
-     * @brief Check collision with map blocks
-     * 
+     * @brief Check if a position collides with any solid block
+     *
      * @param position Position to check
      * @param radius Collision radius
-     * @return true if collision detected, false otherwise
+     * @return true if collision detected
      */
     bool checkCollision(const glm::vec3& position, float radius = 0.5f) const;
+
+    /**
+     * @brief Get the ground height and normal at a position (for walking on rotated blocks)
+     *
+     * @param position Position to check
+     * @param radius Collision radius
+     * @param groundHeight Output ground height
+     * @param groundNormal Output ground normal
+     * @return true if ground found
+     */
+    bool getGroundAt(const glm::vec3& position, float radius, float& groundHeight, glm::vec3& groundNormal) const;
     
     /**
      * @brief Get map dimensions
@@ -193,11 +224,25 @@ public:
     void addSpawnPoint(const SpawnPoint& spawn);
 
     /**
+     * @brief Remove a spawn point by index
+     *
+     * @param index Index of spawn point to remove
+     */
+    void removeSpawnPoint(size_t index);
+
+    /**
      * @brief Add a team spawn point (for Team vs Team mode)
      *
      * @param spawn TeamSpawn to add
      */
     void addTeamSpawn(const TeamSpawn& spawn);
+
+    /**
+     * @brief Remove a team spawn point by index
+     *
+     * @param index Index of team spawn point to remove
+     */
+    void removeTeamSpawn(size_t index);
 
     /**
      * @brief Get all spawn points

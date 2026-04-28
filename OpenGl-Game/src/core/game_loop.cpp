@@ -125,15 +125,22 @@ void Game::render() {
                 glm::mat4 model = glm::mat4(1.0f);
                 model = glm::translate(model, projectiles[i].position);
 
-                if (glm::length(projectiles[i].velocity) < 35.0f && projectiles[i].lifetime > 4.0f) {
+                if (projectiles[i].type == 1) {
+                    // Grenade
                     model = glm::scale(model, glm::vec3(0.2f, 0.2f, 0.2f));
                     renderer.drawCube(model, glm::vec3(0.0f, 1.0f, 0.0f)); // Green for grenades
-                } else if (glm::length(projectiles[i].velocity) < 30.0f && projectiles[i].lifetime <= 4.0f) {
+                } else if (projectiles[i].type == 2) {
+                    // Flashbang
                     model = glm::scale(model, glm::vec3(0.15f, 0.15f, 0.15f));
                     renderer.drawCube(model, glm::vec3(1.0f, 1.0f, 1.0f)); // White for flashbangs
+                } else if (projectiles[i].type == 3) {
+                    // Shotgun pellet
+                    model = glm::scale(model, glm::vec3(0.08f, 0.08f, 0.08f));
+                    renderer.drawCube(model, glm::vec3(1.0f, 0.5f, 0.0f)); // Orange for shotgun pellets
                 } else {
+                    // Pistol bullet
                     model = glm::scale(model, glm::vec3(0.1f, 0.1f, 0.1f));
-                    renderer.drawCube(model, glm::vec3(1.0f, 1.0f, 0.0f)); // Yellow for bullets
+                    renderer.drawCube(model, glm::vec3(1.0f, 1.0f, 0.0f)); // Yellow for pistol bullets
                 }
             }
         }

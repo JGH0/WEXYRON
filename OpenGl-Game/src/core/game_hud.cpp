@@ -1,29 +1,35 @@
 #include "game.hpp"
 #include "../ui/ui_helpers.hpp"
 #include <glm/gtc/matrix_transform.hpp>
+#include <iostream>
 
 void Game::renderFlashbangEffect() {
     if (isFlashed && flashEffectTime > 0.0f) {
         // Create a white overlay effect for flash
         float alpha = flashEffectTime / 3.0f; // Normalize to 0-1 range
         if (alpha > 1.0f) alpha = 1.0f;
-        
+
         UIHelpers::setProjection(renderer, window);
         auto _b = UIHelpers::getBounds(window); float left=_b.left, right=_b.right, top=_b.top, bottom=_b.bottom;
         float centerX = (left + right) * 0.5f;
         float centerY = (top + bottom) * 0.5f;
         float w = (right - left);
         float h = (bottom - top);
-        
+
         // Ensure overlay is visible over the 3D scene
         glDisable(GL_DEPTH_TEST);
 
-        // Draw white overlay
+        // Enable blending for transparency
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+        // Draw white overlay with proper alpha
         glm::mat4 model = glm::mat4(1.0f);
         model = glm::translate(model, glm::vec3(centerX, centerY, 0.0f));
         model = glm::scale(model, glm::vec3(w, h, 1.0f));
-        renderer.drawCube(model, glm::vec3(alpha, alpha, alpha)); // White with alpha
+        renderer.drawColoredQuad(model, glm::vec3(alpha, alpha, alpha)); // White with alpha
 
+        glDisable(GL_BLEND);
         glEnable(GL_DEPTH_TEST);
     }
 }
@@ -69,27 +75,37 @@ void Game::renderDamageEffect() {
         auto _b = UIHelpers::getBounds(window); float left=_b.left, right=_b.right, top=_b.top, bottom=_b.bottom;
         float centerY = (top + bottom) * 0.5f;
         float h = (bottom - top);
-        
+
         // Calculate damage effect alpha (fade out over time)
         float alpha = damageEffectTime / 0.5f; // 0.5 second duration
-        
+        if (alpha > 1.0f) alpha = 1.0f;
+
         // Draw subtle red side overlays for damage effect
         float sideWidth = 150.0f; // Width of side effects
         float sideAlpha = alpha * 0.3f; // Much more subtle
-        
+
+        // Disable depth test and enable blending for transparency
+        glDisable(GL_DEPTH_TEST);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
         // Left side red tint
         glm::mat4 leftModel = glm::mat4(1.0f);
         leftModel = glm::translate(leftModel, glm::vec3(left + sideWidth/2.0f, centerY, 0.0f));
         leftModel = glm::scale(leftModel, glm::vec3(sideWidth, h, 1.0f));
         glm::vec3 leftColor = glm::vec3(0.8f, 0.0f, 0.0f) * sideAlpha; // Subtle red
         renderer.drawColoredQuad(leftModel, leftColor);
-        
+
         // Right side red tint
         glm::mat4 rightModel = glm::mat4(1.0f);
         rightModel = glm::translate(rightModel, glm::vec3(right - sideWidth/2.0f, centerY, 0.0f));
         rightModel = glm::scale(rightModel, glm::vec3(sideWidth, h, 1.0f));
         glm::vec3 rightColor = glm::vec3(0.8f, 0.0f, 0.0f) * sideAlpha; // Subtle red
         renderer.drawColoredQuad(rightModel, rightColor);
+
+        // Restore state
+        glDisable(GL_BLEND);
+        glEnable(GL_DEPTH_TEST);
     }
 }
 

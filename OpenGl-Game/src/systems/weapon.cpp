@@ -24,7 +24,7 @@ Pistol::Pistol(bool infiniteAmmo)
 void Pistol::shoot(Game* game) {
     if (!canShoot()) return;
     
-    if (game->createProjectile(game->getCameraPosition(), game->getCameraFront() * 60.0f, 2.0f)) {
+    if (game->createProjectile(game->getCamera().Position, game->getCamera().Front * 60.0f, 2.0f, 0, 0)) {
         if (!infiniteAmmo) {
             ammo--;
         }
@@ -40,7 +40,7 @@ PumpShotgun::PumpShotgun(bool infiniteAmmo)
 
 void PumpShotgun::shoot(Game* game) {
     if (!canShoot()) return;
-    
+
     // Shoot 5 projectiles in a spread pattern
     int pelletsShot = 0;
     for (int i = 0; i < 5; i++) {
@@ -50,18 +50,20 @@ void PumpShotgun::shoot(Game* game) {
             (rand() % 100 - 50) * 0.002f,
             0.0f
         );
-        
-        if (game->createProjectile(game->getCameraPosition(), (game->getCameraFront() + spread) * 50.0f, 1.0f)) {
+
+        if (game->createProjectile(game->getCamera().Position, (game->getCamera().Front + spread) * 50.0f, 1.0f, 0, 3)) {
             pelletsShot++;
         }
     }
-    
+
     if (pelletsShot > 0) {
         if (!infiniteAmmo) {
             ammo--;
         }
         cooldownTimer = cooldown;
         std::cout << "Shotgun blast! Pellets: " << pelletsShot << " Ammo: " << (infiniteAmmo ? "∞" : std::to_string(ammo)) << std::endl;
+    } else {
+        std::cout << "Shotgun failed to fire - max projectiles reached" << std::endl;
     }
 }
 
@@ -73,7 +75,7 @@ Grenade::Grenade(int count)
 void Grenade::shoot(Game* game) {
     if (!canShoot()) return;
     
-    if (game->createProjectile(game->getCameraPosition(), game->getCameraFront() * 30.0f, 5.0f)) {
+    if (game->createProjectile(game->getCamera().Position, game->getCamera().Front * 30.0f, 5.0f, 0, 1)) {
         if (!infiniteAmmo) {
             ammo--;
         }
@@ -90,7 +92,7 @@ Flashbang::Flashbang(int count)
 void Flashbang::shoot(Game* game) {
     if (!canShoot()) return;
     
-    if (game->createProjectile(game->getCameraPosition(), game->getCameraFront() * 25.0f, 4.0f)) {
+    if (game->createProjectile(game->getCamera().Position, game->getCamera().Front * 25.0f, 4.0f, 0, 2)) {
         if (!infiniteAmmo) {
             ammo--;
         }

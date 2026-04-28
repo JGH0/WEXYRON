@@ -96,8 +96,11 @@ Game::Game(int width, int height)
     initKeyBindings();
 
     // Projectiles
-    for (int i = 0; i < MAX_PROJECTILES; i++)
+    for (int i = 0; i < MAX_PROJECTILES; i++) {
         projectiles[i].active = false;
+        projectiles[i].type = 0; // Initialize type field
+        projectiles[i].detonated = false; // Initialize detonated field
+    }
 
     // Bullet holes
     for (int i = 0; i < MAX_BULLET_HOLES; i++)
@@ -351,8 +354,11 @@ void Game::resetGame() {
 
     // Projectiles
     activeProjectiles = 0;
-    for (int i = 0; i < MAX_PROJECTILES; i++)
+    for (int i = 0; i < MAX_PROJECTILES; i++) {
         projectiles[i].active = false;
+        projectiles[i].type = 0; // Initialize type field
+        projectiles[i].detonated = false; // Initialize detonated field
+    }
 
     // Bullet holes
     bulletHoleCount = 0;

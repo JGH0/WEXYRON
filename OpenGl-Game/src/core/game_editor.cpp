@@ -4,6 +4,7 @@
 #include <fstream>
 #include <algorithm>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
 
 void Game::renderEditor() {
     int fbW = 800, fbH = 600;
@@ -30,37 +31,66 @@ void Game::renderEditor() {
     if (editorShowGrid) {
         // Use the largest block dimension as the grid cell size
         float gridCellSize = glm::max(editorBlockSize.x, glm::max(editorBlockSize.y, editorBlockSize.z));
-        for (int i = -20; i <= 20; i++) {
-            // X lines
-            glm::mat4 lineX = glm::mat4(1.0f);
-            lineX = glm::translate(lineX, glm::vec3(i * gridCellSize, -0.05f, 0.0f));
-            lineX = glm::scale(lineX, glm::vec3(0.02f, 0.02f, 40.0f * gridCellSize));
-            renderer.drawCube(lineX, glm::vec3(0.3f, 0.3f, 0.3f));
 
-            // Z lines
+        // Static grid covering the map area (no rotation - always aligned with world axes)
+        glm::vec3 gridCenter = glm::vec3(0.0f, 0.0f, 0.0f); // Center of map at ground level
+
+        // Get map dimensions to determine grid size
+        float mapHalfX = 20.0f;
+        float mapHalfZ = 20.0f;
+        if (currentMap) {
+            glm::vec3 dims = currentMap->getDimensions();
+            mapHalfX = dims.x * 0.5f;
+            mapHalfZ = dims.z * 0.5f;
+        }
+
+        // Calculate number of grid lines based on map size
+        int numLinesX = static_cast<int>(mapHalfX / gridCellSize) + 1;
+        int numLinesZ = static_cast<int>(mapHalfZ / gridCellSize) + 1;
+
+        for (int i = -numLinesX; i <= numLinesX; i++) {
+            // X lines (static, no rotation)
+            glm::mat4 lineX = glm::mat4(1.0f);
+            glm::vec3 lineStart = gridCenter + glm::vec3(i * gridCellSize, 0.0f, 0.0f);
+            lineX = glm::translate(lineX, lineStart);
+            lineX = glm::scale(lineX, glm::vec3(0.02f, 0.02f, mapHalfZ * 2.0f));
+            renderer.drawCube(lineX, glm::vec3(0.3f, 0.3f, 0.3f));
+        }
+
+        for (int i = -numLinesZ; i <= numLinesZ; i++) {
+            // Z lines (static, no rotation)
             glm::mat4 lineZ = glm::mat4(1.0f);
-            lineZ = glm::translate(lineZ, glm::vec3(0.0f, -0.05f, i * gridCellSize));
-            lineZ = glm::scale(lineZ, glm::vec3(40.0f * gridCellSize, 0.02f, 0.02f));
+            glm::vec3 lineZStart = gridCenter + glm::vec3(0.0f, 0.0f, i * gridCellSize);
+            lineZ = glm::translate(lineZ, lineZStart);
+            lineZ = glm::scale(lineZ, glm::vec3(mapHalfX * 2.0f, 0.02f, 0.02f));
             renderer.drawCube(lineZ, glm::vec3(0.3f, 0.3f, 0.3f));
         }
     }
 
     // Render ghost block at grid position - wireframe style (edges only)
-    {
-        glm::vec3 halfSize = editorBlockSize * 0.5f;
+    if (editorMode == MODE_BLOCK) {
         glm::vec3 center = editorGridPos;
         float edgeThickness = 0.02f;
         glm::vec3 edgeColor = glm::vec3(0.0f, 1.0f, 0.0f); // Bright green edges
 
+        glm::vec3 halfSize = editorBlockSize * 0.5f;
         float xEdgeLen = editorBlockSize.x - edgeThickness;
         float yEdgeLen = editorBlockSize.y - edgeThickness;
         float zEdgeLen = editorBlockSize.z - edgeThickness;
+
+        // Create rotation matrix
+        glm::mat4 rotationMat = glm::mat4(1.0f);
+        rotationMat = glm::rotate(rotationMat, glm::radians(editorBlockPitch), glm::vec3(1.0f, 0.0f, 0.0f));
+        rotationMat = glm::rotate(rotationMat, glm::radians(editorBlockRotation), glm::vec3(0.0f, 1.0f, 0.0f));
 
         // Vertical edges (4 corners) - Y direction
         for (float x = -1; x <= 1; x += 2) {
             for (float z = -1; z <= 1; z += 2) {
                 glm::mat4 edge = glm::mat4(1.0f);
-                edge = glm::translate(edge, center + glm::vec3(x * halfSize.x, 0.0f, z * halfSize.z));
+                glm::vec3 offset = glm::vec3(x * halfSize.x, 0.0f, z * halfSize.z);
+                edge = glm::translate(edge, center);
+                edge = edge * rotationMat;
+                edge = glm::translate(edge, offset);
                 edge = glm::scale(edge, glm::vec3(edgeThickness, yEdgeLen, edgeThickness));
                 renderer.drawCube(edge, edgeColor);
             }
@@ -70,18 +100,36 @@ void Game::renderEditor() {
             // X-direction edges
             for (float z = -1; z <= 1; z += 2) {
                 glm::mat4 edge = glm::mat4(1.0f);
-                edge = glm::translate(edge, center + glm::vec3(0.0f, y * halfSize.y, z * halfSize.z));
+                glm::vec3 offset = glm::vec3(0.0f, y * halfSize.y, z * halfSize.z);
+                edge = glm::translate(edge, center);
+                edge = edge * rotationMat;
+                edge = glm::translate(edge, offset);
                 edge = glm::scale(edge, glm::vec3(xEdgeLen, edgeThickness, edgeThickness));
                 renderer.drawCube(edge, edgeColor);
             }
             // Z-direction edges
             for (float x = -1; x <= 1; x += 2) {
                 glm::mat4 edge = glm::mat4(1.0f);
-                edge = glm::translate(edge, center + glm::vec3(x * halfSize.x, y * halfSize.y, 0.0f));
+                glm::vec3 offset = glm::vec3(x * halfSize.x, y * halfSize.y, 0.0f);
+                edge = glm::translate(edge, center);
+                edge = edge * rotationMat;
+                edge = glm::translate(edge, offset);
                 edge = glm::scale(edge, glm::vec3(edgeThickness, edgeThickness, zEdgeLen));
                 renderer.drawCube(edge, edgeColor);
             }
         }
+    }
+
+    // SHAPE mode - render simple indicator
+    if (editorMode == MODE_SHAPE) {
+        // Ensure 3D projection is set
+        renderer.setViewProjection(view, projection);
+
+        // Simple indicator at grid position
+        glm::mat4 indicator = glm::mat4(1.0f);
+        indicator = glm::translate(indicator, editorGridPos);
+        indicator = glm::scale(indicator, glm::vec3(0.3f, 0.3f, 0.3f));
+        renderer.drawCube(indicator, glm::vec3(1.0f, 0.0f, 1.0f)); // Purple indicator
     }
 
     // Switch to 2D UI projection
@@ -101,19 +149,29 @@ void Game::renderEditor() {
     renderer.drawText("MAP EDITOR", startX, startY, textScale);
     renderer.drawTextFit("WASD=move SPACE/SHIFT=up/down",             startX, startY + lineHeight,      maxHelpWidth, textScale);
     renderer.drawTextFit("LMB=place RCLICK=retex ALT+RCLICK=delete",  startX, startY + lineHeight * 2,  maxHelpWidth, textScale);
-    renderer.drawTextFit("1-8=tex E/Q=resize arrows=move UP/DOWN=dist", startX, startY + lineHeight * 3, maxHelpWidth, textScale);
-    renderer.drawTextFit("F1 DM F2 A F3 B F4 Block F9 save ESC exit", startX, startY + lineHeight * 4,  maxHelpWidth, textScale);
+    renderer.drawTextFit("1-4=tex T=rot S+T=back C+T=pitchdown",      startX, startY + lineHeight * 3, maxHelpWidth, textScale);
+    renderer.drawTextFit("SC+T=pitchup E/Q=resize M=mode",            startX, startY + lineHeight * 4, maxHelpWidth, textScale);
+    renderer.drawTextFit("arrows=move UP/DOWN=dist F1 DM F2 A F3 B", startX, startY + lineHeight * 5,  maxHelpWidth, textScale);
+    renderer.drawTextFit("F4 Block F9 save ESC exit",                startX, startY + lineHeight * 6,  maxHelpWidth, textScale);
+
+    // Show mode-specific help
+    if (editorMode == MODE_SHAPE) {
+        renderer.drawTextFit("SHAPE MODE: Click to place points (simplified)", startX, startY + lineHeight * 7, maxHelpWidth, textScale);
+        renderer.drawTextFit("Press M to switch back to BLOCK mode", startX, startY + lineHeight * 8, maxHelpWidth, textScale);
+    }
 
     // Show current settings
     char buf[128];
     snprintf(buf, sizeof(buf), "POS: %.1f, %.1f, %.1f", editorGridPos.x, editorGridPos.y, editorGridPos.z);
-    renderer.drawText(buf, startX, startY + lineHeight * 6, textScale);
-    snprintf(buf, sizeof(buf), "SIZE: %.1f, %.1f, %.1f", editorBlockSize.x, editorBlockSize.y, editorBlockSize.z);
-    renderer.drawText(buf, startX, startY + lineHeight * 7, textScale);
-    snprintf(buf, sizeof(buf), "TEX: %d  DIST: %.1f", editorSelectedTexture, editorBlockOffset);
     renderer.drawText(buf, startX, startY + lineHeight * 8, textScale);
-    snprintf(buf, sizeof(buf), "GRID: %s  NOCLIP: %s", editorShowGrid ? "ON" : "OFF", editorNoclip ? "ON" : "OFF");
+    snprintf(buf, sizeof(buf), "SIZE: %.1f, %.1f, %.1f", editorBlockSize.x, editorBlockSize.y, editorBlockSize.z);
     renderer.drawText(buf, startX, startY + lineHeight * 9, textScale);
+    snprintf(buf, sizeof(buf), "TEX: %d  DIST: %.1f", editorSelectedTexture, editorBlockOffset);
+    renderer.drawText(buf, startX, startY + lineHeight * 10, textScale);
+    snprintf(buf, sizeof(buf), "GRID: %s  NOCLIP: %s", editorShowGrid ? "ON" : "OFF", editorNoclip ? "ON" : "OFF");
+    renderer.drawText(buf, startX, startY + lineHeight * 11, textScale);
+    snprintf(buf, sizeof(buf), "ROT: %.0f  PITCH: %.0f", editorBlockRotation, editorBlockPitch);
+    renderer.drawText(buf, startX, startY + lineHeight * 12, textScale);
 
     // Show spawn mode
     const char* spawnModeStr = "BLOCK MODE";
@@ -123,8 +181,13 @@ void Game::renderEditor() {
         case SPAWN_TEAM_B:     spawnModeStr = "TEAM B SPAWN (Blue)";    break;
         default: break;
     }
-    snprintf(buf, sizeof(buf), "MODE: %s", spawnModeStr);
-    renderer.drawText(buf, startX, startY + lineHeight * 10, textScale);
+    snprintf(buf, sizeof(buf), "SPAWN: %s", spawnModeStr);
+    renderer.drawText(buf, startX, startY + lineHeight * 13, textScale);
+
+    // Show editor mode
+    const char* modeStr = editorMode == MODE_BLOCK ? "BLOCK MODE" : "SHAPE MODE";
+    snprintf(buf, sizeof(buf), "EDIT: %s", modeStr);
+    renderer.drawText(buf, startX, startY + lineHeight * 14, textScale);
 
     // Texture color palette (matching the map texture IDs)
     glm::vec3 textureColors[8] = {
@@ -143,6 +206,11 @@ void Game::renderEditor() {
     float previewX    = _b.right - previewSize - 40.0f;
     float previewY    = _b.top   + 40.0f;
 
+    // Ensure texture index is valid
+    int texIndex = editorSelectedTexture;
+    if (texIndex < 0) texIndex = 0;
+    if (texIndex > 7) texIndex = 7;
+
     // Black background
     glm::mat4 bgModel = glm::mat4(1.0f);
     bgModel = glm::translate(bgModel, glm::vec3(previewX, previewY, 0.0f));
@@ -159,7 +227,7 @@ void Game::renderEditor() {
     glm::mat4 previewModel = glm::mat4(1.0f);
     previewModel = glm::translate(previewModel, glm::vec3(previewX, previewY, 0.0f));
     previewModel = glm::scale(previewModel, glm::vec3(previewSize, previewSize, 1.0f));
-    renderer.drawColoredQuad(previewModel, textureColors[editorSelectedTexture]);
+    renderer.drawColoredQuad(previewModel, textureColors[texIndex]);
 
     // Label below the preview box
     char previewLabel[32];
@@ -199,6 +267,8 @@ void Game::processEditorInput() {
     if (glm::length(moveDir) > 0.0f) {
         moveDir = glm::normalize(moveDir);
         camera.Position += moveDir * moveSpeed;
+        // Update editor grid position to follow camera
+        editorGridPos = camera.Position + camera.Front * editorBlockOffset;
     }
 
     // UP/DOWN arrows move block placement forward/backward along camera direction
@@ -206,7 +276,6 @@ void Game::processEditorInput() {
         inp.upArrowPressed = true;
         editorBlockOffset += editorGridSize;
         if (editorBlockOffset > 20.0f) editorBlockOffset = 20.0f;
-        std::cout << "Placement forward: " << editorBlockOffset << std::endl;
     } else if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_RELEASE) {
         inp.upArrowPressed = false;
     }
@@ -215,7 +284,6 @@ void Game::processEditorInput() {
         inp.downArrowPressed = true;
         editorBlockOffset -= editorGridSize;
         if (editorBlockOffset < 0.5f) editorBlockOffset = 0.5f;
-        std::cout << "Placement backward: " << editorBlockOffset << std::endl;
     } else if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_RELEASE) {
         inp.downArrowPressed = false;
     }
@@ -228,13 +296,13 @@ void Game::processEditorInput() {
     static int gridCellZ = 0;
 
     if (editorShowGrid) {
+        // Calculate grid cell size
         float gridCellSize = glm::max(editorBlockSize.x, glm::max(editorBlockSize.y, editorBlockSize.z));
 
         // In grid mode, LEFT/RIGHT moves between grid cells
         if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS && !inp.leftArrowPressed) {
             inp.leftArrowPressed = true;
             gridCellX--;
-            std::cout << "Grid cell: " << gridCellX << ", " << gridCellZ << std::endl;
         } else if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_RELEASE) {
             inp.leftArrowPressed = false;
         }
@@ -242,19 +310,34 @@ void Game::processEditorInput() {
         if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS && !inp.rightArrowPressed) {
             inp.rightArrowPressed = true;
             gridCellX++;
-            std::cout << "Grid cell: " << gridCellX << ", " << gridCellZ << std::endl;
         } else if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_RELEASE) {
             inp.rightArrowPressed = false;
         }
 
         // Calculate grid position based on where player is looking + cell offsets
-        float baseGridX = floor(lookPos.x / gridCellSize) * gridCellSize + gridCellSize * 0.5f;
-        float baseGridY = floor(lookPos.y / gridCellSize) * gridCellSize + gridCellSize * 0.5f;
-        float baseGridZ = floor(lookPos.z / gridCellSize) * gridCellSize + gridCellSize * 0.5f;
+        // Transform look position into block-local space (inverse full rotation)
+        glm::mat4 inverseRotationMat = glm::mat4(1.0f);
+        inverseRotationMat = glm::rotate(inverseRotationMat, glm::radians(-editorBlockRotation), glm::vec3(0.0f, 1.0f, 0.0f));
+        inverseRotationMat = glm::rotate(inverseRotationMat, glm::radians(-editorBlockPitch), glm::vec3(1.0f, 0.0f, 0.0f));
 
-        editorGridPos.x = baseGridX + gridCellX * gridCellSize;
-        editorGridPos.y = baseGridY;
-        editorGridPos.z = baseGridZ + gridCellZ * gridCellSize;
+        // Use the actual look position (not clamped) for placement - allows placing in air
+        glm::vec3 localLookPos = glm::vec3(inverseRotationMat * glm::vec4(lookPos, 1.0f));
+
+        // Snap to grid in local space
+        float baseGridX = floor(localLookPos.x / gridCellSize) * gridCellSize + gridCellSize * 0.5f;
+        float baseGridY = floor(localLookPos.y / gridCellSize) * gridCellSize + gridCellSize * 0.5f;
+        float baseGridZ = floor(localLookPos.z / gridCellSize) * gridCellSize + gridCellSize * 0.5f;
+
+        glm::vec3 gridOffset = glm::vec3(gridCellX * gridCellSize, 0.0f, gridCellZ * gridCellSize);
+
+        // Combine base grid and offset in local space
+        glm::vec3 localGridPos = glm::vec3(baseGridX + gridOffset.x, baseGridY, baseGridZ + gridOffset.z);
+
+        // Transform back to world space with forward full rotation
+        glm::mat4 rotationMat = glm::mat4(1.0f);
+        rotationMat = glm::rotate(rotationMat, glm::radians(editorBlockPitch), glm::vec3(1.0f, 0.0f, 0.0f));
+        rotationMat = glm::rotate(rotationMat, glm::radians(editorBlockRotation), glm::vec3(0.0f, 1.0f, 0.0f));
+        editorGridPos = glm::vec3(rotationMat * glm::vec4(localGridPos, 1.0f));
     } else {
         // Free mode: use smooth sideways offset
         float moveStep = 0.5f;
@@ -262,7 +345,6 @@ void Game::processEditorInput() {
         if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS && !inp.leftArrowPressed) {
             inp.leftArrowPressed = true;
             inp.sidewaysOffset -= moveStep;
-            std::cout << "Placement left: " << inp.sidewaysOffset << std::endl;
         } else if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_RELEASE) {
             inp.leftArrowPressed = false;
         }
@@ -270,7 +352,6 @@ void Game::processEditorInput() {
         if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS && !inp.rightArrowPressed) {
             inp.rightArrowPressed = true;
             inp.sidewaysOffset += moveStep;
-            std::cout << "Placement right: " << inp.sidewaysOffset << std::endl;
         } else if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_RELEASE) {
             inp.rightArrowPressed = false;
         }
@@ -317,16 +398,44 @@ void Game::processEditorInput() {
         editorGridPos = snapPos;
     }
 
-    // Texture selection (keys 1-8)
-    for (int i = 0; i < 8; i++) {
+    // Texture selection (keys 1-4)
+    for (int i = 0; i < 4; i++) {
         int key = GLFW_KEY_1 + i;
         if (glfwGetKey(window, key) == GLFW_PRESS && !inp.texKeyPressed[i]) {
             inp.texKeyPressed[i] = true;
             editorSelectedTexture = i;
-            std::cout << "Selected texture: " << i << std::endl;
         } else if (glfwGetKey(window, key) == GLFW_RELEASE) {
             inp.texKeyPressed[i] = false;
         }
+    }
+
+    // Rotation control (T key - cycles through 9 steps for 90°: 0, 10, 20, 30, 40, 50, 60, 70, 80, 90, etc.)
+    // Shift+T = rotate backward, Ctrl+T = pitch down, Shift+Ctrl+T = pitch up
+    bool shiftPressed = glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
+    bool ctrlPressed = glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS;
+
+    if (glfwGetKey(window, GLFW_KEY_T) == GLFW_PRESS && !inp.texKeyPressed[9]) {
+        inp.texKeyPressed[9] = true;
+
+        if (ctrlPressed && shiftPressed) {
+            // Shift+Ctrl+T = pitch up
+            editorBlockPitch += 10.0f;
+            if (editorBlockPitch > 90.0f) editorBlockPitch = 90.0f;
+        } else if (ctrlPressed) {
+            // Ctrl+T = pitch down
+            editorBlockPitch -= 10.0f;
+            if (editorBlockPitch < -90.0f) editorBlockPitch = -90.0f;
+        } else if (shiftPressed) {
+            // Shift+T = rotate backward
+            editorBlockRotation -= 10.0f;
+            if (editorBlockRotation < 0.0f) editorBlockRotation = 350.0f;
+        } else {
+            // T = rotate forward
+            editorBlockRotation += 10.0f;
+            if (editorBlockRotation >= 360.0f) editorBlockRotation = 0.0f;
+        }
+    } else if (glfwGetKey(window, GLFW_KEY_T) == GLFW_RELEASE) {
+        inp.texKeyPressed[9] = false;
     }
 
     // Grid toggle
@@ -335,6 +444,28 @@ void Game::processEditorInput() {
         editorShowGrid = !editorShowGrid;
     } else if (glfwGetKey(window, GLFW_KEY_G) == GLFW_RELEASE) {
         inp.gPressed = false;
+    }
+
+    // Mode toggle (M key)
+    if (glfwGetKey(window, GLFW_KEY_M) == GLFW_PRESS && !inp.mPressed) {
+        inp.mPressed = true;
+        editorMode = (editorMode == MODE_BLOCK) ? MODE_SHAPE : MODE_BLOCK;
+        // Reset shape creation when switching modes
+        if (editorMode == MODE_BLOCK) {
+            shapeCreation.selectedPoints = 0;
+            shapeCreation.nodes.clear();
+        }
+    } else if (glfwGetKey(window, GLFW_KEY_M) == GLFW_RELEASE) {
+        inp.mPressed = false;
+    }
+
+    // Reset shape creation (R key in SHAPE mode) - simplified
+    if (editorMode == MODE_SHAPE) {
+        if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS && !inp.shapeResetPressed) {
+            inp.shapeResetPressed = true;
+        } else if (glfwGetKey(window, GLFW_KEY_R) == GLFW_RELEASE) {
+            inp.shapeResetPressed = false;
+        }
     }
 
     // Noclip toggle
@@ -357,7 +488,6 @@ void Game::processEditorInput() {
     if (glfwGetKey(window, GLFW_KEY_F1) == GLFW_PRESS && !inp.f1Pressed) {
         inp.f1Pressed = true;
         editorSpawnMode = SPAWN_DEATHMATCH;
-        std::cout << "Editor mode: Deathmatch Spawn Point" << std::endl;
     } else if (glfwGetKey(window, GLFW_KEY_F1) == GLFW_RELEASE) {
         inp.f1Pressed = false;
     }
@@ -365,7 +495,6 @@ void Game::processEditorInput() {
     if (glfwGetKey(window, GLFW_KEY_F2) == GLFW_PRESS && !inp.f2Pressed) {
         inp.f2Pressed = true;
         editorSpawnMode = SPAWN_TEAM_A;
-        std::cout << "Editor mode: Team A (Red) Spawn Point" << std::endl;
     } else if (glfwGetKey(window, GLFW_KEY_F2) == GLFW_RELEASE) {
         inp.f2Pressed = false;
     }
@@ -373,7 +502,6 @@ void Game::processEditorInput() {
     if (glfwGetKey(window, GLFW_KEY_F3) == GLFW_PRESS && !inp.f3Pressed) {
         inp.f3Pressed = true;
         editorSpawnMode = SPAWN_TEAM_B;
-        std::cout << "Editor mode: Team B (Blue) Spawn Point" << std::endl;
     } else if (glfwGetKey(window, GLFW_KEY_F3) == GLFW_RELEASE) {
         inp.f3Pressed = false;
     }
@@ -381,7 +509,6 @@ void Game::processEditorInput() {
     if (glfwGetKey(window, GLFW_KEY_F4) == GLFW_PRESS && !inp.f4Pressed) {
         inp.f4Pressed = true;
         editorSpawnMode = SPAWN_NONE;
-        std::cout << "Editor mode: Block Placement" << std::endl;
     } else if (glfwGetKey(window, GLFW_KEY_F4) == GLFW_RELEASE) {
         inp.f4Pressed = false;
     }
@@ -405,46 +532,49 @@ void Game::processEditorInput() {
 
                 if (blockMin.x < -dims.x * 0.5f || blockMax.x > dims.x * 0.5f) {
                     newWidth = glm::max(dims.x, glm::abs(blockMax.x) * 2.0f + 2.0f);
+                    newWidth = glm::min(newWidth, 1000.0f); // Clamp to reasonable max
                     needsExpansion = true;
                 }
                 if (blockMin.y < -dims.y * 0.5f || blockMax.y > dims.y * 0.5f) {
                     newHeight = glm::max(dims.y, glm::abs(blockMax.y) * 2.0f + 2.0f);
+                    newHeight = glm::min(newHeight, 1000.0f); // Clamp to reasonable max
                     needsExpansion = true;
                 }
                 if (blockMin.z < -dims.z * 0.5f || blockMax.z > dims.z * 0.5f) {
                     newDepth = glm::max(dims.z, glm::abs(blockMax.z) * 2.0f + 2.0f);
+                    newDepth = glm::min(newDepth, 1000.0f); // Clamp to reasonable max
                     needsExpansion = true;
                 }
 
                 if (needsExpansion) {
                     currentMap->setDimensions(glm::vec3(newWidth, newHeight, newDepth));
-                    std::cout << "Map expanded to dimensions: " << newWidth << "x" << newHeight << "x" << newDepth << std::endl;
                 }
 
                 // Handle spawn point placement or block placement
                 if (editorSpawnMode == SPAWN_DEATHMATCH) {
                     currentMap->addSpawnPoint(SpawnPoint(editorGridPos, camera.Yaw, camera.Pitch));
-                    std::cout << "Added DM spawn point at (" << editorGridPos.x << ", " << editorGridPos.y << ", " << editorGridPos.z
-                              << ") yaw=" << camera.Yaw << " pitch=" << camera.Pitch << std::endl;
                 } else if (editorSpawnMode == SPAWN_TEAM_A) {
                     currentMap->addTeamSpawn(TeamSpawn(editorGridPos, 0, camera.Yaw, camera.Pitch));
-                    std::cout << "Added Team A (Red) spawn point at (" << editorGridPos.x << ", " << editorGridPos.y << ", " << editorGridPos.z
-                              << ") yaw=" << camera.Yaw << " pitch=" << camera.Pitch << std::endl;
                 } else if (editorSpawnMode == SPAWN_TEAM_B) {
                     currentMap->addTeamSpawn(TeamSpawn(editorGridPos, 1, camera.Yaw, camera.Pitch));
-                    std::cout << "Added Team B (Blue) spawn point at (" << editorGridPos.x << ", " << editorGridPos.y << ", " << editorGridPos.z
-                              << ") yaw=" << camera.Yaw << " pitch=" << camera.Pitch << std::endl;
                 } else {
-                    // Normal block placement
-                    MapBlock block;
-                    block.position  = editorGridPos;
-                    block.scale     = editorBlockSize;
-                    block.color     = glm::vec3(1.0f, 1.0f, 1.0f);
-                    block.textureId = editorSelectedTexture;
-                    block.solid     = true;
-                    currentMap->addBlock(block);
-                    std::cout << "Added block at " << editorGridPos.x << "," << editorGridPos.y << "," << editorGridPos.z
-                              << " size " << editorBlockSize.x << "x" << editorBlockSize.y << "x" << editorBlockSize.z << std::endl;
+                    // Normal block placement (only in BLOCK mode)
+                    if (editorMode == MODE_BLOCK) {
+                        // Remove any existing block at the same position with same size and orientation
+                        currentMap->deleteBlockExact(editorGridPos, editorBlockSize, editorBlockRotation, editorBlockPitch, 0.05f);
+
+                        MapBlock block;
+                        block.position  = editorGridPos;
+                        block.scale     = editorBlockSize;
+                        block.color     = glm::vec3(1.0f, 1.0f, 1.0f);
+                        block.textureId = editorSelectedTexture;
+                        block.solid     = true;
+                        block.rotation  = editorBlockRotation;
+                        block.pitch     = editorBlockPitch;
+                        currentMap->addBlock(block);
+                    } else {
+                        // SHAPE mode - simplified (no action)
+                    }
                 }
             }
         }
@@ -452,7 +582,7 @@ void Game::processEditorInput() {
 
     // Right mouse button:
     //   Plain RMB       = replace texture of aimed block with current texture
-    //   ALT + RMB       = delete aimed block entirely
+    //   ALT + RMB       = delete aimed block entirely or spawn point
     if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS && !inp.rmbPressed) {
         inp.rmbPressed = true;
         if (currentMap) {
@@ -463,20 +593,45 @@ void Game::processEditorInput() {
             bool altHeld  = glfwGetKey(window, GLFW_KEY_LEFT_ALT)  == GLFW_PRESS ||
                             glfwGetKey(window, GLFW_KEY_RIGHT_ALT) == GLFW_PRESS;
 
+            bool hitSomething = false;
+
+            // Check for blocks first
             for (float t = 0; t < maxDist; t += step) {
                 glm::vec3 point = rayOrigin + rayDir * t;
                 if (currentMap->findBlockAt(point, 0.15f) >= 0) {
                     if (altHeld) {
-                        if (currentMap->deleteBlockAt(point, 0.15f)) {
-                            std::cout << "Deleted block at distance " << t << std::endl;
-                        }
+                        currentMap->deleteBlockAt(point, 0.15f);
                     } else {
-                        if (currentMap->replaceTextureAt(point, editorSelectedTexture)) {
-                            std::cout << "Replaced texture -> " << editorSelectedTexture
-                                      << " at distance " << t << std::endl;
+                        currentMap->replaceTextureAt(point, editorSelectedTexture);
+                    }
+                    hitSomething = true;
+                    break;
+                }
+            }
+
+            // If ALT held and no block hit, check for spawn points
+            if (altHeld && !hitSomething) {
+                // Check deathmatch spawn points
+                const auto& spawns = currentMap->getSpawnPoints();
+                for (size_t i = 0; i < spawns.size(); i++) {
+                    float dist = glm::length(spawns[i].position - rayOrigin);
+                    if (dist < 2.0f) {
+                        currentMap->removeSpawnPoint(i);
+                        hitSomething = true;
+                        break;
+                    }
+                }
+
+                // Check team spawn points
+                if (!hitSomething) {
+                    const auto& teamSpawns = currentMap->getTeamSpawns();
+                    for (size_t i = 0; i < teamSpawns.size(); i++) {
+                        float dist = glm::length(teamSpawns[i].position - rayOrigin);
+                        if (dist < 2.0f) {
+                            currentMap->removeTeamSpawn(i);
+                            break;
                         }
                     }
-                    break;
                 }
             }
         }
@@ -497,7 +652,6 @@ void Game::processEditorInput() {
             editorBlockSize += glm::vec3(0.5f);
             editorBlockSize  = glm::min(editorBlockSize, glm::vec3(20.0f));
         }
-        std::cout << "Block size: " << editorBlockSize.x << "x" << editorBlockSize.y << "x" << editorBlockSize.z << std::endl;
     } else if (glfwGetKey(window, GLFW_KEY_E) == GLFW_RELEASE) {
         inp.ePressed = false;
     }
@@ -515,7 +669,6 @@ void Game::processEditorInput() {
             editorBlockSize -= glm::vec3(0.5f);
             editorBlockSize  = glm::max(editorBlockSize, glm::vec3(0.5f));
         }
-        std::cout << "Block size: " << editorBlockSize.x << "x" << editorBlockSize.y << "x" << editorBlockSize.z << std::endl;
     } else if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_RELEASE) {
         inp.qPressed = false;
     }
@@ -524,7 +677,6 @@ void Game::processEditorInput() {
     if (glfwGetKey(window, GLFW_KEY_LEFT_BRACKET) == GLFW_PRESS && !inp.lbracketPressed) {
         inp.lbracketPressed = true;
         editorGridSize = glm::max(editorGridSize - 0.5f, 0.5f);
-        std::cout << "Grid size: " << editorGridSize << std::endl;
     } else if (glfwGetKey(window, GLFW_KEY_LEFT_BRACKET) == GLFW_RELEASE) {
         inp.lbracketPressed = false;
     }
@@ -532,7 +684,6 @@ void Game::processEditorInput() {
     if (glfwGetKey(window, GLFW_KEY_RIGHT_BRACKET) == GLFW_PRESS && !inp.rbracketPressed) {
         inp.rbracketPressed = true;
         editorGridSize = glm::min(editorGridSize + 0.5f, 5.0f);
-        std::cout << "Grid size: " << editorGridSize << std::endl;
     } else if (glfwGetKey(window, GLFW_KEY_RIGHT_BRACKET) == GLFW_RELEASE) {
         inp.rbracketPressed = false;
     }
@@ -586,7 +737,9 @@ void Game::saveMap(const std::string& filename) {
              << (block.solid ? "1" : "0") << " "
              << block.color.r    << " "
              << block.color.g    << " "
-             << block.color.b    << "\n";
+             << block.color.b    << " "
+             << block.rotation   << " "
+             << block.pitch      << "\n";
     }
 
     // Write deathmatch spawn points
@@ -619,6 +772,4 @@ void Game::saveMap(const std::string& filename) {
     }
 
     file.close();
-    std::cout << "Map saved to " << filepath << " with " << blocks.size() << " blocks, "
-              << spawns.size() << " DM spawns, " << teamSpawns.size() << " team spawns" << std::endl;
 }

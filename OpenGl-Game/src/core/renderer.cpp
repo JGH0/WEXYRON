@@ -7,6 +7,7 @@
 
 #include "renderer.hpp"
 #include <iostream>
+#include <algorithm>
 #include <glm/gtc/type_ptr.hpp>
 
 void Renderer::setViewport(int x, int y, int width, int height) {
@@ -172,6 +173,8 @@ void Renderer::drawCube(const glm::mat4& model, const glm::vec3& color) {
     shader->setMat4("projection", glm::value_ptr(currentProjection));
     // Set the object color uniform
     glUniform3f(glGetUniformLocation(shader->ID, "objectColor"), color.r, color.g, color.b);
+    // Set alpha to 1.0 for opaque objects
+    glUniform1f(glGetUniformLocation(shader->ID, "alpha"), 1.0f);
     glBindVertexArray(cubeVAO);
     glDrawArrays(GL_TRIANGLES, 0, 36);
     glBindVertexArray(0);
@@ -229,13 +232,18 @@ void Renderer::renderMap(Map* map) {
     for (const auto& block : blocks) {
         glm::mat4 model = glm::mat4(1.0f);
         model = glm::translate(model, block.position);
+
+        // Apply rotation (pitch first, then yaw)
+        model = glm::rotate(model, glm::radians(block.pitch), glm::vec3(1.0f, 0.0f, 0.0f));
+        model = glm::rotate(model, glm::radians(block.rotation), glm::vec3(0.0f, 1.0f, 0.0f));
+
+        // Apply scale
         model = glm::scale(model, block.scale);
 
         Texture* texture = map->getTexture(block.textureId);
         if (texture) {
             drawTexturedCube(model, texture);
         } else {
-            // Use the block's defined color
             drawCube(model, block.color);
         }
     }
@@ -269,17 +277,20 @@ void Renderer::renderSpawnPoints(Map* map, bool showSpawnPoints) {
 }
 
 void Renderer::drawColoredQuad(const glm::mat4& model, const glm::vec3& color) {
-    // Use to colored shader for 2D quad rendering
+    // Use colored shader for 2D quad rendering
     shader->use();
     shader->setMat4("model", glm::value_ptr(model));
     shader->setMat4("view", glm::value_ptr(currentView));
     shader->setMat4("projection", glm::value_ptr(currentProjection));
-    shader->setMat4("objectColor", glm::value_ptr(glm::mat4(1.0f))); // Use a dummy matrix for color
-    
-    // Set the color uniform directly (we need to add this to shader or use existing method)
-    // For now, let's use the existing drawCube method with a very thin cube
-    glm::mat4 quadModel = glm::scale(model, glm::vec3(1.0f, 1.0f, 0.001f)); // Make it very thin
-    drawCube(quadModel, color);
+    // Set the object color uniform directly
+    glUniform3f(glGetUniformLocation(shader->ID, "objectColor"), color.r, color.g, color.b);
+    // Set alpha from color (use max component as alpha for simplicity)
+    float alpha = std::max({color.r, color.g, color.b});
+    glUniform1f(glGetUniformLocation(shader->ID, "alpha"), alpha);
+
+    glBindVertexArray(cubeVAO);
+    glDrawArrays(GL_TRIANGLES, 0, 36);
+    glBindVertexArray(0);
 }
 
 void Renderer::drawText(const std::string& text, float x, float y, float scale) {

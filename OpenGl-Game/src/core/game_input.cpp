@@ -88,6 +88,14 @@ void Game::processInput(float deltaTime) {
                     inp.resetNavKeys(); menuJustEntered = true;
                     gameState = MAP_EDITOR;
                     editorNoclip = true;
+                    editorMode = MODE_BLOCK; // Ensure we start in BLOCK mode
+                    editorSpawnMode = SPAWN_NONE; // Ensure we start in block placement mode
+                    // Initialize camera position for editor
+                    camera.Position = glm::vec3(0.0f, 5.0f, 10.0f);
+                    camera.Yaw = -90.0f;
+                    camera.Pitch = 0.0f;
+                    camera.updateCameraVectors();
+                    editorGridPos = camera.Position + camera.Front * 5.0f;
                     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
                     break;
                 case 3: // Connect to Server
@@ -200,7 +208,8 @@ void Game::processGameInput(float deltaTime) {
     if (glfwGetKey(window, GLFW_KEY_4) == GLFW_PRESS) {
         switchWeapon(4);
     }
-    if (glfwGetKey(window, GLFW_KEY_G) == GLFW_PRESS) {
+    if (glfwGetKey(window, GLFW_KEY_G) == GLFW_PRESS && !inp.gameplayGPressed) {
+        inp.gameplayGPressed = true;
         // Toggle between grenade and flashbang
         if (currentWeapon == GRENADE) {
             currentWeapon = FLASHBANG;
@@ -215,5 +224,7 @@ void Game::processGameInput(float deltaTime) {
             currentWeaponInstance = grenade;
             std::cout << "Switched to Grenade! Grenades left: " << (infiniteAmmoMode ? "∞" : std::to_string(grenadeCount)) << std::endl;
         }
+    } else if (glfwGetKey(window, GLFW_KEY_G) == GLFW_RELEASE) {
+        inp.gameplayGPressed = false;
     }
 }
