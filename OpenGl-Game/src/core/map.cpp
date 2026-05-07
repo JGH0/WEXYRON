@@ -128,10 +128,21 @@ bool Map::parseMapData(const std::string& data) {
             lineStream >> x >> y >> z >> teamId >> yaw >> pitch;
             addTeamSpawn(TeamSpawn(glm::vec3(x, y, z), teamId, yaw, pitch));
         }
+        else if (command == "bomb_site") {
+            // Bomb site: bomb_site x y z label
+            float x, y, z;
+            std::string labelStr;
+            lineStream >> x >> y >> z >> labelStr;
+            char label = 'A';
+            if (!labelStr.empty()) label = toupper(labelStr[0]);
+            if (label != 'A' && label != 'B') label = 'A';
+            addBombSite(BombSiteData(glm::vec3(x, y, z), label));
+        }
     }
 
     std::cout << "Loaded map: " << mapName << " with " << blocks.size() << " blocks, "
-              << spawnPoints.size() << " DM spawns, " << teamSpawns.size() << " team spawns" << std::endl;
+              << spawnPoints.size() << " DM spawns, " << teamSpawns.size() << " team spawns, "
+              << bombSites.size() << " bomb sites" << std::endl;
     return true;
 }
 
@@ -375,6 +386,20 @@ TeamSpawn Map::getRandomTeamSpawn(int teamId) const {
 
     int index = rand() % teamSpawnsForTeam.size();
     return *teamSpawnsForTeam[index];
+}
+
+void Map::addBombSite(const BombSiteData& site) {
+    bombSites.push_back(site);
+}
+
+void Map::removeBombSite(size_t index) {
+    if (index < bombSites.size()) {
+        bombSites.erase(bombSites.begin() + index);
+    }
+}
+
+const std::vector<BombSiteData>& Map::getBombSites() const {
+    return bombSites;
 }
 
 void Map::generateTestMap() {

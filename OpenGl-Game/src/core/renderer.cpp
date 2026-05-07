@@ -252,26 +252,98 @@ void Renderer::renderMap(Map* map) {
 void Renderer::renderSpawnPoints(Map* map, bool showSpawnPoints) {
     if (!map || !showSpawnPoints) return;
 
-    // Render deathmatch spawn points as yellow cubes
+    // Render deathmatch spawn points as yellow cubes with direction indicator
     const auto& spawns = map->getSpawnPoints();
     for (const auto& spawn : spawns) {
+        // Main body
         glm::mat4 model = glm::mat4(1.0f);
         model = glm::translate(model, spawn.position);
         model = glm::scale(model, glm::vec3(0.5f, 0.5f, 0.5f));
         drawCube(model, glm::vec3(1.0f, 1.0f, 0.0f)); // Yellow
+        
+        // Direction arrow (small cylinder pointing in yaw direction)
+        float dirRad = glm::radians(spawn.yaw);
+        glm::mat4 arrow = glm::mat4(1.0f);
+        arrow = glm::translate(arrow, spawn.position + glm::vec3(sin(dirRad) * 0.5f, 0.25f, cos(dirRad) * 0.5f));
+        arrow = glm::scale(arrow, glm::vec3(0.15f, 0.15f, 0.15f));
+        drawCube(arrow, glm::vec3(1.0f, 0.8f, 0.0f)); // Brighter yellow
     }
 
-    // Render team spawn points
+    // Render team spawn points with team-colored cubes + arrow
     const auto& teamSpawns = map->getTeamSpawns();
     for (const auto& spawn : teamSpawns) {
+        glm::vec3 teamColor = (spawn.teamId == 0)
+            ? glm::vec3(1.0f, 0.0f, 0.0f)   // Red for Team A
+            : glm::vec3(0.0f, 0.0f, 1.0f);   // Blue for Team B
+        
+        // Main body
         glm::mat4 model = glm::mat4(1.0f);
         model = glm::translate(model, spawn.position);
         model = glm::scale(model, glm::vec3(0.5f, 0.5f, 0.5f));
+        drawCube(model, teamColor);
+        
+        // Direction arrow
+        float dirRad = glm::radians(spawn.yaw);
+        glm::mat4 arrow = glm::mat4(1.0f);
+        arrow = glm::translate(arrow, spawn.position + glm::vec3(sin(dirRad) * 0.5f, 0.25f, cos(dirRad) * 0.5f));
+        arrow = glm::scale(arrow, glm::vec3(0.15f, 0.15f, 0.15f));
+        drawCube(arrow, teamColor * 1.3f); // Brighter
+    }
 
-        if (spawn.teamId == 0) {
-            drawCube(model, glm::vec3(1.0f, 0.0f, 0.0f)); // Red for Team A
-        } else {
-            drawCube(model, glm::vec3(0.0f, 0.0f, 1.0f)); // Blue for Team B
+    // Render bomb sites
+    const auto& bombSites = map->getBombSites();
+    for (const auto& site : bombSites) {
+        if (!site.active) continue;
+        glm::vec3 color = (site.label == 'A')
+            ? glm::vec3(1.0f, 0.85f, 0.0f)  // Gold for A
+            : glm::vec3(1.0f, 0.5f, 0.0f);   // Orange for B
+
+        // Ground marker
+        glm::mat4 ground = glm::mat4(1.0f);
+        ground = glm::translate(ground, site.position + glm::vec3(0.0f, 0.1f, 0.0f));
+        ground = glm::scale(ground, glm::vec3(1.5f, 0.2f, 1.5f));
+        drawCube(ground, color);
+
+        // Tall pillar
+        for (int h = 1; h <= 4; h++) {
+            glm::mat4 pillar = glm::mat4(1.0f);
+            pillar = glm::translate(pillar, site.position + glm::vec3(0.0f, h * 0.8f + 0.2f, 0.0f));
+            pillar = glm::scale(pillar, glm::vec3(0.4f, 0.6f, 0.4f));
+            float fade = 1.0f - (h - 1) * 0.15f;
+            drawCube(pillar, color * fade);
+        }
+
+        // Diamond/pyramid top marker (distinct from spawn cubes)
+        // Bottom of diamond
+        glm::mat4 diamondBase = glm::mat4(1.0f);
+        diamondBase = glm::translate(diamondBase, site.position + glm::vec3(0.0f, 4.6f, 0.0f));
+        diamondBase = glm::scale(diamondBase, glm::vec3(0.8f, 0.2f, 0.8f));
+        drawCube(diamondBase, color);
+        
+        // Middle of diamond
+        glm::mat4 diamondMid = glm::mat4(1.0f);
+        diamondMid = glm::translate(diamondMid, site.position + glm::vec3(0.0f, 5.2f, 0.0f));
+        diamondMid = glm::scale(diamondMid, glm::vec3(0.5f, 0.2f, 0.5f));
+        drawCube(diamondMid, color * 0.9f);
+        
+        // Top point of diamond
+        glm::mat4 diamondTop = glm::mat4(1.0f);
+        diamondTop = glm::translate(diamondTop, site.position + glm::vec3(0.0f, 5.6f, 0.0f));
+        diamondTop = glm::scale(diamondTop, glm::vec3(0.25f, 0.2f, 0.25f));
+        drawCube(diamondTop, color * 0.8f);
+        
+        // Site label ring (horizontal ring around the pillar)
+        for (int r = 0; r < 3; r++) {
+            float angleOffset = r * 2.09f; // 120 degrees apart
+            for (int side = 0; side < 4; side++) {
+                float angle = angleOffset + side * 1.57f;
+                glm::mat4 ring = glm::mat4(1.0f);
+                ring = glm::translate(ring, site.position + glm::vec3(
+                    cos(angle) * 0.6f, 3.0f + r * 1.0f, sin(angle) * 0.6f
+                ));
+                ring = glm::scale(ring, glm::vec3(0.1f, 0.1f, 0.1f));
+                drawCube(ring, color);
+            }
         }
     }
 }

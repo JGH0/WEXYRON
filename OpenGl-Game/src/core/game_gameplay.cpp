@@ -6,6 +6,7 @@
 #include <iostream>
 #include <cmath>
 #include <limits>
+#include <GLFW/glfw3.h>
 
 void Game::updatePlayerPhysics(float deltaTime) {
     // AUTOMATIC UNSTUCK: Check if player is inside a block and move them out
@@ -25,7 +26,13 @@ void Game::updatePlayerPhysics(float deltaTime) {
     if (playerPos.y < -20.0f && !isDead) {
         isDead = true;
         playerHealth = 0.0f;
-        gameState = DEAD;
+        
+        if (bombDefusalMode) {
+            spectatorMode = true;
+            std::cout << "Player died! Entering spectator mode." << std::endl;
+        } else {
+            gameState = DEAD;
+        }
         std::cout << "Player fell out of the world and died!" << std::endl;
         return;
     }
@@ -629,7 +636,13 @@ void Game::createSimpleExplosion(glm::vec3 position) {
         if (playerHealth <= 0.0f && !isDead) {
             playerHealth = 0.0f;
             isDead = true;
-            gameState = DEAD;
+            
+            if (bombDefusalMode) {
+                spectatorMode = true;
+                std::cout << "Player died! Entering spectator mode." << std::endl;
+            } else {
+                gameState = DEAD;
+            }
             std::cout << "Player defeated by explosion!" << std::endl;
         }
     }
@@ -1011,7 +1024,13 @@ void Game::checkEnemyPlayerCollision(float deltaTime) {
                 if (playerHealth <= 0.0f && !isDead) {
                     playerHealth = 0.0f;
                     isDead = true;
-                    gameState = DEAD;
+                    
+                    if (bombDefusalMode) {
+                        spectatorMode = true;
+                        std::cout << "Player died! Entering spectator mode." << std::endl;
+                    } else {
+                        gameState = DEAD;
+                    }
                     std::cout << "Player defeated!" << std::endl;
                 }
                 break; // Only one enemy can damage per frame
@@ -1087,7 +1106,13 @@ void Game::damagePlayer(float damage) {
     
     if (playerHealth <= 0.0f) {
         isDead = true;
-        gameState = DEAD;
+        
+        if (bombDefusalMode) {
+            spectatorMode = true;
+            std::cout << "Player died! Entering spectator mode." << std::endl;
+        } else {
+            gameState = DEAD;
+        }
         std::cout << "Player defeated!" << std::endl;
     }
 }
@@ -1107,7 +1132,241 @@ void Game::checkPlayerPlayerCollision() {
         if (distance < 1.0f) { // Collision radius of 1 unit
             // Apply collision damage (melee damage)
             damagePlayer(15.0f); // 15 damage for player collision
-            break; // Only one collision per frame
         }
+    }
+}
+
+// Bomb Defusal Mode Functions
+void Game::updateBomb(float deltaTime) {
+    if (!bombDefusalMode) return;
+    
+    // Update bomb timer if planted
+    if (bomb.planted && !bomb.defused) {
+        bomb.plantTime += deltaTime;
+        
+        // Check if bomb exploded
+        if (bomb.plantTime >= bomb.explodeTime) {
+            std::cout << "BOMB EXPLODED!" << std::endl;
+            bomb.active = false;
+            bomb.planted = false; // Prevent re-triggering
+            endRound(bomb.plantingTeam); // Planting team wins
+        }
+    }
+    
+    // Update planting progress
+    if (isPlanting) {
+        plantProgress += deltaTime;
+        if (plantProgress >= 3.0f) { // 3 seconds to plant
+            plantProgress = 0.0f;
+            isPlanting = false;
+            
+            // Plant the bomb
+            int siteIndex = getNearbyBombSite();
+            if (siteIndex >= 0) {
+                bomb.position = bombSites[siteIndex].position;
+                bomb.planted = true;
+                bomb.active = true;
+                bomb.plantTime = 0.0f;
+                bomb.plantingTeam = playerTeam;
+                bomb.defused = false;
+                std::cout << "BOMB PLANTED by Team " << playerTeam << "!" << std::endl;
+            }
+        }
+    }
+    
+    // Update defusing progress
+    if (isDefusing) {
+        defuseProgress += deltaTime;
+        if (defuseProgress >= 4.0f) { // 4 seconds to defuse
+            defuseProgress = 0.0f;
+            isDefusing = false;
+            
+            // Defuse the bomb
+            if (bomb.planted && !bomb.defused) {
+                bomb.defused = true;
+                bomb.active = false;
+                std::cout << "BOMB DEFUSED!" << std::endl;
+                endRound(1 - bomb.plantingTeam); // Defusing team wins
+            }
+        }
+    }
+}
+
+void Game::startPlanting() {
+    if (!bombDefusalMode || bomb.planted || isPlanting) return;
+    
+    // Only attacking team can plant
+    if (playerTeam != attackingTeam) {
+        std::cout << "Only attacking team can plant the bomb!" << std::endl;
+        return;
+    }
+    
+    int siteIndex = getNearbyBombSite();
+    if (siteIndex >= 0) {
+        isPlanting = true;
+        plantProgress = 0.0f;
+        std::cout << "Started planting bomb..." << std::endl;
+    }
+}
+
+void Game::startDefusing() {
+    if (!bombDefusalMode || !bomb.planted || bomb.defused || isDefusing) return;
+    
+    // Only defending team can defuse
+    if (playerTeam == bomb.plantingTeam) {
+        std::cout << "Cannot defuse your own bomb!" << std::endl;
+        return;
+    }
+    
+    if (isNearBomb()) {
+        isDefusing = true;
+        defuseProgress = 0.0f;
+        std::cout << "Started defusing bomb..." << std::endl;
+    }
+}
+
+int Game::getNearbyBombSite() {
+    for (int i = 0; i < activeBombSites; i++) {
+        if (!bombSites[i].active) continue;
+        
+        float distance = glm::length(playerPos - bombSites[i].position);
+        if (distance < 2.0f) { // Within 2 units of bomb site
+            return i;
+        }
+    }
+    return -1;
+}
+
+bool Game::isNearBomb() {
+    if (!bomb.planted || bomb.defused) return false;
+    
+    float distance = glm::length(playerPos - bomb.position);
+    return distance < 2.0f; // Within 2 units of bomb
+}
+
+void Game::endRound(int winner) {
+    // Prevent re-entry if round already ended
+    if (roundEndTimer > 0.0f) return;
+    
+    roundActive = false;
+    roundEndTimer = 4.0f; // 4 second delay before next round
+    
+    if (winner == 0) {
+        std::cout << "ROUND OVER: Team A (Red) wins!" << std::endl;
+    } else if (winner == 1) {
+        std::cout << "ROUND OVER: Team B (Blue) wins!" << std::endl;
+    } else {
+        std::cout << "ROUND OVER: Draw!" << std::endl;
+    }
+    
+    // Swap attacking team for next round
+    attackingTeam = 1 - attackingTeam;
+    
+    // Create a big explosion at the bomb position if bomb was planted
+    if (bomb.planted || bomb.active) {
+        // Create a massive explosion
+        for (int i = 0; i < MAX_EXPLOSIONS; i++) {
+            if (!explosions[i].active) {
+                explosions[i].position = bomb.position;
+                explosions[i].scale = 0.5f;
+                explosions[i].maxScale = 8.0f;  // Huge explosion!
+                explosions[i].lifetime = 2.0f;  // 2 seconds duration
+                explosions[i].active = true;
+                explosions[i].color = glm::vec3(1.0f, 0.6f, 0.0f);  // Orange-red
+                break;
+            }
+        }
+        // Create a second overlapping explosion for more effect
+        for (int i = 0; i < MAX_EXPLOSIONS; i++) {
+            if (!explosions[i].active) {
+                explosions[i].position = bomb.position + glm::vec3(1.0f, 0.0f, 1.0f);
+                explosions[i].scale = 0.3f;
+                explosions[i].maxScale = 6.0f;
+                explosions[i].lifetime = 1.5f;
+                explosions[i].active = true;
+                explosions[i].color = glm::vec3(1.0f, 0.2f, 0.0f);  // Red
+                break;
+            }
+        }
+        // Third explosion for dramatic effect
+        for (int i = 0; i < MAX_EXPLOSIONS; i++) {
+            if (!explosions[i].active) {
+                explosions[i].position = bomb.position + glm::vec3(-1.0f, 0.5f, -0.5f);
+                explosions[i].scale = 0.4f;
+                explosions[i].maxScale = 5.0f;
+                explosions[i].lifetime = 1.8f;
+                explosions[i].active = true;
+                explosions[i].color = glm::vec3(1.0f, 0.8f, 0.0f);  // Yellow
+                break;
+            }
+        }
+    }
+    
+    // Also damage/kill the player if near the bomb explosion
+    if (bomb.planted || bomb.active) {
+        float distToBomb = glm::length(playerPos - bomb.position);
+        if (distToBomb < 12.0f) {
+            float damage = (12.0f - distToBomb) / 12.0f * 100.0f;
+            if (damage > 0.0f) {
+                damagePlayer(damage);
+                if (playerHealth <= 0.0f) {
+                    playerHealth = 0.0f;
+                    isDead = true;
+                    if (bombDefusalMode) {
+                        spectatorMode = true;
+                    } else {
+                        gameState = DEAD;
+                    }
+                }
+            }
+        }
+    }
+}
+
+void Game::updateRoundEndTimer(float deltaTime) {
+    if (roundEndTimer > 0.0f) {
+        roundEndTimer -= deltaTime;
+        if (roundEndTimer <= 0.0f) {
+            startRound();
+        }
+    }
+}
+
+void Game::startRound() {
+    roundActive = true;
+    roundTime = 0.0f;
+    teamADeaths = 0;
+    teamBDeaths = 0;
+    
+    // Reset bomb
+    bomb.planted = false;
+    bomb.defused = false;
+    bomb.active = false;
+    bomb.plantTime = 0.0f;
+    
+    // Reset players
+    resetGame();
+    
+    std::cout << "NEW ROUND STARTED! Attacking Team: " << (attackingTeam == 0 ? "Team A (Red)" : "Team B (Blue)") << std::endl;
+}
+
+void Game::updateSpectator() {
+    if (!spectatorMode) return;
+    
+    // Simple free camera for spectator
+    // (In a full implementation, this would cycle through living teammates)
+    float spectatorSpeed = 10.0f;
+    
+    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
+        playerPos += camera.Front * spectatorSpeed * 0.016f;
+    }
+    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
+        playerPos -= camera.Front * spectatorSpeed * 0.016f;
+    }
+    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
+        playerPos -= camera.Right * spectatorSpeed * 0.016f;
+    }
+    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
+        playerPos += camera.Right * spectatorSpeed * 0.016f;
     }
 }

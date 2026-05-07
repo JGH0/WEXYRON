@@ -190,7 +190,13 @@ void Game::disconnectFromServer() {
 }
 
 bool Game::isConnectedToServer() const {
-    return networkClient && networkClient->isConnected();
+    // Belt-and-suspenders: check that networkClient looks like a valid pointer
+    // before dereferencing it (prevents crashes from memory corruption)
+    if (!networkClient) return false;
+    // Sanity check: verify the pointer is in a reasonable address range
+    uintptr_t addr = reinterpret_cast<uintptr_t>(networkClient);
+    if (addr < 0x1000 || addr > 0x7fffffffffff) return false;
+    return networkClient->isConnected();
 }
 
 // ========== LAN DISCOVERY HELPERS (file-scope statics) ==========

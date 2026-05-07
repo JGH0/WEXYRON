@@ -146,6 +146,18 @@ void Game::processGameInput(float deltaTime) {
         inputProcessed = true;
     }
     
+    // Bomb defusal mode - E key for planting/defusing
+    if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) {
+        if (bombDefusalMode) {
+            if (bomb.planted && !bomb.defused) {
+                startDefusing();
+            } else if (!bomb.planted) {
+                startPlanting();
+            }
+        }
+        inputProcessed = true;
+    }
+    
     // Movement using key bindings
     glm::vec3 movement(0.0f);
     float moveSpeed = 5.0f;

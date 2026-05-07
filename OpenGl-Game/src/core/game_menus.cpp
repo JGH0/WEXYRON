@@ -378,7 +378,8 @@ void Game::renderMapSelection() {
     gmBg = glm::scale(gmBg, glm::vec3(menuWidth, menuHeight, 1.0f));
     renderer.drawColoredQuad(gmBg, glm::vec3(0.7f, 0.3f, 0.3f));
 
-    const char* gameModeStr = (currentGameMode == DEATHMATCH) ? "Deathmatch" : "Team vs Team";
+    const char* gameModeStr = (currentGameMode == DEATHMATCH) ? "Deathmatch" : 
+                            (currentGameMode == TEAM_VS_TEAM) ? "Team vs Team" : "Bomb Defusal";
     char gmText[64];
     snprintf(gmText, sizeof(gmText), "Game Mode: %s", gameModeStr);
     {
@@ -452,16 +453,22 @@ void Game::processMapSelectionInput() {
     // Handle LEFT/RIGHT for game mode selection
     if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS && !inp.leftPressed) {
         inp.leftPressed = true;
-        currentGameMode = (currentGameMode == DEATHMATCH) ? TEAM_VS_TEAM : DEATHMATCH;
-        std::cout << "Game Mode: " << (currentGameMode == DEATHMATCH ? "Deathmatch" : "Team vs Team") << std::endl;
+        int newMode = (static_cast<int>(currentGameMode) + 2) % 3; // Cycle backwards
+        currentGameMode = static_cast<GameMode>(newMode);
+        const char* modeName = (currentGameMode == DEATHMATCH) ? "Deathmatch" : 
+                              (currentGameMode == TEAM_VS_TEAM) ? "Team vs Team" : "Bomb Defusal";
+        std::cout << "Game Mode: " << modeName << std::endl;
     } else if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_RELEASE) {
         inp.leftPressed = false;
     }
 
     if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS && !inp.rightPressed) {
         inp.rightPressed = true;
-        currentGameMode = (currentGameMode == DEATHMATCH) ? TEAM_VS_TEAM : DEATHMATCH;
-        std::cout << "Game Mode: " << (currentGameMode == DEATHMATCH ? "Deathmatch" : "Team vs Team") << std::endl;
+        int newMode = (static_cast<int>(currentGameMode) + 1) % 3; // Cycle forwards
+        currentGameMode = static_cast<GameMode>(newMode);
+        const char* modeName = (currentGameMode == DEATHMATCH) ? "Deathmatch" : 
+                              (currentGameMode == TEAM_VS_TEAM) ? "Team vs Team" : "Bomb Defusal";
+        std::cout << "Game Mode: " << modeName << std::endl;
     } else if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_RELEASE) {
         inp.rightPressed = false;
     }
@@ -470,8 +477,9 @@ void Game::processMapSelectionInput() {
     if (glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS && !inp.enterPressed) {
         inp.enterPressed = true;
         if (mapSelection < (int)mapFiles.size()) {
-            std::cout << "Loading " << mapFiles[mapSelection] << " with game mode "
-                      << (currentGameMode == DEATHMATCH ? "Deathmatch" : "Team vs Team") << "..." << std::endl;
+            const char* modeName = (currentGameMode == DEATHMATCH) ? "Deathmatch" : 
+                                  (currentGameMode == TEAM_VS_TEAM) ? "Team vs Team" : "Bomb Defusal";
+            std::cout << "Loading " << mapFiles[mapSelection] << " with game mode " << modeName << "..." << std::endl;
 
             // Notify server of map change if connected
             if (isConnectedToServer() && networkClient) {
@@ -494,10 +502,15 @@ void Game::processMapSelectionInput() {
 
             loadMap(mapFiles[mapSelection]);
             // In Team vs Team mode, assign player to team
-            if (currentGameMode == TEAM_VS_TEAM) {
-                playerTeam = 0; // Team A (Red)
+            if (currentGameMode == TEAM_VS_TEAM || currentGameMode == BOMB_DEFUSAL) {
+                playerTeam = 0; // Team A (Red) by default
             }
             resetGame(); // Spawn at appropriate spawn point
+            
+            // Start round if in bomb defusal mode
+            if (bombDefusalMode) {
+                startRound();
+            }
 
             // Stabilize transition to PLAYING to avoid accidental second-trigger behavior.
             menuJustEntered = true;

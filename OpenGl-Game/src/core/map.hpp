@@ -63,6 +63,21 @@ struct SpawnPoint {
 };
 
 /**
+ * @brief Structure representing a bomb site location (for Bomb Defusal mode)
+ */
+struct BombSiteData {
+    /// Position of the bomb site
+    glm::vec3 position;
+    /// Label: 'A' or 'B'
+    char label;
+    /// Whether this site is active
+    bool active;
+
+    BombSiteData(glm::vec3 pos = glm::vec3(0.0f), char lbl = 'A', bool act = true)
+        : position(pos), label(lbl), active(act) {}
+};
+
+/**
  * @brief Structure representing a team spawn point (for Team vs Team)
  */
 struct TeamSpawn {
@@ -273,6 +288,27 @@ public:
      */
     TeamSpawn getRandomTeamSpawn(int teamId) const;
 
+    /**
+     * @brief Add a bomb site location
+     *
+     * @param site BombSiteData to add
+     */
+    void addBombSite(const BombSiteData& site);
+
+    /**
+     * @brief Remove a bomb site by index
+     *
+     * @param index Index of bomb site to remove
+     */
+    void removeBombSite(size_t index);
+
+    /**
+     * @brief Get all bomb sites
+     *
+     * @return const std::vector<BombSiteData>& Reference to bomb sites vector
+     */
+    const std::vector<BombSiteData>& getBombSites() const;
+
 private:
     /// All blocks in the map
     std::vector<MapBlock> blocks;
@@ -286,6 +322,8 @@ private:
     std::vector<SpawnPoint> spawnPoints;
     /// Team spawn points for Team vs Team mode
     std::vector<TeamSpawn> teamSpawns;
+    /// Bomb sites for Bomb Defusal mode
+    std::vector<BombSiteData> bombSites;
     
     /**
      * @brief Parse map data from string

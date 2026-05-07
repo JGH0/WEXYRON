@@ -78,9 +78,23 @@ void Game::update(float deltaTime) {
             damageEffectTime -= deltaTime;
         }
 
+        // Update bomb in bomb defusal mode
+        updateBomb(deltaTime);
+
+        // Update spectator camera
+        if (spectatorMode) {
+            updateSpectator();
+        }
+
     } else if (gameState == DEAD) {
-        // No updates needed in dead state
+        // Update spectator camera in dead state
+        if (spectatorMode) {
+            updateSpectator();
+        }
     }
+
+    // Update round end timer (delay before next round)
+    updateRoundEndTimer(deltaTime);
 
     // Update explosions (always run)
     updateExplosions(deltaTime);
@@ -112,6 +126,9 @@ void Game::render() {
         if (currentMap) {
             renderer.renderMap(currentMap);
         }
+
+        // Render bomb sites and bomb
+        renderBombSites();
 
         // Render enemies
         renderEnemies();
@@ -186,6 +203,9 @@ void Game::render() {
 
         // Render flashbang effect
         renderFlashbangEffect();
+
+        // Render bomb defusal HUD (team, bomb timer, progress)
+        renderBombDefusalHUD();
 
         glfwSwapBuffers(window);
         glfwPollEvents();

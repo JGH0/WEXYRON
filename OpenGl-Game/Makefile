@@ -77,8 +77,8 @@ $(BUILD_DIR)/game/%.o: $(GAME_DIR)/%.cpp | $(BUILD_DIR)/game
 $(BUILD_DIR)/main_new.o: $(SRC_DIR)/main_new.cpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-# Main object file
-$(BUILD_DIR)/main.o: $(SRC_DIR)/main.cpp | $(BUILD_DIR)
+# Main object file — depends on game.hpp for sizeof(Game)
+$(BUILD_DIR)/main.o: $(SRC_DIR)/main.cpp $(CORE_DIR)/game.hpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 # Server main object file

@@ -136,7 +136,8 @@ public:
     /// Game mode type
     enum GameMode {
         DEATHMATCH,
-        TEAM_VS_TEAM
+        TEAM_VS_TEAM,
+        BOMB_DEFUSAL
     };
 
 private:
@@ -260,7 +261,7 @@ private:
         bool leftArrowPressed = false;
         bool rightArrowPressed= false;
         bool f1Pressed = false, f2Pressed = false;
-        bool f3Pressed = false, f4Pressed = false;
+        bool f3Pressed = false, f4Pressed = false, f5Pressed = false, f6Pressed = false;
         double lastPlaceTime  = 0.0;
         float sidewaysOffset  = 0.0f;
 
@@ -337,6 +338,27 @@ private:
         glm::vec3 color;
     };
     
+    /// Bomb structure for bomb defusal mode
+    struct Bomb {
+        glm::vec3 position;
+        bool planted;
+        bool defused;
+        float plantTime;
+        float explodeTime; // 20 seconds after planting
+        float defuseTime; // 4 seconds to defuse
+        float defuseProgress; // Progress of defusing (0 to 4)
+        int plantingTeam; // Which team planted it
+        bool active;
+    };
+    
+    /// Bomb site structure (plant locations)
+    struct BombSite {
+        glm::vec3 position;
+        glm::vec3 size;
+        bool active;
+        char label; // 'A' or 'B'
+    };
+    
     /// Maximum number of projectiles
     static const int MAX_PROJECTILES = 50;
     /// Maximum number of bullet holes
@@ -345,6 +367,8 @@ private:
     static const int MAX_ENEMIES = 10;
     /// Maximum number of explosions
     static const int MAX_EXPLOSIONS = 10;
+    /// Maximum number of bomb sites
+    static const int MAX_BOMB_SITES = 4;
     
     /// Array of active projectiles
     Projectile projectiles[MAX_PROJECTILES];
@@ -354,12 +378,18 @@ private:
     Enemy enemies[MAX_ENEMIES];
     /// Array of explosions
     Explosion explosions[MAX_EXPLOSIONS];
+    /// Array of bomb sites
+    BombSite bombSites[MAX_BOMB_SITES];
+    /// Bomb for bomb defusal mode
+    Bomb bomb;
     /// Number of active projectiles
     int activeProjectiles;
     /// Number of bullet holes
     int bulletHoleCount;
     /// Number of active enemies
     int activeEnemies;
+    /// Number of bomb sites
+    int activeBombSites;
     
     /// Player health
     float playerHealth;
@@ -423,12 +453,29 @@ private:
 
     /// Editor spawn point placement mode
     enum EditorSpawnMode {
-        SPAWN_NONE,      // Normal block placement
-        SPAWN_DEATHMATCH, // Place DM spawn points
-        SPAWN_TEAM_A,    // Place Team A (Red) spawn points
-        SPAWN_TEAM_B     // Place Team B (Blue) spawn points
+        SPAWN_NONE,          // Normal block placement
+        SPAWN_DEATHMATCH,     // Place DM spawn points
+        SPAWN_TEAM_A,        // Place Team A (Red) spawn points
+        SPAWN_TEAM_B,        // Place Team B (Blue) spawn points
+        SPAWN_BOMB_SITE_A,   // Place Bomb Site A
+        SPAWN_BOMB_SITE_B    // Place Bomb Site B
     };
     EditorSpawnMode editorSpawnMode = SPAWN_NONE;
+    
+    /// Bomb Defusal Mode
+    bool bombDefusalMode; // Whether bomb defusal mode is active
+    int attackingTeam; // Which team is planting (0 = Team A, 1 = Team B)
+    bool roundActive; // Whether a round is currently in progress
+    float roundTime; // Time elapsed in current round
+    float roundEndTimer; // Countdown before next round starts after bomb explodes
+    int teamADeaths; // Number of deaths for Team A
+    int teamBDeaths; // Number of deaths for Team B
+    bool spectatorMode; // Whether player is in spectator mode
+    int spectatorTarget; // Index of player being spectated (-1 = free cam)
+    bool isPlanting; // Whether player is currently planting
+    bool isDefusing; // Whether player is currently defusing
+    float plantProgress; // Progress of planting (0 to 3)
+    float defuseProgress; // Progress of defusing (0 to 4)
 
     /// Editor mode (block placement vs shape creation)
     enum EditorMode {
@@ -625,6 +672,66 @@ private:
      * @brief Render crosshair in center of screen
      */
     void renderCrosshair();
+    
+    /**
+     * @brief Render bomb sites and bomb
+     */
+    void renderBombSites();
+
+    /**
+     * @brief Render bomb defusal HUD (team, bomb status, progress)
+     */
+    void renderBombDefusalHUD();
+    
+    /**
+     * @brief Update bomb state (timer, explosion, etc.)
+     * @param deltaTime Time since last frame
+     */
+    void updateBomb(float deltaTime);
+    
+    /**
+     * @brief Start planting bomb at current location
+     */
+    void startPlanting();
+    
+    /**
+     * @brief Start defusing bomb
+     */
+    void startDefusing();
+    
+    /**
+     * @brief Check if player is near a bomb site
+     * @return Index of bomb site, -1 if not near any
+     */
+    int getNearbyBombSite();
+    
+    /**
+     * @brief Check if player is near the planted bomb
+     * @return true if near bomb, false otherwise
+     */
+    bool isNearBomb();
+    
+    /**
+     * @brief End current round and prepare for next
+     * @param winner Winning team (0 = Team A, 1 = Team B, -1 = draw)
+     */
+    void endRound(int winner);
+    
+    /**
+     * @brief Start a new round
+     */
+    void startRound();
+    
+    /**
+     * @brief Update spectator camera
+     */
+    void updateSpectator();
+    
+    /**
+     * @brief Update round end timer (delay before next round)
+     * @param deltaTime Time since last frame
+     */
+    void updateRoundEndTimer(float deltaTime);
     
     /**
      * @brief Render damage screen effect when player takes damage

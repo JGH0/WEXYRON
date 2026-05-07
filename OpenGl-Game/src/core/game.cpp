@@ -53,6 +53,23 @@ Game::Game(int width, int height)
       menuJustEntered(true),
       inp(),
       keyBindings(),
+      editorBlockRotation(0.0f),
+      editorBlockPitch(0.0f),
+      editorSpawnMode(SPAWN_NONE),
+      editorMode(MODE_BLOCK),
+      bombDefusalMode(false),
+      attackingTeam(0),
+      roundActive(false),
+      roundTime(0.0f),
+      roundEndTimer(0.0f),
+      teamADeaths(0),
+      teamBDeaths(0),
+      spectatorMode(false),
+      spectatorTarget(-1),
+      isPlanting(false),
+      isDefusing(false),
+      plantProgress(0.0f),
+      defuseProgress(0.0f),
       shootCooldown(0.0f),
       pistolCooldown(0.0f),
       shotgunCooldown(0.0f),
@@ -105,6 +122,36 @@ Game::Game(int width, int height)
     // Bullet holes
     for (int i = 0; i < MAX_BULLET_HOLES; i++)
         bulletHoles[i].lifetime = 0.0f;
+
+    // Bomb initialization
+    bomb.position = glm::vec3(0.0f);
+    bomb.planted = false;
+    bomb.defused = false;
+    bomb.plantTime = 0.0f;
+    bomb.explodeTime = 20.0f;
+    bomb.defuseTime = 4.0f;
+    bomb.defuseProgress = 0.0f;
+    bomb.plantingTeam = 0;
+    bomb.active = false;
+
+    // Bomb sites initialization
+    for (int i = 0; i < MAX_BOMB_SITES; i++) {
+        bombSites[i].active = false;
+        bombSites[i].position = glm::vec3(0.0f);
+        bombSites[i].size = glm::vec3(0.0f);
+        bombSites[i].label = 'A';
+    }
+    activeBombSites = 0;
+
+    // Editor initialization (remaining editor vars not in init list)
+    editorNoclip = true;
+    editorSpeed = 15.0f;
+    editorGridPos = glm::vec3(0.0f);
+    editorBlockSize = glm::vec3(2.0f, 2.0f, 2.0f);
+    editorSelectedTexture = 1;
+    editorShowGrid = true;
+    editorGridSize = 1.0f;
+    editorBlockOffset = 5.0f;
 
     // Weapons
     pistol    = new Pistol(infiniteAmmoMode);
@@ -212,6 +259,38 @@ bool Game::loadMap(const std::string& mapFile) {
         currentMap->loadTexture("sand.png",   5);
         currentMap->loadTexture("ice.png",    6);
         currentMap->loadTexture("dirt.png",   7);
+        
+        // Setup bomb defusal mode if in team mode or bomb defusal mode
+        if (currentGameMode == TEAM_VS_TEAM || currentGameMode == BOMB_DEFUSAL) {
+            bombDefusalMode = true;
+            activeBombSites = 0;
+            
+            // Load bomb sites from map data
+            const auto& mapBombSites = currentMap->getBombSites();
+            if (!mapBombSites.empty()) {
+                for (const auto& site : mapBombSites) {
+                    if (activeBombSites < MAX_BOMB_SITES) {
+                        bombSites[activeBombSites] = {
+                            site.position,
+                            glm::vec3(2.0f, 0.2f, 2.0f),  // default size
+                            true,
+                            site.label
+                        };
+                        activeBombSites++;
+                    }
+                }
+            }
+            
+            // Fallback: add default bomb sites if none defined
+            if (activeBombSites == 0) {
+                bombSites[0] = {glm::vec3(5.0f, 0.1f, 5.0f), glm::vec3(2.0f, 0.2f, 2.0f), true, 'A'};
+                bombSites[1] = {glm::vec3(-5.0f, 0.1f, -5.0f), glm::vec3(2.0f, 0.2f, 2.0f), true, 'B'};
+                activeBombSites = 2;
+            }
+        } else {
+            bombDefusalMode = false;
+        }
+        
         resetGame();
     }
 
@@ -316,10 +395,22 @@ void Game::resetGame() {
     playerDamageCooldown = 0.0f;
     damageEffectTime     = 0.0f;
     isDead               = false;
+    spectatorMode        = false;
+    spectatorTarget      = -1;
+    isPlanting           = false;
+    isDefusing           = false;
+    plantProgress        = 0.0f;
+    defuseProgress       = 0.0f;
+
+    // Reset bomb state
+    bomb.planted = false;
+    bomb.defused = false;
+    bomb.active = false;
+    bomb.defuseProgress = 0.0f;
 
     // Spawn at map spawn point
     if (currentMap) {
-        if (currentGameMode == TEAM_VS_TEAM) {
+        if (currentGameMode == TEAM_VS_TEAM || currentGameMode == BOMB_DEFUSAL) {
             TeamSpawn spawn = currentMap->getRandomTeamSpawn(playerTeam);
             playerPos    = spawn.position;
             camera.Yaw   = spawn.yaw;

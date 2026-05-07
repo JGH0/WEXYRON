@@ -152,7 +152,7 @@ void Game::renderEditor() {
     renderer.drawTextFit("1-4=tex T=rot S+T=back C+T=pitchdown",      startX, startY + lineHeight * 3, maxHelpWidth, textScale);
     renderer.drawTextFit("SC+T=pitchup E/Q=resize M=mode",            startX, startY + lineHeight * 4, maxHelpWidth, textScale);
     renderer.drawTextFit("arrows=move UP/DOWN=dist F1 DM F2 A F3 B", startX, startY + lineHeight * 5,  maxHelpWidth, textScale);
-    renderer.drawTextFit("F4 Block F9 save ESC exit",                startX, startY + lineHeight * 6,  maxHelpWidth, textScale);
+    renderer.drawTextFit("F4 Block F5 BombA F6 BombB F9 save ESC exit", startX, startY + lineHeight * 6,  maxHelpWidth, textScale);
 
     // Show mode-specific help
     if (editorMode == MODE_SHAPE) {
@@ -176,9 +176,11 @@ void Game::renderEditor() {
     // Show spawn mode
     const char* spawnModeStr = "BLOCK MODE";
     switch (editorSpawnMode) {
-        case SPAWN_DEATHMATCH: spawnModeStr = "DM SPAWN MODE";          break;
-        case SPAWN_TEAM_A:     spawnModeStr = "TEAM A SPAWN (Red)";     break;
-        case SPAWN_TEAM_B:     spawnModeStr = "TEAM B SPAWN (Blue)";    break;
+        case SPAWN_DEATHMATCH:  spawnModeStr = "DM SPAWN MODE";            break;
+        case SPAWN_TEAM_A:      spawnModeStr = "TEAM A SPAWN (Red)";      break;
+        case SPAWN_TEAM_B:      spawnModeStr = "TEAM B SPAWN (Blue)";     break;
+        case SPAWN_BOMB_SITE_A: spawnModeStr = "BOMB SITE A (Yellow)";    break;
+        case SPAWN_BOMB_SITE_B: spawnModeStr = "BOMB SITE B (Orange)";    break;
         default: break;
     }
     snprintf(buf, sizeof(buf), "SPAWN: %s", spawnModeStr);
@@ -513,6 +515,20 @@ void Game::processEditorInput() {
         inp.f4Pressed = false;
     }
 
+    if (glfwGetKey(window, GLFW_KEY_F5) == GLFW_PRESS && !inp.f5Pressed) {
+        inp.f5Pressed = true;
+        editorSpawnMode = SPAWN_BOMB_SITE_A;
+    } else if (glfwGetKey(window, GLFW_KEY_F5) == GLFW_RELEASE) {
+        inp.f5Pressed = false;
+    }
+
+    if (glfwGetKey(window, GLFW_KEY_F6) == GLFW_PRESS && !inp.f6Pressed) {
+        inp.f6Pressed = true;
+        editorSpawnMode = SPAWN_BOMB_SITE_B;
+    } else if (glfwGetKey(window, GLFW_KEY_F6) == GLFW_RELEASE) {
+        inp.f6Pressed = false;
+    }
+
     // Block placement (Left mouse button) - hold to keep placing, throttled
     if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
         double now = glfwGetTime();
@@ -557,6 +573,10 @@ void Game::processEditorInput() {
                     currentMap->addTeamSpawn(TeamSpawn(editorGridPos, 0, camera.Yaw, camera.Pitch));
                 } else if (editorSpawnMode == SPAWN_TEAM_B) {
                     currentMap->addTeamSpawn(TeamSpawn(editorGridPos, 1, camera.Yaw, camera.Pitch));
+                } else if (editorSpawnMode == SPAWN_BOMB_SITE_A) {
+                    currentMap->addBombSite(BombSiteData(editorGridPos, 'A'));
+                } else if (editorSpawnMode == SPAWN_BOMB_SITE_B) {
+                    currentMap->addBombSite(BombSiteData(editorGridPos, 'B'));
                 } else {
                     // Normal block placement (only in BLOCK mode)
                     if (editorMode == MODE_BLOCK) {
@@ -768,6 +788,19 @@ void Game::saveMap(const std::string& filename) {
                  << spawn.teamId     << " "
                  << spawn.yaw        << " "
                  << spawn.pitch      << "\n";
+        }
+    }
+
+    // Write bomb sites
+    const auto& bombSites = currentMap->getBombSites();
+    if (!bombSites.empty()) {
+        file << "\n# Bomb sites (for Bomb Defusal mode)\n";
+        for (const auto& site : bombSites) {
+            file << "bomb_site "
+                 << site.position.x << " "
+                 << site.position.y << " "
+                 << site.position.z << " "
+                 << site.label      << "\n";
         }
     }
 
