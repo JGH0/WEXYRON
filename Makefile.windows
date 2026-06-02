@@ -3,7 +3,7 @@
 
 CXX = g++
 CXXFLAGS = -std=c++17 -Wall -I./include -I./include/stb -I./src -DGLFW_INCLUDE_NONE
-LDFLAGS = -lglfw3 -lopengl32 -lgdi32 -luser32 -lkernel32 -lshell32 -lws2_32
+LDFLAGS = -lglfw3 -lopengl32 -lgdi32 -luser32 -lkernel32 -lshell32 -lws2_32 -lstdc++ -lpthread
 
 SRC_DIR = src
 CORE_DIR = src/core
