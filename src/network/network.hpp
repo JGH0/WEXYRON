@@ -11,6 +11,7 @@
 #include <cstring>
 #include <vector>
 #include <map>
+#include <functional>
 
 // Platform-specific socket headers
 #ifdef _WIN32
