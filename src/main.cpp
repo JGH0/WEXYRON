@@ -20,11 +20,12 @@ int main() {
     Game game(800, 600);
     game.init();
 
-    float lastFrame = 0.0f;
+    float lastFrame = glfwGetTime();
     while (!game.shouldClose()) {
         float currentFrame = glfwGetTime();
         float deltaTime = currentFrame - lastFrame;
         lastFrame = currentFrame;
+        if (deltaTime > 0.05f) deltaTime = 0.05f; // Cap at 50ms to avoid physics issues
 
         game.processInput(deltaTime);
         game.update(deltaTime); // Only update physics when playing
