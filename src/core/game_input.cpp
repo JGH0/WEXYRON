@@ -176,14 +176,13 @@ void Game::processInput(float deltaTime) {
                 break;
             }
         }
-        // Set cursor icon and ensure cursor mode is correct after dispatch
+        // Set cursor icon only while staying in MENU. Note: the for loop above
+        // may have called glfwSetCursor(handCursor) on the same frame that
+        // dispatchMenu changed state to PLAYING, but GLFW may honor that
+        // cursor even when mode is DISABLED. As a final guarantee, restore
+        // disabled mode at the very end of processInput.
         if (gameState == MENU) {
             glfwSetCursor(window, hoveredAny ? handCursor : nullptr);
-        } else if (gameState == PLAYING) {
-            // Re-assert disabled mode; dispatchMenu sets this too, but this
-            // guards against the glfwSetCursor call that ran BEFORE the
-            // dispatch (hoveredAny=true, handCursor set) interfering.
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
         }
     } else if (gameState == SETTINGS) {
         processSettingsInput();
@@ -199,6 +198,17 @@ void Game::processInput(float deltaTime) {
             glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
             resetGame();
         }
+    }
+
+    // ── Final cursor mode enforcement ────────────────────────────────
+    // Runs after every state's input handler above. If any code path
+    // transitioned to PLAYING (mouse click, keyboard ENTER, etc.), the
+    // cursor must be hidden. This also ensures GUI states get NORMAL mode
+    // even if their individual handlers didn't set it.
+    if (gameState == PLAYING) {
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    } else if (gameState != MAP_EDITOR) {
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
     }
 }
 
