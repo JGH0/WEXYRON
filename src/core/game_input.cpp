@@ -119,6 +119,7 @@ void Game::processInput(float deltaTime) {
                 case 1: // Map Selection
                     inp.resetNavKeys(); menuJustEntered = true;
                     gameState = MAP_SELECTION;
+                    glfwSetCursor(window, nullptr);
                     break;
                 case 2: // Map Editor
                     inp.resetNavKeys(); menuJustEntered = true;
@@ -140,11 +141,13 @@ void Game::processInput(float deltaTime) {
                     serverPort = 7777;
                     enteringServerAddress = false;
                     serverConnectSelection = 2;
+                    glfwSetCursor(window, nullptr);
                     break;
                 case 4: // Settings
                     inp.resetNavKeys(); menuJustEntered = true;
                     gameState = SETTINGS;
                     settingsSelection = 0;
+                    glfwSetCursor(window, nullptr);
                     break;
                 case 5: // Exit
                     glfwSetWindowShouldClose(window, true);
@@ -173,8 +176,10 @@ void Game::processInput(float deltaTime) {
                 break;
             }
         }
-        // Set cursor icon
-        glfwSetCursor(window, hoveredAny ? handCursor : nullptr);
+        // Set cursor icon (only when cursor is visible, not in disabled mode)
+        if (glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_NORMAL) {
+            glfwSetCursor(window, hoveredAny ? handCursor : nullptr);
+        }
     } else if (gameState == SETTINGS) {
         processSettingsInput();
     } else if (gameState == MAP_SELECTION) {

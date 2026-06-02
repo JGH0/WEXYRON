@@ -874,6 +874,11 @@ private:
     void saveMap(const std::string& filename);
     
     /**
+     * @brief Execute the action for a settings item (called by ENTER or mouse click)
+     */
+    void actOnSettingsItem(int index);
+
+    /**
      * @brief Save key bindings to file
      */
     void saveKeyBindings();

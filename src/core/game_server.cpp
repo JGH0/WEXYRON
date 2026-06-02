@@ -328,6 +328,8 @@ void Game::renderServerConnect() {
         }
     }
 
+    menuButtons.clear();
+
     // ---- Discovered servers list ----
     float listY = startY + 2.5f * spacing;
     renderer.drawTextFit("FOUND SERVERS (LAN):", menuX + 25.0f, listY - 22.0f, menuWidth - 40.0f, 0.8f);
@@ -341,6 +343,9 @@ void Game::renderServerConnect() {
         for (int i = 0; i < maxRows; i++) {
             const auto& s = discoveredServers[i];
             float serverY = listY + i * serverSpacing;
+
+            // Register clickable rect
+            menuButtons.push_back({menuX, serverY, menuX + menuWidth, serverY + serverBoxHeight, 2 + i});
 
             // Server item box - taller for two lines
             glm::mat4 serverBox = glm::mat4(1.0f);
@@ -396,6 +401,7 @@ void Game::renderServerConnect() {
 
     // ---- Back button ----
     float backY = statusY + spacing;
+    menuButtons.push_back({menuX, backY, menuX + menuWidth, backY + menuHeight, backRow});
     glm::mat4 backBox = glm::mat4(1.0f);
     backBox = glm::translate(backBox, glm::vec3(menuX + menuWidth/2.0f, backY + menuHeight/2.0f, 0.0f));
     backBox = glm::scale(backBox, glm::vec3(menuWidth, menuHeight, 1.0f));
@@ -520,6 +526,8 @@ void Game::processServerConnectInput() {
         return;
     }
 
+
+
     // Calculate max row based on discovered servers
     int numServerRows = discoveredServers.empty() ? 0 : std::min(3, (int)discoveredServers.size());
     int backRow       = discoveredServers.empty() ? 2 : 2 + numServerRows;
@@ -528,6 +536,43 @@ void Game::processServerConnectInput() {
     // Clamp selection to the button range [2 .. backRow].
     if (serverConnectSelection < 2) serverConnectSelection = 2;
     if (serverConnectSelection > backRow) serverConnectSelection = backRow;
+
+    // ── Mouse hover + click ──────────────────────────────────────────
+    // menuButtons populated by renderServerConnect() each frame.
+    // Contains server rows (actionIndex 2..) and back button (actionIndex = backRow).
+    // IP and Port fields (actionIndex 0,1) are NOT in menuButtons — they use TAB/typing.
+    {
+        bool hoveredAny = false;
+        for (const auto& btn : menuButtons) {
+            if (mouseGUIPosX >= btn.x0 && mouseGUIPosX <= btn.x1 &&
+                mouseGUIPosY >= btn.y0 && mouseGUIPosY <= btn.y1) {
+                serverConnectSelection = btn.actionIndex;
+                hoveredAny = true;
+                if (mouseClicked) {
+                    if (btn.actionIndex == backRow) {
+                        inp.resetNavKeys();
+                        menuJustEntered = true;
+                        gameState = MENU;
+                        menuSelection = isConnectedToServer() ? 2 : 3;
+                    } else if (btn.actionIndex >= 2 && btn.actionIndex < backRow) {
+                        int serverIndex = btn.actionIndex - 2;
+                        if (serverIndex < (int)discoveredServers.size()) {
+                            const auto& s = discoveredServers[serverIndex];
+                            serverAddress = s.ip;
+                            serverPort    = s.port;
+                            if (connectToServer(serverAddress, serverPort)) {
+                                std::cout << "Connected to discovered server!" << std::endl;
+                            }
+                        }
+                    }
+                }
+                break;
+            }
+        }
+        if (glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_NORMAL) {
+            glfwSetCursor(window, hoveredAny ? handCursor : nullptr);
+        }
+    }
 
     // UP/DOWN navigate only through button rows (2 .. backRow), skipping input fields.
     if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS && !inp.upPressed) {

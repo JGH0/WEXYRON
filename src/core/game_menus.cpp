@@ -147,9 +147,14 @@ void Game::renderSettings() {
     keyNames[5] = glfwGetKeyName(keyBindings.menu,     0) ? glfwGetKeyName(keyBindings.menu,     0) : "Unknown";
     keyNames[6] = infiniteAmmoMode ? "ON" : "OFF"; // Infinite ammo status
 
+    menuButtons.clear();
+
     // Render each setting option
     for (int i = 0; i < numSettings; i++) {
         float y = startY + i * spacing;
+
+        // Register clickable rect for this item
+        menuButtons.push_back({menuX, y, menuX + menuWidth, y + menuHeight, i});
 
         // Create background rectangle for this setting
         glm::mat4 bgModel = glm::mat4(1.0f);
@@ -222,8 +227,61 @@ void Game::loadKeyBindings() {
     std::cout << "Key bindings loaded!" << std::endl;
 }
 
+void Game::actOnSettingsItem(int index) {
+    if (index == 6) {
+        infiniteAmmoMode = !infiniteAmmoMode;
+        pistol->setInfiniteAmmo(infiniteAmmoMode);
+        shotgun->setInfiniteAmmo(infiniteAmmoMode);
+        grenade->setInfiniteAmmo(infiniteAmmoMode);
+        flashbang->setInfiniteAmmo(infiniteAmmoMode);
+        std::cout << "Infinite ammo mode: " << (infiniteAmmoMode ? "ON" : "OFF") << std::endl;
+    } else {
+        // Wait for key release and capture new key
+        glfwWaitEvents();
+        while (glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS) {
+            glfwWaitEvents();
+        }
+
+        int newKey = -1;
+        for (int key = GLFW_KEY_SPACE; key <= GLFW_KEY_LAST; key++) {
+            if (glfwGetKey(window, key) == GLFW_PRESS) {
+                newKey = key;
+                break;
+            }
+        }
+
+        if (newKey != -1) {
+            switch (index) {
+                case 0: keyBindings.forward  = newKey; break;
+                case 1: keyBindings.backward = newKey; break;
+                case 2: keyBindings.left     = newKey; break;
+                case 3: keyBindings.right    = newKey; break;
+                case 4: keyBindings.jump     = newKey; break;
+                case 5: keyBindings.menu     = newKey; break;
+            }
+            saveKeyBindings();
+        }
+    }
+}
+
 void Game::processSettingsInput() {
-    // Note: static bool key-state variables have been moved to inp (InputState member)
+    // ── Mouse hover + click ──────────────────────────────────────────
+    // menuButtons populated by renderSettings() each frame.
+    bool hoveredAny = false;
+    for (const auto& btn : menuButtons) {
+        if (mouseGUIPosX >= btn.x0 && mouseGUIPosX <= btn.x1 &&
+            mouseGUIPosY >= btn.y0 && mouseGUIPosY <= btn.y1) {
+            settingsSelection = btn.actionIndex;
+            hoveredAny = true;
+            if (mouseClicked) {
+                actOnSettingsItem(btn.actionIndex);
+            }
+            break;
+        }
+    }
+    if (glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_NORMAL) {
+        glfwSetCursor(window, hoveredAny ? handCursor : nullptr);
+    }
 
     // Handle UP key
     if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS && !inp.upPressed) {
@@ -244,42 +302,7 @@ void Game::processSettingsInput() {
     // Handle ENTER key
     if (glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS && !inp.enterPressed) {
         inp.enterPressed = true;
-
-        // Special handling for infinite ammo toggle
-        if (settingsSelection == 6) {
-            infiniteAmmoMode = !infiniteAmmoMode;
-            pistol->setInfiniteAmmo(infiniteAmmoMode);
-            shotgun->setInfiniteAmmo(infiniteAmmoMode);
-            grenade->setInfiniteAmmo(infiniteAmmoMode);
-            flashbang->setInfiniteAmmo(infiniteAmmoMode);
-            std::cout << "Infinite ammo mode: " << (infiniteAmmoMode ? "ON" : "OFF") << std::endl;
-        } else {
-            // Wait for key release and capture new key
-            glfwWaitEvents();
-            while (glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS) {
-                glfwWaitEvents();
-            }
-
-            int newKey = -1;
-            for (int key = GLFW_KEY_SPACE; key <= GLFW_KEY_LAST; key++) {
-                if (glfwGetKey(window, key) == GLFW_PRESS) {
-                    newKey = key;
-                    break;
-                }
-            }
-
-            if (newKey != -1) {
-                switch (settingsSelection) {
-                    case 0: keyBindings.forward  = newKey; break;
-                    case 1: keyBindings.backward = newKey; break;
-                    case 2: keyBindings.left     = newKey; break;
-                    case 3: keyBindings.right    = newKey; break;
-                    case 4: keyBindings.jump     = newKey; break;
-                    case 5: keyBindings.menu     = newKey; break;
-                }
-                saveKeyBindings();
-            }
-        }
+        actOnSettingsItem(settingsSelection);
     } else if (glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_RELEASE) {
         inp.enterPressed = false;
     }
@@ -327,10 +350,15 @@ void Game::renderMapSelection() {
     float startY = 150.0f;
     float spacing = 50.0f;
 
+    menuButtons.clear();
+
     // Draw map boxes like settings items
     for (int i = 0; i < numMaps; i++) {
         float y = startY + i * spacing;
         bool isSelected = (i == mapSelection);
+
+        // Register clickable rect for this map item
+        menuButtons.push_back({menuX, y, menuX + menuWidth, y + menuHeight, i});
 
         // Create background rectangle for this map
         glm::mat4 bgModel = glm::mat4(1.0f);
@@ -379,8 +407,11 @@ void Game::renderMapSelection() {
         }
     }
 
-    // Game Mode selection row
+    // Game Mode selection row — clickable (cycles mode)
     float gameModeY = startY + numMaps * spacing + 20.0f;
+    // Index numMaps is reserved for the mode row, numMaps+1 for nothing (or back button if needed)
+    menuButtons.push_back({menuX, gameModeY, menuX + menuWidth, gameModeY + menuHeight, numMaps});
+
     glm::mat4 gmBg = glm::mat4(1.0f);
     gmBg = glm::translate(gmBg, glm::vec3(menuX + menuWidth/2.0f, gameModeY + menuHeight/2.0f, 0.0f));
     gmBg = glm::scale(gmBg, glm::vec3(menuWidth, menuHeight, 1.0f));
@@ -438,6 +469,65 @@ void Game::processMapSelectionInput() {
         mapSelection = numMaps - 1;
     }
 
+    // ── Mouse hover + click ──────────────────────────────────────────
+    // menuButtons populated by renderMapSelection() each frame.
+    // Map items use actionIndex 0..numMaps-1, Game Mode row uses numMaps.
+    bool hoveredAny = false;
+    for (const auto& btn : menuButtons) {
+        if (mouseGUIPosX >= btn.x0 && mouseGUIPosX <= btn.x1 &&
+            mouseGUIPosY >= btn.y0 && mouseGUIPosY <= btn.y1) {
+            int idx = btn.actionIndex;
+            if (idx < numMaps) {
+                mapSelection = idx;
+                hoveredAny = true;
+                if (mouseClicked) {
+                    // Load map — same logic as ENTER
+                    const char* modeName = (currentGameMode == DEATHMATCH) ? "Deathmatch" : 
+                                          (currentGameMode == TEAM_VS_TEAM) ? "Team vs Team" : "Bomb Defusal";
+                    std::cout << "Loading " << mapFiles[idx] << " with game mode " << modeName << "..." << std::endl;
+                    if (isConnectedToServer() && networkClient) {
+                        networkClient->sendMapChange(mapFiles[idx]);
+                        for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
+                            remotePlayers[i].active   = false;
+                            remotePlayers[i].id       = 0;
+                            remotePlayers[i].position = glm::vec3(0.0f);
+                            remotePlayers[i].renderPosition = glm::vec3(0.0f);
+                            remotePlayers[i].velocity = glm::vec3(0.0f);
+                            remotePlayers[i].yaw      = 0.0f;
+                            remotePlayers[i].pitch    = 0.0f;
+                            remotePlayers[i].health   = 0.0f;
+                            remotePlayers[i].isDead   = true;
+                        }
+                        playerCount = 1;
+                    }
+                    loadMap(mapFiles[idx]);
+                    if (currentGameMode == TEAM_VS_TEAM || currentGameMode == BOMB_DEFUSAL) {
+                        playerTeam = 0;
+                    }
+                    resetGame();
+                    if (bombDefusalMode) startRound();
+                    menuJustEntered = true;
+                    gameState = PLAYING;
+                    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+                }
+            } else if (idx == numMaps) {
+                // Game Mode row — cycle mode on click
+                hoveredAny = true;
+                if (mouseClicked) {
+                    int newMode = (static_cast<int>(currentGameMode) + 1) % 3;
+                    currentGameMode = static_cast<GameMode>(newMode);
+                    const char* modeName = (currentGameMode == DEATHMATCH) ? "Deathmatch" : 
+                                          (currentGameMode == TEAM_VS_TEAM) ? "Team vs Team" : "Bomb Defusal";
+                    std::cout << "Game Mode: " << modeName << std::endl;
+                }
+            }
+            break;
+        }
+    }
+    if (glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_NORMAL) {
+        glfwSetCursor(window, hoveredAny ? handCursor : nullptr);
+    }
+
     // Handle UP key
     if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS && !inp.upPressed) {
         inp.upPressed = true;
@@ -488,39 +578,27 @@ void Game::processMapSelectionInput() {
             const char* modeName = (currentGameMode == DEATHMATCH) ? "Deathmatch" : 
                                   (currentGameMode == TEAM_VS_TEAM) ? "Team vs Team" : "Bomb Defusal";
             std::cout << "Loading " << mapFiles[mapSelection] << " with game mode " << modeName << "..." << std::endl;
-
-            // Notify server of map change if connected
             if (isConnectedToServer() && networkClient) {
                 networkClient->sendMapChange(mapFiles[mapSelection]);
-
-            // Local cleanup: when switching maps online, clear remote players from previous map
-            for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
-                remotePlayers[i].active   = false;
-                remotePlayers[i].id       = 0;
-                remotePlayers[i].position = glm::vec3(0.0f);
-                remotePlayers[i].renderPosition = glm::vec3(0.0f);
-                remotePlayers[i].velocity = glm::vec3(0.0f);
-                remotePlayers[i].yaw      = 0.0f;
-                remotePlayers[i].pitch    = 0.0f;
-                remotePlayers[i].health   = 0.0f;
-                remotePlayers[i].isDead   = true;
+                for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
+                    remotePlayers[i].active   = false;
+                    remotePlayers[i].id       = 0;
+                    remotePlayers[i].position = glm::vec3(0.0f);
+                    remotePlayers[i].renderPosition = glm::vec3(0.0f);
+                    remotePlayers[i].velocity = glm::vec3(0.0f);
+                    remotePlayers[i].yaw      = 0.0f;
+                    remotePlayers[i].pitch    = 0.0f;
+                    remotePlayers[i].health   = 0.0f;
+                    remotePlayers[i].isDead   = true;
+                }
+                playerCount = 1;
             }
-            playerCount = 1; // self only until same-map players stream in
-            }
-
             loadMap(mapFiles[mapSelection]);
-            // In Team vs Team mode, assign player to team
             if (currentGameMode == TEAM_VS_TEAM || currentGameMode == BOMB_DEFUSAL) {
-                playerTeam = 0; // Team A (Red) by default
+                playerTeam = 0;
             }
-            resetGame(); // Spawn at appropriate spawn point
-            
-            // Start round if in bomb defusal mode
-            if (bombDefusalMode) {
-                startRound();
-            }
-
-            // Stabilize transition to PLAYING to avoid accidental second-trigger behavior.
+            resetGame();
+            if (bombDefusalMode) startRound();
             menuJustEntered = true;
             gameState = PLAYING;
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
