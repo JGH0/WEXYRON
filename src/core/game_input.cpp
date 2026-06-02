@@ -176,8 +176,9 @@ void Game::processInput(float deltaTime) {
                 break;
             }
         }
-        // Set cursor icon (only when cursor is visible, not in disabled mode)
-        if (glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_NORMAL) {
+        // Set cursor icon — only when staying in MENU state (not after dispatch
+        // changed to PLAYING or another state)
+        if (gameState == MENU) {
             glfwSetCursor(window, hoveredAny ? handCursor : nullptr);
         }
     } else if (gameState == SETTINGS) {
