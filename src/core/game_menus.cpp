@@ -130,8 +130,8 @@ void Game::renderSettings() {
     float menuWidth = 400.0f;
     float menuHeight = 40.0f;
     float menuX = (800.0f - menuWidth) / 2.0f; // Center horizontally
-    float startY = 150.0f;
-    float spacing = 50.0f;
+    float startY = 100.0f;
+    float spacing = 45.0f;
 
     // Settings items: Forward, Backward, Left, Right, Jump, Menu, Infinite Ammo,
     // Show FPS, Max FPS, V-Sync
