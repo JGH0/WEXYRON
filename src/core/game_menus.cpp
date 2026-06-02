@@ -150,10 +150,14 @@ void Game::renderSettings() {
     keyNames[5] = glfwGetKeyName(keyBindings.menu,     0) ? glfwGetKeyName(keyBindings.menu,     0) : "Unknown";
     keyNames[6] = infiniteAmmoMode ? "ON" : "OFF"; // Infinite ammo status
     keyNames[7] = showFps ? "ON" : "OFF";
-    // Max FPS value displayed as the actual number
+    // Max FPS value displayed as the actual number (or 'infinity' for 0)
     {
         static char fpsBuf[16];
-        snprintf(fpsBuf, sizeof(fpsBuf), "%d", maxFps);
+        if (maxFps == 0) {
+            snprintf(fpsBuf, sizeof(fpsBuf), "infinity");
+        } else {
+            snprintf(fpsBuf, sizeof(fpsBuf), "%d", maxFps);
+        }
         keyNames[8] = fpsBuf;
     }
     keyNames[9] = vsyncEnabled ? "ON" : "OFF";
@@ -256,6 +260,20 @@ void Game::actOnSettingsItem(int index) {
     } else if (index == 7) {
         showFps = !showFps;
         std::cout << "Show FPS: " << (showFps ? "ON" : "OFF") << std::endl;
+    } else if (index == 8) {
+        // Cycle through Max FPS presets: 20 30 60 100 120 144 200 240 0 (infinity)
+        static const int fpsPresets[] = {20, 30, 60, 100, 120, 144, 200, 240, 0};
+        static constexpr int numPresets = sizeof(fpsPresets) / sizeof(fpsPresets[0]);
+        int current = maxFps;
+        int next = fpsPresets[0];
+        for (int i = 0; i < numPresets; i++) {
+            if (fpsPresets[i] == current) {
+                next = fpsPresets[(i + 1) % numPresets];
+                break;
+            }
+        }
+        maxFps = next;
+        std::cout << "Max FPS: " << (maxFps == 0 ? "infinity" : std::to_string(maxFps)) << std::endl;
     } else if (index == 9) {
         vsyncEnabled = !vsyncEnabled;
         glfwSwapInterval(vsyncEnabled ? 1 : 0);
@@ -322,24 +340,6 @@ void Game::processSettingsInput() {
         settingsSelection = (settingsSelection + 1) % 10;
     } else if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_RELEASE) {
         inp.downPressed = false;
-    }
-
-    // Handle LEFT/RIGHT for Max FPS (index 8)
-    if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS && !inp.leftPressed) {
-        inp.leftPressed = true;
-        if (settingsSelection == 8) {
-            maxFps = std::max(30, maxFps - 10);
-        }
-    } else if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_RELEASE) {
-        inp.leftPressed = false;
-    }
-    if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS && !inp.rightPressed) {
-        inp.rightPressed = true;
-        if (settingsSelection == 8) {
-            maxFps = std::min(999, maxFps + 10);
-        }
-    } else if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_RELEASE) {
-        inp.rightPressed = false;
     }
 
     // Handle ENTER key

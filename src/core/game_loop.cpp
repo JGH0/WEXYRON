@@ -230,7 +230,7 @@ void Game::render() {
         if (showFps) {
             char fpsBuf[32];
             snprintf(fpsBuf, sizeof(fpsBuf), "FPS: %d", fpsDisplayValue);
-            renderer.drawText(fpsBuf, 10.0f, 570.0f, 0.7f);
+            renderer.drawText(fpsBuf, 10.0f, 10.0f, 0.23f);
         }
 
         glfwSwapBuffers(window);
@@ -243,7 +243,7 @@ void Game::render() {
         if (showFps) {
             char fpsBuf[32];
             snprintf(fpsBuf, sizeof(fpsBuf), "FPS: %d", fpsDisplayValue);
-            renderer.drawText(fpsBuf, 10.0f, 570.0f, 0.7f);
+            renderer.drawText(fpsBuf, 10.0f, 10.0f, 0.23f);
         }
         glfwSwapBuffers(window);
         glfwPollEvents();
@@ -255,7 +255,7 @@ void Game::render() {
         if (showFps) {
             char fpsBuf[32];
             snprintf(fpsBuf, sizeof(fpsBuf), "FPS: %d", fpsDisplayValue);
-            renderer.drawText(fpsBuf, 10.0f, 570.0f, 0.7f);
+            renderer.drawText(fpsBuf, 10.0f, 10.0f, 0.23f);
         }
         glfwSwapBuffers(window);
         glfwPollEvents();
@@ -267,7 +267,7 @@ void Game::render() {
         if (showFps) {
             char fpsBuf[32];
             snprintf(fpsBuf, sizeof(fpsBuf), "FPS: %d", fpsDisplayValue);
-            renderer.drawText(fpsBuf, 10.0f, 570.0f, 0.7f);
+            renderer.drawText(fpsBuf, 10.0f, 10.0f, 0.23f);
         }
         glfwSwapBuffers(window);
         glfwPollEvents();
@@ -279,7 +279,7 @@ void Game::render() {
         if (showFps) {
             char fpsBuf[32];
             snprintf(fpsBuf, sizeof(fpsBuf), "FPS: %d", fpsDisplayValue);
-            renderer.drawText(fpsBuf, 10.0f, 570.0f, 0.7f);
+            renderer.drawText(fpsBuf, 10.0f, 10.0f, 0.23f);
         }
         glfwSwapBuffers(window);
         glfwPollEvents();
@@ -289,7 +289,7 @@ void Game::render() {
         if (showFps) {
             char fpsBuf[32];
             snprintf(fpsBuf, sizeof(fpsBuf), "FPS: %d", fpsDisplayValue);
-            renderer.drawText(fpsBuf, 10.0f, 570.0f, 0.7f);
+            renderer.drawText(fpsBuf, 10.0f, 10.0f, 0.23f);
         }
         glfwSwapBuffers(window);
         glfwPollEvents();
