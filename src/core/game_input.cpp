@@ -27,13 +27,16 @@ void Game::processInput(float deltaTime) {
         float offY = (uiH - DESIGN_H) * 0.5f;
         // Cursor (mx,my) has Y-down (top-left origin); virtual coords in ortho have Y-up (bottom-left origin).
         // Conversion: flip Y, then apply scaling + offset.
-        // The ortho projection maps virtual coords to NDC:
-        //   ndc_x = 2*(vx - left)/(right-left) - 1, left=-offX, right=800+offX
-        //   ndc_y = 2*(vy - bottom)/(top-bottom) - 1, bottom=-offY, top=600+offY
+        // UIHelpers::getBounds returns {left,right,top,bottom} = {-offX, 800+offX, -offY, 600+offY}
+        // setProjection passes these to glm::ortho as (left,right,bottom,top).
+        // So the ACTUAL ortho call is: ortho(-offX, 800+offX, 600+offY, -offY)
+        // This means bottom > top => Y goes DOWN (matching GLFW cursor coords).
         // Inverting: vx = mx/fbW * (right-left) + left = mx/uiScale - offX
-        //            vy = (fbH-my)/fbH * (top-bottom) + bottom = (fbH-my)/uiScale - offY
+        //            vy = my/fbH * (top-bottom) + bottom = my/uiScale - offY
+        // (Note: because top-bottom < 0, the NDC y inversion works out such that
+        //  vy matches cursor y directly — no Y-flip needed.)
         mouseGUIPosX = (float)mx / uiScale - offX;
-        mouseGUIPosY = ((float)(fbH - my)) / uiScale - offY;
+        mouseGUIPosY = (float)my / uiScale - offY;
     }
 
     // ── ESC ──────────────────────────────────────────────────────────
@@ -155,18 +158,23 @@ void Game::processInput(float deltaTime) {
             inp.enterPressed = false;
         }
 
-        // ── Mouse click on menu item ─────────────────────────────────────
+        // ── Mouse hover + click on menu item ────────────────────────────
         // Hit-test against the rects populated by renderMenu() each frame.
-        if (mouseClicked) {
-            for (const auto& btn : menuButtons) {
-                if (mouseGUIPosX >= btn.x0 && mouseGUIPosX <= btn.x1 &&
-                    mouseGUIPosY >= btn.y0 && mouseGUIPosY <= btn.y1) {
-                    menuSelection = btn.actionIndex;
+        // Track hover to highlight buttons; click dispatches the action.
+        bool hoveredAny = false;
+        for (const auto& btn : menuButtons) {
+            if (mouseGUIPosX >= btn.x0 && mouseGUIPosX <= btn.x1 &&
+                mouseGUIPosY >= btn.y0 && mouseGUIPosY <= btn.y1) {
+                menuSelection = btn.actionIndex;
+                hoveredAny = true;
+                if (mouseClicked) {
                     dispatchMenu(btn.actionIndex);
-                    break;
                 }
+                break;
             }
         }
+        // Set cursor icon
+        glfwSetCursor(window, hoveredAny ? handCursor : nullptr);
     } else if (gameState == SETTINGS) {
         processSettingsInput();
     } else if (gameState == MAP_SELECTION) {

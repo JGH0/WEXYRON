@@ -251,10 +251,7 @@ void Game::render() {
 }
 
 void Game::cleanup() {
-    if (currentMap) {
-        delete currentMap;
-        currentMap = nullptr;
-    }
+    // currentMap is cleaned up in ~Game(); avoid double-delete here.
 }
 
 bool Game::shouldClose() const {

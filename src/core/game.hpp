@@ -181,6 +181,8 @@ private:
     bool mouseClicked;
     /// Previous-frame LMB state for edge detection
     bool prevMouseDown;
+    /// Hand cursor for hover-over-clickable items
+    GLFWcursor* handCursor;
     
     /// Game state (playing, menu, settings)
     enum GameState {

@@ -198,6 +198,7 @@ Game::Game(int width, int height)
     glfwSetCursorPosCallback(window, mouseCallback);
     glfwSetScrollCallback(window, scrollCallback);
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    handCursor = glfwCreateStandardCursor(GLFW_HAND_CURSOR);
 
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
         std::cerr << "Failed to initialize GLAD" << std::endl;
@@ -211,6 +212,7 @@ Game::Game(int width, int height)
 // Destructor
 // ---------------------------------------------------------------------------
 Game::~Game() {
+    if (handCursor) glfwDestroyCursor(handCursor);
     disconnectFromServer();
     if (discoverySocketFd != SOCKET_INVALID) {
         CLOSE_SOCKET(discoverySocketFd);
