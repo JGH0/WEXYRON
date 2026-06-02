@@ -30,6 +30,8 @@ int main() {
         game.processInput(deltaTime);
         game.update(deltaTime); // Only update physics when playing
         game.render();
+        game.frameWait();
+        game.endFrame(deltaTime);
     }
 
     game.cleanup();

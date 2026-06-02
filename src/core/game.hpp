@@ -56,6 +56,8 @@ public:
      * @param deltaTime Time delta for frame-independent input processing
      */
     void processInput(float deltaTime);
+    void endFrame(float deltaTime);  ///< Frame-end bookkeeping (FPS counter)
+    void frameWait();  ///< Spin-wait to cap FPS based on maxFps
     
     /**
      * @brief Update game state
@@ -536,6 +538,12 @@ private:
     
     /// Game modes
     bool infiniteAmmoMode;
+    bool showFps;
+    int  maxFps;
+    bool vsyncEnabled;
+    int  fpsFrameCount;
+    float fpsTimer;
+    int  fpsDisplayValue;
     GameMode currentGameMode;
     int playerTeam; // 0 = Team A/Red, 1 = Team B/Blue (for Team vs Team mode)
     

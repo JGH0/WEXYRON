@@ -106,6 +106,25 @@ void Game::update(float deltaTime) {
     }
 }
 
+void Game::frameWait() {
+    if (maxFps <= 0) return;
+    float targetFrameDuration = 1.0f / maxFps;
+    double targetTime = glfwGetTime() + targetFrameDuration;
+    while (glfwGetTime() < targetTime) {
+        // spin
+    }
+}
+
+void Game::endFrame(float deltaTime) {
+    fpsFrameCount++;
+    fpsTimer += deltaTime;
+    if (fpsTimer >= 1.0f) {
+        fpsDisplayValue = fpsFrameCount;
+        fpsFrameCount = 0;
+        fpsTimer -= 1.0f;
+    }
+}
+
 void Game::render() {
     // Fullscreen rendering: no borders/letterboxing.
     int fbW = 800, fbH = 600;
@@ -207,6 +226,13 @@ void Game::render() {
         // Render bomb defusal HUD (team, bomb timer, progress)
         renderBombDefusalHUD();
 
+        // FPS counter (only when enabled)
+        if (showFps) {
+            char fpsBuf[32];
+            snprintf(fpsBuf, sizeof(fpsBuf), "FPS: %d", fpsDisplayValue);
+            renderer.drawText(fpsBuf, 10.0f, 570.0f, 0.7f);
+        }
+
         glfwSwapBuffers(window);
         glfwPollEvents();
 
@@ -214,6 +240,11 @@ void Game::render() {
         renderer.clear();
         UIHelpers::setProjection(renderer, window);
         renderDeathScreen();
+        if (showFps) {
+            char fpsBuf[32];
+            snprintf(fpsBuf, sizeof(fpsBuf), "FPS: %d", fpsDisplayValue);
+            renderer.drawText(fpsBuf, 10.0f, 570.0f, 0.7f);
+        }
         glfwSwapBuffers(window);
         glfwPollEvents();
 
@@ -221,6 +252,11 @@ void Game::render() {
         renderer.clear();
         UIHelpers::setProjection(renderer, window);
         renderMenu();
+        if (showFps) {
+            char fpsBuf[32];
+            snprintf(fpsBuf, sizeof(fpsBuf), "FPS: %d", fpsDisplayValue);
+            renderer.drawText(fpsBuf, 10.0f, 570.0f, 0.7f);
+        }
         glfwSwapBuffers(window);
         glfwPollEvents();
 
@@ -228,6 +264,11 @@ void Game::render() {
         renderer.clear();
         UIHelpers::setProjection(renderer, window);
         renderSettings();
+        if (showFps) {
+            char fpsBuf[32];
+            snprintf(fpsBuf, sizeof(fpsBuf), "FPS: %d", fpsDisplayValue);
+            renderer.drawText(fpsBuf, 10.0f, 570.0f, 0.7f);
+        }
         glfwSwapBuffers(window);
         glfwPollEvents();
 
@@ -235,11 +276,21 @@ void Game::render() {
         renderer.clear();
         UIHelpers::setProjection(renderer, window);
         renderMapSelection();
+        if (showFps) {
+            char fpsBuf[32];
+            snprintf(fpsBuf, sizeof(fpsBuf), "FPS: %d", fpsDisplayValue);
+            renderer.drawText(fpsBuf, 10.0f, 570.0f, 0.7f);
+        }
         glfwSwapBuffers(window);
         glfwPollEvents();
 
     } else if (gameState == SERVER_CONNECT) {
         renderServerConnect();
+        if (showFps) {
+            char fpsBuf[32];
+            snprintf(fpsBuf, sizeof(fpsBuf), "FPS: %d", fpsDisplayValue);
+            renderer.drawText(fpsBuf, 10.0f, 570.0f, 0.7f);
+        }
         glfwSwapBuffers(window);
         glfwPollEvents();
 

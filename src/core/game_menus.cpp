@@ -133,12 +133,15 @@ void Game::renderSettings() {
     float startY = 150.0f;
     float spacing = 50.0f;
 
-    // Settings items: Forward, Backward, Left, Right, Jump, Menu, Infinite Ammo
-    const char* settingItems[] = {"Forward", "Backward", "Left", "Right", "Jump", "Menu", "Infinite Ammo"};
-    const int numSettings = 7;
+    // Settings items: Forward, Backward, Left, Right, Jump, Menu, Infinite Ammo,
+    // Show FPS, Max FPS, V-Sync
+    const char* settingItems[] = {"Forward", "Backward", "Left", "Right", "Jump",
+                                  "Menu", "Infinite Ammo", "Show FPS", "Max FPS",
+                                  "V-Sync"};
+    const int numSettings = 10;
 
     // Safe key name retrieval with null checks
-    const char* keyNames[7];
+    const char* keyNames[10];
     keyNames[0] = glfwGetKeyName(keyBindings.forward,  0) ? glfwGetKeyName(keyBindings.forward,  0) : "Unknown";
     keyNames[1] = glfwGetKeyName(keyBindings.backward, 0) ? glfwGetKeyName(keyBindings.backward, 0) : "Unknown";
     keyNames[2] = glfwGetKeyName(keyBindings.left,     0) ? glfwGetKeyName(keyBindings.left,     0) : "Unknown";
@@ -146,6 +149,14 @@ void Game::renderSettings() {
     keyNames[4] = glfwGetKeyName(keyBindings.jump,     0) ? glfwGetKeyName(keyBindings.jump,     0) : "Unknown";
     keyNames[5] = glfwGetKeyName(keyBindings.menu,     0) ? glfwGetKeyName(keyBindings.menu,     0) : "Unknown";
     keyNames[6] = infiniteAmmoMode ? "ON" : "OFF"; // Infinite ammo status
+    keyNames[7] = showFps ? "ON" : "OFF";
+    // Max FPS value displayed as the actual number
+    {
+        static char fpsBuf[16];
+        snprintf(fpsBuf, sizeof(fpsBuf), "%d", maxFps);
+        keyNames[8] = fpsBuf;
+    }
+    keyNames[9] = vsyncEnabled ? "ON" : "OFF";
 
     menuButtons.clear();
 
@@ -165,8 +176,11 @@ void Game::renderSettings() {
         glm::vec3 bgColor;
         if (i == settingsSelection) {
             bgColor = glm::vec3(0.6f, 0.8f, 0.2f); // Bright green when selected
-        } else if (i == 6) { // Infinite ammo - special color
-            bgColor = infiniteAmmoMode ? glm::vec3(0.8f, 0.8f, 0.2f) : glm::vec3(0.4f, 0.4f, 0.4f);
+        } else if (i >= 6) { // Toggle settings - special colors
+            bool isOn = (i == 6) ? infiniteAmmoMode :
+                        (i == 7) ? showFps :
+                                   vsyncEnabled;
+            bgColor = isOn ? glm::vec3(0.8f, 0.8f, 0.2f) : glm::vec3(0.4f, 0.4f, 0.4f);
         } else {
             bgColor = glm::vec3(0.3f, 0.5f, 0.7f); // Blue for controls
         }
@@ -206,12 +220,16 @@ void Game::renderSettings() {
     static int lastSettingsSelection = -1;
     if (settingsSelection != lastSettingsSelection) {
         std::cout << "\n=== SETTINGS ===" << std::endl;
-        std::cout << (settingsSelection == 0 ? "> " : "  ") << "Forward: "  << keyNames[0] << std::endl;
-        std::cout << (settingsSelection == 1 ? "> " : "  ") << "Backward: " << keyNames[1] << std::endl;
-        std::cout << (settingsSelection == 2 ? "> " : "  ") << "Left: "     << keyNames[2] << std::endl;
-        std::cout << (settingsSelection == 3 ? "> " : "  ") << "Right: "    << keyNames[3] << std::endl;
-        std::cout << (settingsSelection == 4 ? "> " : "  ") << "Jump: "     << keyNames[4] << std::endl;
-        std::cout << (settingsSelection == 5 ? "> " : "  ") << "Menu: "     << keyNames[5] << std::endl;
+        std::cout << (settingsSelection == 0 ? "> " : "  ") << "Forward: "        << keyNames[0] << std::endl;
+        std::cout << (settingsSelection == 1 ? "> " : "  ") << "Backward: "       << keyNames[1] << std::endl;
+        std::cout << (settingsSelection == 2 ? "> " : "  ") << "Left: "           << keyNames[2] << std::endl;
+        std::cout << (settingsSelection == 3 ? "> " : "  ") << "Right: "          << keyNames[3] << std::endl;
+        std::cout << (settingsSelection == 4 ? "> " : "  ") << "Jump: "           << keyNames[4] << std::endl;
+        std::cout << (settingsSelection == 5 ? "> " : "  ") << "Menu: "           << keyNames[5] << std::endl;
+        std::cout << (settingsSelection == 6 ? "> " : "  ") << "Infinite Ammo: "  << keyNames[6] << std::endl;
+        std::cout << (settingsSelection == 7 ? "> " : "  ") << "Show FPS: "       << keyNames[7] << std::endl;
+        std::cout << (settingsSelection == 8 ? "> " : "  ") << "Max FPS: "        << keyNames[8] << std::endl;
+        std::cout << (settingsSelection == 9 ? "> " : "  ") << "V-Sync: "         << keyNames[9] << std::endl;
         std::cout << "Use UP/DOWN to select, ENTER to change, ESC to go back" << std::endl;
         lastSettingsSelection = settingsSelection;
     }
@@ -235,6 +253,13 @@ void Game::actOnSettingsItem(int index) {
         grenade->setInfiniteAmmo(infiniteAmmoMode);
         flashbang->setInfiniteAmmo(infiniteAmmoMode);
         std::cout << "Infinite ammo mode: " << (infiniteAmmoMode ? "ON" : "OFF") << std::endl;
+    } else if (index == 7) {
+        showFps = !showFps;
+        std::cout << "Show FPS: " << (showFps ? "ON" : "OFF") << std::endl;
+    } else if (index == 9) {
+        vsyncEnabled = !vsyncEnabled;
+        glfwSwapInterval(vsyncEnabled ? 1 : 0);
+        std::cout << "VSync: " << (vsyncEnabled ? "ON" : "OFF") << std::endl;
     } else {
         // Wait for key release and capture new key
         glfwWaitEvents();
@@ -286,7 +311,7 @@ void Game::processSettingsInput() {
     // Handle UP key
     if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS && !inp.upPressed) {
         inp.upPressed = true;
-        settingsSelection = (settingsSelection - 1 + 7) % 7;
+        settingsSelection = (settingsSelection - 1 + 10) % 10;
     } else if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_RELEASE) {
         inp.upPressed = false;
     }
@@ -294,9 +319,27 @@ void Game::processSettingsInput() {
     // Handle DOWN key
     if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS && !inp.downPressed) {
         inp.downPressed = true;
-        settingsSelection = (settingsSelection + 1) % 7;
+        settingsSelection = (settingsSelection + 1) % 10;
     } else if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_RELEASE) {
         inp.downPressed = false;
+    }
+
+    // Handle LEFT/RIGHT for Max FPS (index 8)
+    if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS && !inp.leftPressed) {
+        inp.leftPressed = true;
+        if (settingsSelection == 8) {
+            maxFps = std::max(30, maxFps - 10);
+        }
+    } else if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_RELEASE) {
+        inp.leftPressed = false;
+    }
+    if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS && !inp.rightPressed) {
+        inp.rightPressed = true;
+        if (settingsSelection == 8) {
+            maxFps = std::min(999, maxFps + 10);
+        }
+    } else if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_RELEASE) {
+        inp.rightPressed = false;
     }
 
     // Handle ENTER key
