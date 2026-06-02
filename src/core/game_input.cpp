@@ -176,10 +176,14 @@ void Game::processInput(float deltaTime) {
                 break;
             }
         }
-        // Set cursor icon — only when staying in MENU state (not after dispatch
-        // changed to PLAYING or another state)
+        // Set cursor icon and ensure cursor mode is correct after dispatch
         if (gameState == MENU) {
             glfwSetCursor(window, hoveredAny ? handCursor : nullptr);
+        } else if (gameState == PLAYING) {
+            // Re-assert disabled mode; dispatchMenu sets this too, but this
+            // guards against the glfwSetCursor call that ran BEFORE the
+            // dispatch (hoveredAny=true, handCursor set) interfering.
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
         }
     } else if (gameState == SETTINGS) {
         processSettingsInput();
