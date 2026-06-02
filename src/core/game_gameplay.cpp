@@ -354,11 +354,8 @@ void Game::updateProjectiles(float deltaTime) {
             // Store position before update
             glm::vec3 prevPos = projectiles[i].position;
             
-            // Apply gravity to all projectiles (pistol bullets, grenades, flashbangs)
-            // All projectiles should arc - pistol bullets are fast (120), grenades are medium (30), flashbangs are slow (25)
-            if (glm::length(projectiles[i].velocity) > 20.0f) {
-                projectiles[i].velocity.y -= 15.0f * deltaTime; // Gravity effect
-            }
+            // Apply gravity to all projectiles so they always fall
+            projectiles[i].velocity.y -= 15.0f * deltaTime;
             
             // Simple position update
             projectiles[i].position += projectiles[i].velocity * deltaTime;

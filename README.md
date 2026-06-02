@@ -25,10 +25,18 @@ A multiplayer-enabled 3D first-person shooter game built with OpenGL and C++.
 
 ## Quick Start
 
-### Windows (VS Code + MinGW)
-1. Install MSYS2 and MinGW-w64 (see [WINDOWS_SETUP.md](WINDOWS_SETUP.md))
-2. Build with: `build.bat` or `mingw32-make -f Makefile.windows`
-3. Run with: `run_game.bat`
+### Windows (MSYS2)
+1. Install MSYS2 (see [WINDOWS_SETUP.md](WINDOWS_SETUP.md))
+2. Open **MSYS2 MINGW64** from Start Menu
+3. Install dependencies: `pacman -S --noconfirm mingw-w64-x86_64-gcc mingw-w64-x86_64-make mingw-w64-x86_64-glfw mingw-w64-x86_64-glm`
+4. Build with: `make -f Makefile.windows`
+5. Run with: `./build/bin/game.exe`
+
+Or use the batch scripts:
+- `install_deps_mgw.bat` — install dependencies for MINGW64
+- `BUILD.bat` — interactive build (select MINGW64 when prompted)
+- `run.bat` — launch the game
+- `runServer.bat` — start a multiplayer server
 
 ### Linux/macOS
 ```bash

@@ -9,7 +9,7 @@ echo.
 REM Initialize variables
 set MSYS2_FOUND=0
 set MSYS2_PATH=""
-set MSYS2_INSTALLING=0
+set MSYS2_ENV=ucrt64
 
 :check_msys2
 echo [1/4] Checking MSYS2 installation...
@@ -141,6 +141,24 @@ if %errorlevel% neq 0 (
 )
 
 echo [SUCCESS] MSYS2 is working properly
+
+REM Select environment
+echo.
+echo Select MSYS2 environment:
+echo   1) UCRT64 (default)
+echo   2) MINGW64 (recommended for Makefile.windows)
+set /p env_choice="Choice (1/2): "
+if "%env_choice%"=="" set env_choice=1
+if "%env_choice%"=="2" (
+    set MSYS2_ENV=mingw64
+    set PKG_PREFIX=mingw-w64-x86_64
+    echo Selected: MINGW64
+) else (
+    set MSYS2_ENV=ucrt64
+    set PKG_PREFIX=mingw-w64-ucrt-x86_64
+    echo Selected: UCRT64
+)
+
 echo.
 echo [3/4] Creating build script...
 
@@ -151,7 +169,7 @@ echo cd "%CD:\=/%"
 echo echo "[1/6] Updating package database..."
 echo pacman -Sy --noconfirm
 echo echo "[2/6] Installing dependencies..."
-echo pacman -S --noconfirm mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-make mingw-w64-ucrt-x86_64-glfw mingw-w64-ucrt-x86_64-glm
+echo pacman -S --noconfirm %PKG_PREFIX%-gcc %PKG_PREFIX%-make %PKG_PREFIX%-glfw %PKG_PREFIX%-glm
 echo echo "[3/6] Cleaning previous build..."
 echo mingw32-make -f Makefile.windows clean
 echo echo "[4/6] Building game..."
@@ -159,11 +177,11 @@ echo if mingw32-make -f Makefile.windows all; then
 echo     echo "[5/6] Build successful!"
 echo     echo "[6/6] Setting up runtime files..."
 echo     mkdir -p build/bin
-echo     cp /ucrt64/bin/libgcc_s_seh-1.dll build/bin/ 2>/dev/null && echo "  - libgcc_s_seh-1.dll copied" || echo "  - WARNING: libgcc_s_seh-1.dll not found"
-echo     cp /ucrt64/bin/libstdc++-6.dll build/bin/ 2>/dev/null && echo "  - libstdc++-6.dll copied" || echo "  - WARNING: libstdc++-6.dll not found"
-echo     cp /ucrt64/bin/libwinpthread-1.dll build/bin/ 2>/dev/null && echo "  - libwinpthread-1.dll copied" || echo "  - WARNING: libwinpthread-1.dll not found"
-echo     cp /ucrt64/bin/glfw3.dll build/bin/ 2>/dev/null && echo "  - glfw3.dll copied" || echo "  - WARNING: glfw3.dll not found"
-echo     cp -r assets build/ 2>/dev/null && echo "  - Assets copied" || echo "  - WARNING: Could not copy assets"
+echo     cp /%MSYS2_ENV%/bin/libgcc_s_seh-1.dll build/bin/ 2>/dev/null ^&^& echo "  - libgcc_s_seh-1.dll copied" ^|^| echo "  - WARNING: libgcc_s_seh-1.dll not found"
+echo     cp /%MSYS2_ENV%/bin/libstdc++-6.dll build/bin/ 2>/dev/null ^&^& echo "  - libstdc++-6.dll copied" ^|^| echo "  - WARNING: libstdc++-6.dll not found"
+echo     cp /%MSYS2_ENV%/bin/libwinpthread-1.dll build/bin/ 2>/dev/null ^&^& echo "  - libwinpthread-1.dll copied" ^|^| echo "  - WARNING: libwinpthread-1.dll not found"
+echo     cp /%MSYS2_ENV%/bin/glfw3.dll build/bin/ 2>/dev/null ^&^& echo "  - glfw3.dll copied" ^|^| echo "  - WARNING: glfw3.dll not found"
+echo     cp -r assets build/ 2>/dev/null ^&^& echo "  - Assets copied" ^|^| echo "  - WARNING: Could not copy assets"
 echo     echo ""
 echo     echo "=== BUILD COMPLETED SUCCESSFULLY ==="
 echo     if [ -f "build/bin/game.exe" ]; then
@@ -187,7 +205,7 @@ echo [4/4] Building game...
 echo This may take a few minutes on first run...
 echo.
 
-%MSYS2_PATH% -ucrt64 -shell bash -lc "cd '%CD:\=/%' && chmod +x temp_build.sh && ./temp_build.sh"
+%MSYS2_PATH% -%MSYS2_ENV% -shell bash -lc "cd '%CD:\=/%' && chmod +x temp_build.sh && ./temp_build.sh"
 
 set BUILD_RESULT=%errorlevel%
 
@@ -235,9 +253,9 @@ if %BUILD_RESULT% equ 0 (
     echo    - Try: pacman -Syy --noconfirm (force refresh)
     echo.
     echo 4. Manual Build:
-    echo    - Open MSYS2 UCRT64 manually
+    echo    - Open MSYS2 MINGW64 manually
     echo    - cd to this directory
-    echo    - Run: mingw32-make -f Makefile.windows clean && mingw32-make -f Makefile.windows all
+    echo    - Run: mingw32-make -f Makefile.windows clean ^&^& mingw32-make -f Makefile.windows all
 )
 
 echo.
