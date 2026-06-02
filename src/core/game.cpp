@@ -102,7 +102,11 @@ Game::Game(int width, int height)
       focusServerList(false),
       activeProjectiles(0),
       bulletHoleCount(0),
-      activeEnemies(0)
+      activeEnemies(0),
+      mouseGUIPosX(0.0f),
+      mouseGUIPosY(0.0f),
+      mouseClicked(false),
+      prevMouseDown(false)
 {
     std::cout << "Game initializing..." << std::endl;
 
@@ -117,6 +121,8 @@ Game::Game(int width, int height)
         projectiles[i].active = false;
         projectiles[i].type = 0; // Initialize type field
         projectiles[i].detonated = false; // Initialize detonated field
+        projectilePrevPosInitialized[i] = false;
+        projectilePrevPos[i] = glm::vec3(0.0f);
     }
 
     // Bullet holes
@@ -449,6 +455,8 @@ void Game::resetGame() {
         projectiles[i].active = false;
         projectiles[i].type = 0; // Initialize type field
         projectiles[i].detonated = false; // Initialize detonated field
+        projectilePrevPosInitialized[i] = false;
+        projectilePrevPos[i] = glm::vec3(0.0f);
     }
 
     // Bullet holes

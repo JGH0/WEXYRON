@@ -34,10 +34,15 @@ public:
     // Getters
     const std::string& getTitle() const { return title; }
     int getSelection() const { return selection; }
+    void setSelection(int s) { selection = s; }
     size_t getItemCount() const { return items.size(); }
     std::shared_ptr<MenuItem> getItem(size_t index);
     std::shared_ptr<MenuItem> getSelectedItem();
     std::shared_ptr<Menu> getParent() { return parent.lock(); }
+
+    /// Hit-test a point (in virtual UI coords, top-left origin, y-down)
+    /// Returns the item index or -1 if no item was hit.
+    int hitTest(float px, float py, float screenWidth = 800.0f, float screenHeight = 600.0f) const;
     
     // Rendering
     void render(Renderer& renderer, float screenWidth = 800.0f, float screenHeight = 600.0f);

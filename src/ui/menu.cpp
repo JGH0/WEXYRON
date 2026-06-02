@@ -179,3 +179,24 @@ void Menu::render(Renderer& renderer, float screenWidth, float screenHeight) {
         }
     }
 }
+
+int Menu::hitTest(float px, float py, float screenWidth, float screenHeight) const {
+    if (currentSubmenu) {
+        return currentSubmenu->hitTest(px, py, screenWidth, screenHeight);
+    }
+    if (items.empty()) return -1;
+
+    float x = (menuX == 0) ? (screenWidth - menuWidth) / 2.0f : menuX;
+    float startY = (menuY == 0) ? 150.0f : menuY;
+
+    for (size_t i = 0; i < items.size(); i++) {
+        float itemTop = startY + i * spacing;
+        float itemLeft = x;
+        float itemRight = x + menuWidth;
+        float itemBottom = itemTop + itemHeight;
+        if (px >= itemLeft && px <= itemRight && py >= itemTop && py <= itemBottom) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}

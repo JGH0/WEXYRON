@@ -211,6 +211,10 @@ bool Game::createProjectile(const glm::vec3& position, const glm::vec3& velocity
             projectiles[i].owner = owner;
             projectiles[i].type = type;
             activeProjectiles++;
+            // Reset swept-collision tracking state so stale prev positions
+            // from a previous projectile in this slot don't cause false collisions.
+            projectilePrevPosInitialized[i] = false;
+            projectilePrevPos[i] = position;
             return true;
         }
     }
@@ -814,9 +818,8 @@ bool Game::checkProjectileCollision(Projectile& projectile) {
     if (currentMap && distanceFromPlayer > 0.5f) {
         const std::vector<MapBlock>& blocks = currentMap->getBlocks();
 
-        // Store previous position for swept collision
-        static glm::vec3 prevPositions[MAX_PROJECTILES] = {glm::vec3(0.0f)};
-        static bool prevPositionsInitialized[MAX_PROJECTILES] = {false};
+        // Use class-member tracking instead of statics so slot-reuse doesn't
+        // cause stale prev-positions from a previous projectile on this slot.
         int projIndex = -1;
         for (int i = 0; i < MAX_PROJECTILES; i++) {
             if (&projectiles[i] == &projectile) {
@@ -826,12 +829,12 @@ bool Game::checkProjectileCollision(Projectile& projectile) {
         }
 
         glm::vec3 prevPos;
-        if (projIndex >= 0 && prevPositionsInitialized[projIndex]) {
-            prevPos = prevPositions[projIndex];
+        if (projIndex >= 0 && projectilePrevPosInitialized[projIndex]) {
+            prevPos = projectilePrevPos[projIndex];
         } else {
             prevPos = projectile.position;
             if (projIndex >= 0) {
-                prevPositionsInitialized[projIndex] = true;
+                projectilePrevPosInitialized[projIndex] = true;
             }
         }
 
@@ -896,7 +899,7 @@ bool Game::checkProjectileCollision(Projectile& projectile) {
 
         // Store current position for next frame (only if no collision)
         if (projIndex >= 0) {
-            prevPositions[projIndex] = currPos;
+            projectilePrevPos[projIndex] = currPos;
         }
     }
 

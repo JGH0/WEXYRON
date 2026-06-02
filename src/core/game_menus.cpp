@@ -57,8 +57,16 @@ void Game::renderMenu() {
     float uiScale = std::max(0.8f, std::min(uiWidth / 800.0f, uiHeight / 600.0f));
     float menuTextScale = std::max(0.7f, std::min(1.05f, 0.9f * uiScale));
 
+    // Populate menuButtons for hit-testing (used by processInput)
+    menuButtons.clear();
+    menuButtons.reserve(numItems);
     for (int i = 0; i < numItems; i++) {
         float y = startY + i * spacing;
+
+        // Record the button rect (virtual coords, Y-up)
+        int actionIndex = i;
+        if (isConnectedToServer() && i >= 2) actionIndex = i + 1;
+        menuButtons.push_back({ menuX, y, menuX + menuWidth, y + menuHeight, actionIndex });
 
         // Create model matrix for this menu item
         glm::mat4 model = glm::mat4(1.0f);

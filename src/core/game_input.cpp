@@ -3,6 +3,39 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 void Game::processInput(float deltaTime) {
+    // ── Mouse click edge detection ───────────────────────────────────
+    bool mouseDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+    mouseClicked = mouseDown && !prevMouseDown;
+    prevMouseDown = mouseDown;
+
+    // Convert framebuffer mouse coords to virtual UI coords for GUI hit-testing
+    double mx, my;
+    glfwGetCursorPos(window, &mx, &my);
+    {   // Use same scaling as UIHelpers::getBounds — project from actual fb pixels to virtual 800x600
+        int fbW = 800, fbH = 600;
+        glfwGetFramebufferSize(window, &fbW, &fbH);
+        if (fbW <= 0) fbW = 800;
+        if (fbH <= 0) fbH = 600;
+        const float DESIGN_W = 800.0f, DESIGN_H = 600.0f;
+        float scaleX = (float)fbW / DESIGN_W;
+        float scaleY = (float)fbH / DESIGN_H;
+        float uiScale = std::min(scaleX, scaleY);
+        if (uiScale <= 0.0f) uiScale = 1.0f;
+        float uiW = (float)fbW / uiScale;
+        float uiH = (float)fbH / uiScale;
+        float offX = (uiW - DESIGN_W) * 0.5f;
+        float offY = (uiH - DESIGN_H) * 0.5f;
+        // Cursor (mx,my) has Y-down (top-left origin); virtual coords in ortho have Y-up (bottom-left origin).
+        // Conversion: flip Y, then apply scaling + offset.
+        // The ortho projection maps virtual coords to NDC:
+        //   ndc_x = 2*(vx - left)/(right-left) - 1, left=-offX, right=800+offX
+        //   ndc_y = 2*(vy - bottom)/(top-bottom) - 1, bottom=-offY, top=600+offY
+        // Inverting: vx = mx/fbW * (right-left) + left = mx/uiScale - offX
+        //            vy = (fbH-my)/fbH * (top-bottom) + bottom = (fbH-my)/uiScale - offY
+        mouseGUIPosX = (float)mx / uiScale - offX;
+        mouseGUIPosY = ((float)(fbH - my)) / uiScale - offY;
+    }
+
     // ── ESC ──────────────────────────────────────────────────────────
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS && !inp.escapePressed) {
         inp.escapePressed = true;
@@ -55,6 +88,7 @@ void Game::processInput(float deltaTime) {
         if (menuSelection >= numItems) menuSelection = numItems - 1;
         if (menuSelection < 0) menuSelection = 0;
 
+        // ── Keyboard navigation ─────────────────────────────────────────
         if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS && !inp.upPressed) {
             inp.upPressed = true;
             menuSelection = (menuSelection - 1 + numItems) % numItems;
@@ -68,11 +102,10 @@ void Game::processInput(float deltaTime) {
             inp.downPressed = false;
         }
 
-        if (glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS && !inp.enterPressed) {
-            inp.enterPressed = true;
-            // When connected the Map Editor entry is hidden, so shift indices
-            int actionIndex = menuSelection;
-            if (isConnectedToServer() && menuSelection >= 2) actionIndex = menuSelection + 1;
+        // ── Helper: dispatch a menu action by index ──────────────────────
+        auto dispatchMenu = [&](int rawIndex) {
+            int actionIndex = rawIndex;
+            if (isConnectedToServer() && rawIndex >= 2) actionIndex = rawIndex + 1;
 
             switch (actionIndex) {
                 case 0: // Play
@@ -88,9 +121,8 @@ void Game::processInput(float deltaTime) {
                     inp.resetNavKeys(); menuJustEntered = true;
                     gameState = MAP_EDITOR;
                     editorNoclip = true;
-                    editorMode = MODE_BLOCK; // Ensure we start in BLOCK mode
-                    editorSpawnMode = SPAWN_NONE; // Ensure we start in block placement mode
-                    // Initialize camera position for editor
+                    editorMode = MODE_BLOCK;
+                    editorSpawnMode = SPAWN_NONE;
                     camera.Position = glm::vec3(0.0f, 5.0f, 10.0f);
                     camera.Yaw = -90.0f;
                     camera.Pitch = 0.0f;
@@ -104,7 +136,7 @@ void Game::processInput(float deltaTime) {
                     serverAddress = "";
                     serverPort = 7777;
                     enteringServerAddress = false;
-                    serverConnectSelection = 2; // Start on first button row, not on IP input field
+                    serverConnectSelection = 2;
                     break;
                 case 4: // Settings
                     inp.resetNavKeys(); menuJustEntered = true;
@@ -115,8 +147,25 @@ void Game::processInput(float deltaTime) {
                     glfwSetWindowShouldClose(window, true);
                     break;
             }
+        };
+        if (glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS && !inp.enterPressed) {
+            inp.enterPressed = true;
+            dispatchMenu(menuSelection);
         } else if (glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_RELEASE) {
             inp.enterPressed = false;
+        }
+
+        // ── Mouse click on menu item ─────────────────────────────────────
+        // Hit-test against the rects populated by renderMenu() each frame.
+        if (mouseClicked) {
+            for (const auto& btn : menuButtons) {
+                if (mouseGUIPosX >= btn.x0 && mouseGUIPosX <= btn.x1 &&
+                    mouseGUIPosY >= btn.y0 && mouseGUIPosY <= btn.y1) {
+                    menuSelection = btn.actionIndex;
+                    dispatchMenu(btn.actionIndex);
+                    break;
+                }
+            }
         }
     } else if (gameState == SETTINGS) {
         processSettingsInput();

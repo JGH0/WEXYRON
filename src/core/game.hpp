@@ -175,6 +175,12 @@ private:
     bool firstMouse;
     /// Last mouse X position
     float lastX, lastY;
+    /// Mouse position in framebuffer coordinates (updated each frame when in GUI states)
+    float mouseGUIPosX, mouseGUIPosY;
+    /// Whether LMB has transitioned from pressed to released this frame (edge trigger)
+    bool mouseClicked;
+    /// Previous-frame LMB state for edge detection
+    bool prevMouseDown;
     
     /// Game state (playing, menu, settings)
     enum GameState {
@@ -300,6 +306,14 @@ private:
         int menu;
         int shoot;
     } keyBindings;
+
+    /// A single menu button with its bounding rect (in virtual UI coords).
+    /// Populated each frame by renderMenu(), consumed by processInput().
+    struct MenuButton {
+        float x0, y0, x1, y1;
+        int actionIndex; // enum-like index matching the switch in processInput
+    };
+    std::vector<MenuButton> menuButtons;
     
     /// Projectile structure for bullets
     struct Projectile {
@@ -372,6 +386,10 @@ private:
     
     /// Array of active projectiles
     Projectile projectiles[MAX_PROJECTILES];
+    /// Swept-collision tracking: previous position per slot (reset on create)
+    glm::vec3 projectilePrevPos[MAX_PROJECTILES];
+    /// Whether projectilePrevPos has been initialised for this slot
+    bool projectilePrevPosInitialized[MAX_PROJECTILES];
     /// Array of bullet holes on walls
     BulletHole bulletHoles[MAX_BULLET_HOLES];
     /// Array of enemies
