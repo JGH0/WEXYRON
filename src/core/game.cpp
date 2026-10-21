@@ -12,6 +12,7 @@
  *          game_editor.cpp  – map editor render+input, saveMap
  */
 
+#define GLFW_INCLUDE_NONE
 #include "game.hpp"
 #include "network/network.hpp"
 #include <iostream>
@@ -46,7 +47,6 @@ Game::Game(int width, int height)
       gameState(MENU),
       currentWeapon(PISTOL),
       menuSelection(0),
-      settingsSelection(0),
       isDead(false),
       mapSelection(0),
       gameModeSelection(0),
@@ -120,7 +120,10 @@ Game::Game(int width, int height)
     for (int i = 0; i < MAX_REMOTE_PLAYERS; i++)
         remotePlayers[i].active = false;
 
-    initKeyBindings();
+    // Settings: read assets/settings.cfg (created with the defaults on the
+    // first launch) and apply them. vsync is applied again once the window
+    // exists, see init().
+    loadSettings();
 
     // Projectiles
     for (int i = 0; i < MAX_PROJECTILES; i++) {
@@ -184,13 +187,29 @@ Game::Game(int width, int height)
     activeEnemies = 0;
 
     // ── GLFW / OpenGL window setup ──────────────────────────────────────────
+    // Prefer X11 when it is available (it is on every Linux desktop under
+    // XWayland too). The menu framework needs an active window for keyboard
+    // input, and GLFW's X11 backend delivers that reliably under Xvfb/remote
+    // setups, where the native Wayland backend does not report the window as
+    // focused. Other platforms pick their default backend.
+#if defined(__linux__) && !defined(_WIN32) && !defined(__APPLE__)
+    glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_X11);
+#endif
     if (!glfwInit()) {
         std::cerr << "Failed to initialize GLFW" << std::endl;
         exit(-1);
     }
+    // The shaders are GLSL 330, so ask for a real 3.3 core context. The old
+    // request was COMPAT_PROFILE: some drivers reject #version 330 core there,
+    // and on drivers without a compat profile the window failed to open at all.
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_COMPAT_PROFILE);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+#ifdef __APPLE__
+    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
+#endif
+    // Ask the driver to prefer the dedicated GPU on hybrid laptops.
+    glfwWindowHint(GLFW_COCOA_GRAPHICS_SWITCHING, GLFW_TRUE);
 
     window = glfwCreateWindow(width, height, "Cube CS Lite", nullptr, nullptr);
     if (!window) {
@@ -238,13 +257,37 @@ Game::~Game() {
 void Game::init() {
     std::cout << "Initializing renderer..." << std::endl;
     renderer.init();
+
+    // Re-apply the video settings now that a GL context exists (swap interval).
+    applySettings();
     std::cout << "Renderer initialized." << std::endl;
 
     // Scan maps folder for available maps
     scanMapsFolder();
 
+    // Start the first map in the background; init() finishes before it is ready
+    // and the game shows the menu meanwhile. Simpler and just as fast: load the
+    // first map up front so the menu immediately has something to show.
     if (!currentMap && !mapFiles.empty())
         loadMap(mapFiles[0]);
+
+    // The startup map is only there so the menu has a scene behind it: the
+    // game opens on the main menu, not in a match. Build the menu page before
+    // the first frame - a menu state without a page draws nothing.
+    gameInProgress_ = false;
+    openMainMenu();
+    gameState = MENU;
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+
+    // The startup map was loaded before the texture array existed; build it now
+    // so the map renders with its real materials.
+    renderer.refreshTextures(currentMap);
+    renderer.buildWorld(currentMap);
+
+    // Now that weapons, window and renderer exist, apply the settings loaded
+    // in the constructor (vsync, FPS cap, performance, infinite ammo,
+    // bindings) - no restart needed to see them take effect.
+    applySettings();
 
     playerVelocity = glm::vec3(0.0f);
     isJumping = false;
@@ -257,58 +300,92 @@ void Game::init() {
 }
 
 // ---------------------------------------------------------------------------
+// setPerformanceLevel – how hard the game is allowed to work
+// ---------------------------------------------------------------------------
+void Game::setPerformanceLevel(int level) {
+    perfLevel = std::max(0, std::min(level, 2));
+    static const char* const names[] = {"Low", "Balanced", "High"};
+    std::cout << "Performance: " << names[perfLevel] << std::endl;
+    // The renderer batches either way (identical picture); the profile decides
+    // how much is prepared ahead of time and whether worker threads are used.
+    if (perfLevel == 1 && threadPool_.threadCount() > 0) {
+        // Balanced: leave the worker pool idle unless a load starts.
+    }
+}
+
+// ---------------------------------------------------------------------------
 // loadMap
 // ---------------------------------------------------------------------------
 bool Game::loadMap(const std::string& mapFile) {
+    // Blocking path: used at startup and whenever a worker context can't be
+    // created. Parsing + texture upload happen here, on the GL thread.
+    std::unique_ptr<Map> loaded = MapLoader::loadBlocking(mapFile);
+    if (!loaded) return false;
+    installMap(std::move(loaded));
+    return currentMap != nullptr;
+}
+
+void Game::requestMapLoad(const std::string& mapFile) {
+    // Keep the current map on screen while the new one is parsed and its
+    // textures are uploaded on a worker thread.
+    if (!mapLoader_.start(mapFile, window)) {
+        loadMap(mapFile);
+    }
+}
+
+void Game::pollMapLoad() {
+    if (!mapLoader_.isLoading()) return;
+    std::unique_ptr<Map> loaded = mapLoader_.pollFinished();
+    if (loaded) {
+        installMap(std::move(loaded));
+    }
+}
+
+void Game::installMap(std::unique_ptr<Map> loaded) {
     if (currentMap) delete currentMap;
+    currentMap = loaded.release();
+    if (!currentMap) return;
 
-    currentMap = new Map("assets/maps/" + mapFile);
+    // Setup bomb defusal mode if in team mode or bomb defusal mode
+    if (currentGameMode == TEAM_VS_TEAM || currentGameMode == BOMB_DEFUSAL) {
+        bombDefusalMode = true;
+        activeBombSites = 0;
 
-    if (currentMap) {
-        currentMap->loadTexture("grass.png",  0);
-        currentMap->loadTexture("stone.png",  1);
-        currentMap->loadTexture("brick.png",  2);
-        currentMap->loadTexture("metal.png",  3);
-        currentMap->loadTexture("wood.png",   4);
-        currentMap->loadTexture("sand.png",   5);
-        currentMap->loadTexture("ice.png",    6);
-        currentMap->loadTexture("dirt.png",   7);
-        
-        // Setup bomb defusal mode if in team mode or bomb defusal mode
-        if (currentGameMode == TEAM_VS_TEAM || currentGameMode == BOMB_DEFUSAL) {
-            bombDefusalMode = true;
-            activeBombSites = 0;
-            
-            // Load bomb sites from map data
-            const auto& mapBombSites = currentMap->getBombSites();
-            if (!mapBombSites.empty()) {
-                for (const auto& site : mapBombSites) {
-                    if (activeBombSites < MAX_BOMB_SITES) {
-                        bombSites[activeBombSites] = {
-                            site.position,
-                            glm::vec3(2.0f, 0.2f, 2.0f),  // default size
-                            true,
-                            site.label
-                        };
-                        activeBombSites++;
-                    }
-                }
+        // Load bomb sites from map data
+        const auto& mapBombSites = currentMap->getBombSites();
+        for (const auto& site : mapBombSites) {
+            if (activeBombSites < MAX_BOMB_SITES) {
+                bombSites[activeBombSites] = {
+                    site.position,
+                    glm::vec3(2.0f, 0.2f, 2.0f),  // default size
+                    true,
+                    site.label
+                };
+                activeBombSites++;
             }
-            
-            // Fallback: add default bomb sites if none defined
-            if (activeBombSites == 0) {
-                bombSites[0] = {glm::vec3(5.0f, 0.1f, 5.0f), glm::vec3(2.0f, 0.2f, 2.0f), true, 'A'};
-                bombSites[1] = {glm::vec3(-5.0f, 0.1f, -5.0f), glm::vec3(2.0f, 0.2f, 2.0f), true, 'B'};
-                activeBombSites = 2;
-            }
-        } else {
-            bombDefusalMode = false;
         }
-        
-        resetGame();
+
+        // Fallback: add default bomb sites if none defined
+        if (activeBombSites == 0) {
+            bombSites[0] = {glm::vec3(5.0f, 0.1f, 5.0f), glm::vec3(2.0f, 0.2f, 2.0f), true, 'A'};
+            bombSites[1] = {glm::vec3(-5.0f, 0.1f, -5.0f), glm::vec3(2.0f, 0.2f, 2.0f), true, 'B'};
+            activeBombSites = 2;
+        }
+    } else {
+        bombDefusalMode = false;
     }
 
-    return currentMap != nullptr;
+    resetGame();
+
+    // Rebuild GPU-side state for the new map: the texture array (one bind for
+    // every block texture) and the instanced world geometry.
+    renderer.refreshTextures(currentMap);
+    renderer.buildWorld(currentMap);
+
+    // Now that weapons, window and renderer exist, apply the settings loaded
+    // in the constructor (vsync, FPS cap, performance, infinite ammo,
+    // bindings) - no restart needed to see them take effect.
+    applySettings();
 }
 
 Map* Game::getCurrentMap() {
@@ -512,13 +589,8 @@ void Game::resetGame() {
 // initKeyBindings
 // ---------------------------------------------------------------------------
 void Game::initKeyBindings() {
-    keyBindings.forward  = GLFW_KEY_W;
-    keyBindings.backward = GLFW_KEY_S;
-    keyBindings.left     = GLFW_KEY_A;
-    keyBindings.right    = GLFW_KEY_D;
-    keyBindings.jump     = GLFW_KEY_SPACE;
-    keyBindings.menu     = GLFW_KEY_ESCAPE;
-    keyBindings.shoot    = GLFW_MOUSE_BUTTON_LEFT;
+    // Bindings come from the settings (defaults when no file exists yet).
+    applySettings();
 }
 
 // ---------------------------------------------------------------------------

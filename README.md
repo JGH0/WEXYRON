@@ -84,8 +84,21 @@ make clean && make
 - **G**: Toggle Grenade/Flashbang
 
 ### Other
-- **ESC**: Menu
+- **ESC**: Menu / back
 - **U**: Unstuck (reset position)
+
+All of these can be rebound in **Settings → Controls**. The current binding is
+shown on the right of each row; press ENTER on a row and then the new key (or
+mouse button). Bindings and the other settings are saved to
+`assets/settings.cfg` automatically.
+
+### Menus and settings
+- **UP/DOWN**: move, **ENTER**: confirm/change, **LEFT/RIGHT**: change a value,
+  **ESC**: back / leave the menu
+- The mouse can be used as well (hover to select, click to confirm)
+- Settings are stored in `assets/settings.cfg` (created with the defaults on
+  first launch); see [MENUS.md](MENUS.md) for the menu framework and how to add
+  a setting or a screen
 
 ## Multiplayer Setup
 
@@ -132,7 +145,7 @@ sudo ufw disable
 - OpenGL 3.3+
 - GLFW3
 - GLAD
-- C++11 compiler (g++/MinGW recommended)
+- C++17 compiler (g++/MinGW recommended; the build files set `-std=c++17`)
 - **Windows**: MSYS2 + MinGW-w64
 - **Linux**: g++ build-essential
 - **macOS**: Xcode Command Line Tools

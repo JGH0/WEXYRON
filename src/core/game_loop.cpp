@@ -1,9 +1,18 @@
+#define GLFW_INCLUDE_NONE
 #include "game.hpp"
 #include "../ui/ui_helpers.hpp"
 #include <iostream>
+#include <chrono>
+#include <thread>
 #include <glm/gtc/matrix_transform.hpp>
 
 void Game::update(float deltaTime) {
+    // Swap in a background-loaded map as soon as it is ready (main thread).
+    pollMapLoad();
+
+    // Live settings: pick up edits to assets/settings.cfg without a restart.
+    pollSettingsFile();
+
     if (gameState == PLAYING) {
         // Update network client
         if (networkClient && (networkClient->isConnected() || networkClient->isConnecting())) {
@@ -107,11 +116,19 @@ void Game::update(float deltaTime) {
 }
 
 void Game::frameWait() {
-    if (maxFps <= 0) return;
-    float targetFrameDuration = 1.0f / maxFps;
-    double targetTime = glfwGetTime() + targetFrameDuration;
-    while (glfwGetTime() < targetTime) {
-        // spin
+    // When vsync is on, glfwSwapBuffers already paces the frame; adding our own
+    // wait on top would only add latency. Otherwise sleep instead of spinning
+    // so other threads (network, loaders) keep getting CPU time.
+    if (maxFps <= 0 || vsyncEnabled) return;
+    const double targetTime = glfwGetTime() + 1.0 / static_cast<double>(maxFps);
+    double remaining = targetTime - glfwGetTime();
+    while (remaining > 0.0) {
+        if (remaining > 0.002) {
+            // Leave ~2 ms for the busy check; sleeping precisely avoids burning a core.
+            auto sleepMs = std::chrono::milliseconds(static_cast<long long>((remaining - 0.002) * 1000.0));
+            if (sleepMs.count() > 0) std::this_thread::sleep_for(sleepMs);
+        }
+        remaining = targetTime - glfwGetTime();
     }
 }
 
@@ -133,17 +150,18 @@ void Game::render() {
     if (fbH <= 0) fbH = 600;
     renderer.setViewport(0, 0, fbW, fbH);
 
-    if (gameState == PLAYING) {
-        renderer.clear();
+    renderer.beginFrame();
 
+    if (gameState == PLAYING) {
         glm::mat4 view       = camera.GetViewMatrix();
         glm::mat4 projection = glm::perspective(glm::radians(camera.Zoom),
                                                 (float)fbW / (float)fbH, 0.1f, 100.0f);
-        renderer.setViewProjection(view, projection);
+        renderer.setCamera(view, projection);
 
-        // Render the map
+        // Static map geometry lives in a persistent GPU buffer; this is one
+        // instanced draw call, not one per block.
         if (currentMap) {
-            renderer.renderMap(currentMap);
+            renderer.renderWorld();
         }
 
         // Render bomb sites and bomb
@@ -233,11 +251,7 @@ void Game::render() {
             renderer.drawText(fpsBuf, 4.0f, 8.0f, 0.46f);
         }
 
-        glfwSwapBuffers(window);
-        glfwPollEvents();
-
     } else if (gameState == DEAD) {
-        renderer.clear();
         UIHelpers::setProjection(renderer, window);
         renderDeathScreen();
         if (showFps) {
@@ -245,60 +259,32 @@ void Game::render() {
             snprintf(fpsBuf, sizeof(fpsBuf), "FPS: %d", fpsDisplayValue);
             renderer.drawText(fpsBuf, 4.0f, 8.0f, 0.46f);
         }
-        glfwSwapBuffers(window);
-        glfwPollEvents();
 
-    } else if (gameState == MENU) {
-        renderer.clear();
+    } else if (gameState == MENU || gameState == SETTINGS ||
+               gameState == MAP_SELECTION || gameState == SERVER_CONNECT) {
+        // All menu screens are drawn by the menu framework (ui/menu.hpp);
+        // the view decides title, rows and footer.
         UIHelpers::setProjection(renderer, window);
-        renderMenu();
+        if (gameState == SERVER_CONNECT) {
+            renderServerConnect();
+        } else {
+            menu();
+        }
         if (showFps) {
             char fpsBuf[32];
             snprintf(fpsBuf, sizeof(fpsBuf), "FPS: %d", fpsDisplayValue);
             renderer.drawText(fpsBuf, 4.0f, 8.0f, 0.46f);
         }
-        glfwSwapBuffers(window);
-        glfwPollEvents();
-
-    } else if (gameState == SETTINGS) {
-        renderer.clear();
-        UIHelpers::setProjection(renderer, window);
-        renderSettings();
-        if (showFps) {
-            char fpsBuf[32];
-            snprintf(fpsBuf, sizeof(fpsBuf), "FPS: %d", fpsDisplayValue);
-            renderer.drawText(fpsBuf, 4.0f, 8.0f, 0.46f);
-        }
-        glfwSwapBuffers(window);
-        glfwPollEvents();
-
-    } else if (gameState == MAP_SELECTION) {
-        renderer.clear();
-        UIHelpers::setProjection(renderer, window);
-        renderMapSelection();
-        if (showFps) {
-            char fpsBuf[32];
-            snprintf(fpsBuf, sizeof(fpsBuf), "FPS: %d", fpsDisplayValue);
-            renderer.drawText(fpsBuf, 4.0f, 8.0f, 0.46f);
-        }
-        glfwSwapBuffers(window);
-        glfwPollEvents();
-
-    } else if (gameState == SERVER_CONNECT) {
-        renderServerConnect();
-        if (showFps) {
-            char fpsBuf[32];
-            snprintf(fpsBuf, sizeof(fpsBuf), "FPS: %d", fpsDisplayValue);
-            renderer.drawText(fpsBuf, 4.0f, 8.0f, 0.46f);
-        }
-        glfwSwapBuffers(window);
-        glfwPollEvents();
 
     } else if (gameState == MAP_EDITOR) {
         renderEditor();
-        glfwSwapBuffers(window);
-        glfwPollEvents();
     }
+
+    // Flush all queued geometry as a handful of instanced draw calls, then
+    // present. This is the only swap/poll in the frame.
+    renderer.endFrame();
+    glfwSwapBuffers(window);
+    glfwPollEvents();
 }
 
 void Game::cleanup() {

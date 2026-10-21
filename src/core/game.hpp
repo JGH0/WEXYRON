@@ -8,16 +8,25 @@
 #ifndef GAME_HPP
 #define GAME_HPP
 
+// glad must come before GLFW (it owns the GL headers), and GLFW must not pull
+// in the system GL headers again.
 #include <glad/glad.h>
+#define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #include <vector>
 #include <glm/glm.hpp>
 #include <unordered_map>
+#include <filesystem>
 #include <cstring>
 #include "camera.hpp"
 #include "renderer.hpp"
 #include "map.hpp"
+#include "map_loader.hpp"
+#include "thread_pool.hpp"
+#include <memory>
 #include "../ui/menu.hpp"
+#include "../ui/menu_pages.hpp"
+#include "settings.hpp"
 #include "../systems/weapon.hpp"
 #include "../systems/physics.hpp"
 #include "../systems/input.hpp"
@@ -83,6 +92,96 @@ public:
      * @return true if loaded successfully, false otherwise
      */
     bool loadMap(const std::string& mapFile);
+
+    /**
+     * @brief Begin loading a map in the background (non-blocking)
+     *
+     * The old map keeps rendering until the new one is ready, then it is
+     * swapped in on the main thread. Falls back to a blocking load when a
+     * worker GL context can't be created.
+     */
+    void requestMapLoad(const std::string& mapFile);
+
+    /// @return true while a background map load is in progress
+    bool isMapLoading() const { return mapLoader_.isLoading(); }
+
+    /// Finish a background map load if it is ready (call once per frame).
+    void pollMapLoad();
+
+    /// @return number of helper threads in the task pool
+    unsigned int workerThreadCount() const { return threadPool_.threadCount(); }
+
+    /// Performance profile shown in Settings, mapped onto the renderer and the
+    /// background loader. Defaults to Balanced so the game never hammers a
+    /// machine unless the player asks for it.
+    void setPerformanceLevel(int level);
+    int  performanceLevel() const { return perfLevel; }
+
+    /// Live settings (loaded from assets/settings.cfg at startup).
+    settings::GameSettings& gameSettings() { return gameSettings_; }
+    const settings::GameSettings& gameSettings() const { return gameSettings_; }
+
+    // ── Menu framework glue (used by the free functions in game_input.cpp) ──
+    /// Key-edge query: true once per press (edges stored in Game::inp).
+    bool menuKeyPressed(int key, GLFWwindow* window);
+    /// Forget menu key edges (after a key-binding capture ends).
+    void resetMenuKeyEdges(GLFWwindow* window);
+    /// Re-read the menu key edges from the keyboard after a screen change, so
+    /// a key that is still held is not seen as a new press on the next frame.
+    void syncMenuEdges(GLFWwindow* window);
+
+    /**
+     * @brief Developer hook: drive the active menu from tests/scripts.
+     *
+     * Keys are handled exactly like a physical press (no GLFW needed), so UI
+     * integration tests can navigate menus on a headless machine:
+     *   up down left right enter space escape   - as the key named
+     *   capture:<glfwKeyCode>                   - finish a key-binding capture
+     * Returns false when no menu is active.
+     */
+    bool debugMenuKey(const std::string& key);
+
+    /// Print the active menu page (selection, values) to stdout.
+    void debugMenuDump() const;
+
+    /// Select the row with this exact label on the active page.
+    bool debugMenuSelect(const std::string& label);
+
+    /// Show `page` in the settings view (framework tests).
+    void debugShowPage(menu::Page page);
+    /// The active view / page / window, for framework tests.
+    menu::MenuView* debugMenuView() { return &activeMenuView(); }
+    menu::Page* debugMenuPage();
+    GLFWwindow* windowHandle() const { return window; }
+    int debugGameMode() const { return static_cast<int>(currentGameMode); }
+
+    int debugMenuSelection() const { return activeMenuViewConst().stack.selection(); }
+    bool debugMainMenuReady() const { return mainMenu_.stack.current() != nullptr; }
+    int debugShootButton() const { return keyBindings.shootButton; }
+    int debugShootKey() const { return keyBindings.shootKey; }
+    /// Re-resolve bindings from the current settings (framework tests).
+    void applySettingsForTest() { applySettings(); }
+    size_t debugMenuDepth() const { return activeMenuViewConst().stack.depth(); }
+
+    /// Scripted run: play `frames` frames of the current state ("game:N").
+    void debugRunFrames(int frames);
+    int debugState() const { return (int)gameState; }
+    /// Open a menu screen by name ("main", "settings", "maps", "server").
+    void debugOpenMenu(const std::string& name);
+
+    /// Write the current settings to the settings file.
+    bool saveSettings();
+
+    /**
+     * @brief Pick up changes made to the settings file while the game runs.
+     *
+     * Called once a second: compares the file's modification time and applies
+     * the values whose text changed (so editing assets/settings.cfg takes
+     * effect immediately, like reading it at startup).
+     */
+    void pollSettingsFile();
+    /// Apply the current settings to the engine (vsync, performance, bindings).
+    void applySettings();
     
     /**
      * @brief Get the current map
@@ -115,6 +214,9 @@ public:
      * @brief Check if connected to multiplayer server
      */
     bool isConnectedToServer() const;
+
+    /// True while a connection attempt is in progress.
+    bool isConnectingToServer() const;
     
     /**
      * @brief Enable/disable multiplayer mode
@@ -143,6 +245,12 @@ public:
     };
 
 private:
+    /// Take ownership of a loaded map and make it the active one (GL thread).
+    void installMap(std::unique_ptr<Map> loaded);
+
+    /// Shared map-start logic for the map selection menu (ENTER / click).
+    void startSelectedMap(const std::string& mapFile);
+
     /// Current game map
     Map* currentMap;
     /// Main game window
@@ -208,16 +316,13 @@ private:
     /// Current weapon
     WeaponType currentWeapon;
     
-    /// Menu selection
+    /// Menu selection (index of the selected row in the main menu page)
     int menuSelection;
-    
-    /// Settings selection
-    int settingsSelection;
 
     /// Death state
     bool isDead;
     
-    /// Map selection
+    /// Map selection (map gameModeRow_ picks a mode instead of a map)
     int mapSelection = 0;
 
     /// Game mode selection
@@ -233,6 +338,9 @@ private:
     /// Menu state tracking
     bool menuJustEntered = true; // Reset key states when entering menu
 
+    /// True once a match has started (the main menu then offers RESUME).
+    bool gameInProgress_ = false;
+
     // ---------------------------------------------------------------
     // All per-frame key-state booleans live here so they can be reset
     // atomically when the game changes state – the root cause of the
@@ -246,6 +354,16 @@ private:
         bool enterPressed   = false;
         bool leftPressed    = false;
         bool rightPressed   = false;
+
+        /// Set when the menu edges must be re-read from the keyboard (after a
+        /// screen change). Processed once at the start of the next frame by
+        /// Game::syncMenuEdges(), never in the middle of a menu's input pass.
+        bool menuEdgesNeedSync = true;
+
+        // Repeat support for the menu navigation keys: how long the key has
+        // been held and when it last fired. Holding UP/DOWN scrolls a list.
+        double upHeld = 0.0, downHeld = 0.0, leftHeld = 0.0, rightHeld = 0.0;
+        double upLast = 0.0, downLast = 0.0, leftLast = 0.0, rightLast = 0.0;
 
         // Server-connect specific
         bool tabPressed       = false;
@@ -277,30 +395,44 @@ private:
 
         // Gameplay specific
         bool gameplayGPressed  = false;
+        bool gameplayWeaponPressed[5] = {false, false, false, false, false}; // indices 1-4
 
         InputState() {
             memset(digitPressed,  0, sizeof(digitPressed));
             memset(texKeyPressed, 0, sizeof(texKeyPressed));
         }
 
-        /// Reset navigation keys used by menus. Call whenever switching state.
-        /// NOTE: enterPressed is intentionally NOT reset here - it must stay true
-        /// until the key is physically released so destination states cannot react
-        /// to a still-held ENTER (prevents instant map/option selection on entry).
-        /// NOTE: escapePressed is intentionally NOT reset here – it has its own
-        /// release handler in processInput and must stay true until the key is
-        /// physically released, otherwise the menu opens and immediately closes.
+        /// Longest frame step, so held keys do not fire spuriously after a stall.
+        static constexpr double kMaxHeldStep = 0.1;
+        /// Repeat delay and interval for held navigation keys (seconds).
+        static constexpr double kRepeatDelay = 0.4;
+        static constexpr double kRepeatRate = 0.10;
+
+        /// Forget the pressed-state of the navigation keys. NEVER clears a key
+        /// that is still physically held: that would make the framework see a
+        /// new press next frame and repeat the action every frame while the
+        /// key is held (the key-edge bookkeeping must follow the physical key,
+        /// see Game::menuKeyPressed()).
+        /// Forget the navigation keys' press state when switching screens.
+        ///
+        /// This clears *consumed* edges only. The menu-edge bookkeeping is run
+        /// by Game::menuKeyPressed() from the physical key state before this is
+        /// used; a key that is still held will be marked as already handled on
+        /// the next frame, so the action is not repeated every frame (the bug
+        /// where holding ENTER changed a setting again and again).
         void resetNavKeys() {
-            upPressed     = false;
-            downPressed   = false;
-            leftPressed   = false;
-            rightPressed  = false;
+            menuEdgesNeedSync = true;   // edges are re-read at the next frame
+            upPressed        = true;
+            downPressed      = true;
+            leftPressed      = true;
+            rightPressed     = true;
             shapeResetPressed = false;
             gameplayGPressed = false;
+            for (int i = 0; i < 5; i++) gameplayWeaponPressed[i] = false;
         }
     } inp;
 
-    /// Key bindings
+    /// Bindings resolved from `gameSettings_` (GLFW key / mouse codes).
     struct KeyBindings {
         int forward;
         int backward;
@@ -308,16 +440,52 @@ private:
         int right;
         int jump;
         int menu;
-        int shoot;
+        int shoot;        ///< shoot as a key code (-1 when bound to the mouse)
+        int shootKey;     ///< same as `shoot`, explicit name
+        int shootButton;  ///< mouse button for shooting (-1 when bound to a key)
+        int grenade;
     } keyBindings;
 
-    /// A single menu button with its bounding rect (in virtual UI coords).
-    /// Populated each frame by renderMenu(), consumed by processInput().
-    struct MenuButton {
-        float x0, y0, x1, y1;
-        int actionIndex; // enum-like index matching the switch in processInput
-    };
-    std::vector<MenuButton> menuButtons;
+    /// Live settings (bindings, video, gameplay) and the settings file.
+    settings::GameSettings gameSettings_;
+    std::vector<settings::SettingDef> settingDefs_;
+    /// Text of every setting as last read from / written to the file, so
+    /// external edits can be detected per setting.
+    std::vector<std::string> settingFileText_;
+    /// Remember every setting's current file text (after a load or save).
+    void rememberSettingsText();
+    /// When the settings file was last seen (modification time).
+    std::filesystem::file_time_type settingsFileTime_{};
+    double nextSettingsPoll_ = 0.0;
+
+    /// Menu screens built by game_menus.cpp. All of them are framework views;
+    /// an "active" view is the one belonging to the current menu state.
+    menu::MenuView mainMenu_;     ///< main menu (bottom page of the stack)
+    menu::MenuView settingsMenu_; ///< settings page, controls pushed on top
+    menu::MenuView mapMenu_;      ///< map selection
+    menu::MenuView serverMenu_;   ///< connect to server
+    /// Set while the current state shows one of the menu views.
+    bool menuActive_ = false;
+
+    /// Show `page` in `view` (resets selection/scroll).
+    void openMenuView(menu::MenuView& view, menu::Page page);
+    /// The view of the current menu state.
+    menu::MenuView& activeMenuView();
+    const menu::MenuView& activeMenuViewConst() const;
+    /// Open the settings screen (values + controls sub-page).
+    void openSettings();
+    /// Append every key binding row (grouped) to `page`.
+    void appendBindingRows(menu::Page& page);
+    /// Restore the default key bindings (controls page "RESET BINDINGS").
+    void resetBindingsToDefaults();
+    /// Rebuild the current server page (list/status/address values change).
+    void refreshServerRows();
+    /// Poll LAN discovery and type into the IP/port row (SERVER_CONNECT).
+    void processServerConnectTextInput();
+    /// Open the map selection screen.
+    void openMapSelection();
+    /// Draw the connect-to-server screen (framework view + text fields).
+    void renderServerConnect();
     
     /// Projectile structure for bullets
     struct Projectile {
@@ -424,6 +592,14 @@ private:
     /// Network multiplayer
     NetworkClient* networkClient;
     bool multiplayerMode;
+
+    /// Background map loading + CPU task pool (sized from the hardware).
+    MapLoader mapLoader_;
+    ThreadPool threadPool_;
+
+    /// Performance profile. 0 = Low (minimal GPU/CPU work), 1 = Balanced
+    /// (default), 2 = High (prepared on load, smaller CPU spikes).
+    int perfLevel = 1;
     int playerCount; // Number of connected players including self
     
     /// Remote players (for multiplayer)
@@ -567,9 +743,9 @@ private:
     void shoot();
     
     /**
-     * @brief Switch weapon based on key input
+     * @brief Switch to the given weapon (no-op if already holding it)
      */
-    void switchWeapon(int weaponNumber);
+    void switchWeapon(WeaponType weapon);
     
     /**
      * @brief Shoot specific weapon types
@@ -827,44 +1003,30 @@ private:
     void initKeyBindings();
     
     /**
-     * @brief Render main menu
+     * @brief Draw the active menu (main menu, settings, maps, server list)
      */
-    void renderMenu();
-    
+    void menu();
+
     /**
-     * @brief Render settings menu
-     */
-    void renderSettings();
-    
-    /**
-     * @brief Render map selection menu
-     */
-    void renderMapSelection();
-    
-    /**
-     * @brief Process menu input
+     * @brief Route one frame of input to the active menu
      */
     void processMenuInput();
-    
+
     /**
-     * @brief Process settings input
+     * @brief Open the main menu (rebuilds its rows for the current state)
      */
-    void processSettingsInput();
-    
+    void openMainMenu();
+
     /**
-     * @brief Process map selection input
+     * @brief Open the "connect to server" screen
      */
-    void processMapSelectionInput();
-    
+    void openServerConnect();
+
     /**
-     * @brief Render server connection menu
+     * @brief Close the current menu back to the game (ESC on a menu page
+     *        that was opened from the game).
      */
-    void renderServerConnect();
-    
-    /**
-     * @brief Process server connection input
-     */
-    void processServerConnectInput();
+    void closeMenuToGame();
     
     /**
      * @brief Render map editor
@@ -882,19 +1044,10 @@ private:
     void saveMap(const std::string& filename);
     
     /**
-     * @brief Execute the action for a settings item (called by ENTER or mouse click)
+     * @brief Load the settings file (creating it with defaults when missing)
+     * and apply it to the engine.
      */
-    void actOnSettingsItem(int index);
-
-    /**
-     * @brief Save key bindings to file
-     */
-    void saveKeyBindings();
-    
-    /**
-     * @brief Load key bindings from file
-     */
-    void loadKeyBindings();
+    void loadSettings();
 
     /**
      * @brief Scan assets/maps folder for .map files and populate map lists

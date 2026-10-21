@@ -1,8 +1,63 @@
+/**
+ * @file game_input.cpp
+ * @brief Input routing: ESC handling and the per-state dispatch
+ *
+ * The game states that show a menu (MENU, SETTINGS, MAP_SELECTION,
+ * SERVER_CONNECT) are all driven by the menu framework: processMenuInput()
+ * builds the per-frame mouse/keyboard state and calls menu::processInput().
+ * This file only decides which state gets the input and handles the
+ * gameplay-specific keys in the remaining states.
+ */
+
+#define GLFW_INCLUDE_NONE
 #include "game.hpp"
 #include <iostream>
 #include <glm/gtc/matrix_transform.hpp>
 
+/// Build the framework's mouse state from the cursor position in framebuffer
+/// pixels (the same mapping UIHelpers uses for drawing).
+static menu::MouseState makeMenuMouse(GLFWwindow* window, double mx, double my, bool clicked) {
+    int fbW = 800, fbH = 600;
+    glfwGetFramebufferSize(window, &fbW, &fbH);
+    if (fbW <= 0) fbW = 800;
+    if (fbH <= 0) fbH = 600;
+    const float designW = 800.0f, designH = 600.0f;
+    float uiScale = std::min(static_cast<float>(fbW) / designW, static_cast<float>(fbH) / designH);
+    if (uiScale <= 0.0f) uiScale = 1.0f;
+    const float offX = (static_cast<float>(fbW) / uiScale - designW) * 0.5f;
+    const float offY = (static_cast<float>(fbH) / uiScale - designH) * 0.5f;
+
+    menu::MouseState mouse;
+    mouse.x = static_cast<float>(mx) / uiScale - offX;
+    mouse.y = static_cast<float>(my) / uiScale - offY;
+    mouse.inside = true;
+    mouse.clicked = clicked;
+    return mouse;
+}
+
+/// Input callbacks for the framework, backed by Game::menuKeyPressed().
+static menu::MenuInput makeMenuInput(Game& game, GLFWwindow* window) {
+    menu::MenuInput in;
+    in.pressed = [&game, window](int key) { return game.menuKeyPressed(key, window); };
+    in.held = [window](int key) { return glfwGetKey(window, key) == GLFW_PRESS; };
+    in.isModifier = [](int key) {
+        return key == GLFW_KEY_LEFT_SHIFT || key == GLFW_KEY_RIGHT_SHIFT ||
+               key == GLFW_KEY_LEFT_CONTROL || key == GLFW_KEY_RIGHT_CONTROL ||
+               key == GLFW_KEY_LEFT_ALT || key == GLFW_KEY_RIGHT_ALT ||
+               key == GLFW_KEY_LEFT_SUPER || key == GLFW_KEY_RIGHT_SUPER;
+    };
+    in.onCaptureChanged = [&game, window](bool capturing) {
+        // Key edges from the capture (ENTER opens it, ESC cancels it) must not
+        // leak into the state that comes after a successful binding.
+        if (!capturing) game.resetMenuKeyEdges(window);
+    };
+    return in;
+}
+
 void Game::processInput(float deltaTime) {
+    // Menu key edges are re-read once per frame (never between the menu's
+    // separate queries for the same press, e.g. ENTER and KP ENTER).
+    if (inp.menuEdgesNeedSync) syncMenuEdges(window);
     // ── Mouse click edge detection ───────────────────────────────────
     bool mouseDown = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
     mouseClicked = mouseDown && !prevMouseDown;
@@ -11,7 +66,7 @@ void Game::processInput(float deltaTime) {
     // Convert framebuffer mouse coords to virtual UI coords for GUI hit-testing
     double mx, my;
     glfwGetCursorPos(window, &mx, &my);
-    {   // Use same scaling as UIHelpers::getBounds — project from actual fb pixels to virtual 800x600
+    {   // Same scaling as UIHelpers::getBounds — project from actual fb pixels to virtual 800x600
         int fbW = 800, fbH = 600;
         glfwGetFramebufferSize(window, &fbW, &fbH);
         if (fbW <= 0) fbW = 800;
@@ -25,172 +80,55 @@ void Game::processInput(float deltaTime) {
         float uiH = (float)fbH / uiScale;
         float offX = (uiW - DESIGN_W) * 0.5f;
         float offY = (uiH - DESIGN_H) * 0.5f;
-        // Cursor (mx,my) has Y-down (top-left origin); virtual coords in ortho have Y-up (bottom-left origin).
-        // Conversion: flip Y, then apply scaling + offset.
-        // UIHelpers::getBounds returns {left,right,top,bottom} = {-offX, 800+offX, -offY, 600+offY}
-        // setProjection passes these to glm::ortho as (left,right,bottom,top).
-        // So the ACTUAL ortho call is: ortho(-offX, 800+offX, 600+offY, -offY)
-        // This means bottom > top => Y goes DOWN (matching GLFW cursor coords).
-        // Inverting: vx = mx/fbW * (right-left) + left = mx/uiScale - offX
-        //            vy = my/fbH * (top-bottom) + bottom = my/uiScale - offY
-        // (Note: because top-bottom < 0, the NDC y inversion works out such that
-        //  vy matches cursor y directly — no Y-flip needed.)
+        // The ortho projection flips Y once, so canvas y grows downwards and
+        // matches the cursor position directly (no Y flip needed).
         mouseGUIPosX = (float)mx / uiScale - offX;
         mouseGUIPosY = (float)my / uiScale - offY;
     }
 
-    // ── ESC ──────────────────────────────────────────────────────────
-    if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS && !inp.escapePressed) {
-        inp.escapePressed = true;
-        if (gameState == PLAYING) {
-            inp.resetNavKeys();
-            menuJustEntered = true;
-            gameState = MENU;
-            menuSelection = 0;
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-        } else if (gameState == MENU) {
-            gameState = PLAYING;
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-        } else if (gameState == SETTINGS) {
-            // ESC from settings returns to menu, not to game
-            inp.resetNavKeys();
-            menuJustEntered = true;
-            gameState = MENU;
-            menuSelection = isConnectedToServer() ? 3 : 4; // Settings index
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-        } else if (gameState == MAP_SELECTION) {
-            inp.resetNavKeys();
-            menuJustEntered = true;
-            gameState = MENU;
-            menuSelection = 1; // back to Map Selection item
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-        } else if (gameState == SERVER_CONNECT) {
-            inp.resetNavKeys();
-            menuJustEntered = true;
-            gameState = MENU;
-            menuSelection = isConnectedToServer() ? 2 : 3;
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-        } else if (gameState == MAP_EDITOR) {
-            inp.resetNavKeys();
-            menuJustEntered = true;
-            gameState = MENU;
-            menuSelection = isConnectedToServer() ? 1 : 2;
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-        }
-    } else if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_RELEASE) {
-        inp.escapePressed = false;
+    // ── State dispatch ────────────────────────────────────────────────
+    menuActive_ = false;
+
+    // A menu state always needs a page to show. If one is missing (e.g. the
+    // state was set before the menu was built) the screen would be blank, so
+    // build the menu for it now. (Only then: openMainMenu() also resets the
+    // key edges and must not run on every frame.)
+    const bool inMenuState = (gameState == MENU || gameState == SETTINGS ||
+                              gameState == MAP_SELECTION || gameState == SERVER_CONNECT);
+    if (inMenuState && !activeMenuView().stack.current()) {
+        if (gameState == MENU) openMainMenu();
+        else if (gameState == SETTINGS) openSettings();
+        else if (gameState == MAP_SELECTION) openMapSelection();
+        else openServerConnect();
     }
 
-    // ── State dispatch ────────────────────────────────────────────────
     if (gameState == PLAYING) {
+        // ESC opens the menu (unless the player bound another key to it).
+        if (glfwGetKey(window, keyBindings.menu) == GLFW_PRESS && !inp.escapePressed) {
+            inp.escapePressed = true;
+            inp.resetNavKeys();
+            openMainMenu();
+            gameState = MENU;
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        } else if (glfwGetKey(window, keyBindings.menu) == GLFW_RELEASE) {
+            inp.escapePressed = false;
+        }
         processGameInput(deltaTime);
-    } else if (gameState == MENU) {
-        if (menuJustEntered) { inp.resetNavKeys(); menuJustEntered = false; }
-
-        int numItems = isConnectedToServer() ? 5 : 6;
-        if (menuSelection >= numItems) menuSelection = numItems - 1;
-        if (menuSelection < 0) menuSelection = 0;
-
-        // ── Keyboard navigation ─────────────────────────────────────────
-        if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS && !inp.upPressed) {
-            inp.upPressed = true;
-            menuSelection = (menuSelection - 1 + numItems) % numItems;
-        } else if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_RELEASE) {
-            inp.upPressed = false;
-        }
-        if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS && !inp.downPressed) {
-            inp.downPressed = true;
-            menuSelection = (menuSelection + 1) % numItems;
-        } else if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_RELEASE) {
-            inp.downPressed = false;
-        }
-
-        // ── Helper: dispatch a menu action by index ──────────────────────
-        auto dispatchMenu = [&](int rawIndex) {
-            int actionIndex = rawIndex;
-            if (isConnectedToServer() && rawIndex >= 2) actionIndex = rawIndex + 1;
-
-            switch (actionIndex) {
-                case 0: // Play
-                    inp.resetNavKeys(); menuJustEntered = true;
-                    gameState = PLAYING;
-                    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-                    break;
-                case 1: // Map Selection
-                    inp.resetNavKeys(); menuJustEntered = true;
-                    gameState = MAP_SELECTION;
-                    glfwSetCursor(window, nullptr);
-                    break;
-                case 2: // Map Editor
-                    inp.resetNavKeys(); menuJustEntered = true;
-                    gameState = MAP_EDITOR;
-                    editorNoclip = true;
-                    editorMode = MODE_BLOCK;
-                    editorSpawnMode = SPAWN_NONE;
-                    camera.Position = glm::vec3(0.0f, 5.0f, 10.0f);
-                    camera.Yaw = -90.0f;
-                    camera.Pitch = 0.0f;
-                    camera.updateCameraVectors();
-                    editorGridPos = camera.Position + camera.Front * 5.0f;
-                    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-                    break;
-                case 3: // Connect to Server
-                    inp.resetNavKeys(); menuJustEntered = true;
-                    gameState = SERVER_CONNECT;
-                    serverAddress = "";
-                    serverPort = 7777;
-                    enteringServerAddress = false;
-                    serverConnectSelection = 2;
-                    glfwSetCursor(window, nullptr);
-                    break;
-                case 4: // Settings
-                    inp.resetNavKeys(); menuJustEntered = true;
-                    gameState = SETTINGS;
-                    settingsSelection = 0;
-                    glfwSetCursor(window, nullptr);
-                    break;
-                case 5: // Exit
-                    glfwSetWindowShouldClose(window, true);
-                    break;
-            }
-        };
-        if (glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS && !inp.enterPressed) {
-            inp.enterPressed = true;
-            dispatchMenu(menuSelection);
-        } else if (glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_RELEASE) {
-            inp.enterPressed = false;
-        }
-
-        // ── Mouse hover + click on menu item ────────────────────────────
-        // Hit-test against the rects populated by renderMenu() each frame.
-        // Track hover to highlight buttons; click dispatches the action.
-        bool hoveredAny = false;
-        for (const auto& btn : menuButtons) {
-            if (mouseGUIPosX >= btn.x0 && mouseGUIPosX <= btn.x1 &&
-                mouseGUIPosY >= btn.y0 && mouseGUIPosY <= btn.y1) {
-                menuSelection = btn.actionIndex;
-                hoveredAny = true;
-                if (mouseClicked) {
-                    dispatchMenu(btn.actionIndex);
-                }
-                break;
-            }
-        }
-        // Set cursor icon only while staying in MENU. Note: the for loop above
-        // may have called glfwSetCursor(handCursor) on the same frame that
-        // dispatchMenu changed state to PLAYING, but GLFW may honor that
-        // cursor even when mode is DISABLED. As a final guarantee, restore
-        // disabled mode at the very end of processInput.
-        if (gameState == MENU) {
-            glfwSetCursor(window, hoveredAny ? handCursor : nullptr);
-        }
-    } else if (gameState == SETTINGS) {
-        processSettingsInput();
-    } else if (gameState == MAP_SELECTION) {
-        processMapSelectionInput();
-    } else if (gameState == SERVER_CONNECT) {
-        processServerConnectInput();
+    } else if (gameState == MENU || gameState == SETTINGS ||
+               gameState == MAP_SELECTION || gameState == SERVER_CONNECT) {
+        processMenuInput();
     } else if (gameState == MAP_EDITOR) {
+        // ESC leaves the editor back to the main menu.
+        if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS && !inp.escapePressed) {
+            inp.escapePressed = true;
+            inp.resetNavKeys();
+            menuJustEntered = true;
+            openMainMenu();
+            gameState = MENU;
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        } else if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_RELEASE) {
+            inp.escapePressed = false;
+        }
         processEditorInput();
     } else if (gameState == DEAD) {
         if (glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS ||
@@ -203,14 +141,91 @@ void Game::processInput(float deltaTime) {
     // ── Final cursor mode enforcement ────────────────────────────────
     // Runs after every state's input handler above. If any code path
     // transitioned to PLAYING (mouse click, keyboard ENTER, etc.), the
-    // cursor must be hidden. This also ensures GUI states get NORMAL mode
-    // even if their individual handlers didn't set it.
+    // cursor must be hidden.
     if (gameState == PLAYING) {
         glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
     } else if (gameState != MAP_EDITOR) {
         glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
     }
 }
+
+void Game::closeMenuToGame() {
+    // ESC on the bottom page of a menu that was opened from the game returns
+    // to it; from the main menu (no game in progress) it just re-opens the
+    // main menu itself.
+    inp.resetNavKeys();
+    menuJustEntered = true;
+    if (gameState == MENU) {
+        openMainMenu();
+        return;
+    }
+    gameState = PLAYING;
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+}
+
+// ---------------------------------------------------------------------------
+// Menu input (framework)
+// ---------------------------------------------------------------------------
+
+void Game::processMenuInput() {
+    menu::MenuView& view = activeMenuView();
+    menuActive_ = true;
+
+    // First frame after the screen opened: only refresh navigation edges so a
+    // key still held from the previous screen does not activate something.
+    if (menuJustEntered) {
+        inp.resetNavKeys();   // clears the edges and re-arms the key re-sync
+        menuJustEntered = false;
+        if (gameState == SERVER_CONNECT) refreshServerRows();
+        return;
+    }
+
+    double mx = 0.0, my = 0.0;
+    glfwGetCursorPos(window, &mx, &my);
+    const menu::MouseState mouse = makeMenuMouse(window, mx, my, mouseClicked);
+    const menu::MenuInput input = makeMenuInput(*this, window);
+
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+
+    const bool capturing = menu::isCapturing(view);
+    menu::processInput(view, window, mouse, input);
+
+    // Hand cursor over selectable rows (never while capturing a key).
+    if (!capturing && !menu::isCapturing(view)) {
+        const int hovered = menu::hitTest(view, mouse.x, mouse.y);
+        glfwSetCursor(window, hovered >= 0 ? handCursor : nullptr);
+    } else {
+        glfwSetCursor(window, nullptr);
+    }
+
+    if (gameState == SERVER_CONNECT) {
+        processServerConnectTextInput();
+        // The list, status and typed values change outside the framework, so
+        // rebuild the rows whenever one of them changed.
+        static int lastServerCount = -1;
+        static bool lastConnected = false;
+        static std::string lastAddress;
+        static int lastPort = -1;
+        if (static_cast<int>(discoveredServers.size()) != lastServerCount ||
+            isConnectedToServer() != lastConnected ||
+            serverAddress != lastAddress || serverPort != lastPort) {
+            refreshServerRows();
+            lastServerCount = static_cast<int>(discoveredServers.size());
+            lastConnected = isConnectedToServer();
+            lastAddress = serverAddress;
+            lastPort = serverPort;
+        }
+    }
+
+    // A row action may have changed the state (play, back, exit...).
+    if (gameState == PLAYING) {
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Gameplay input
+// ---------------------------------------------------------------------------
 
 void Game::processGameInput(float deltaTime) {
     bool inputProcessed = false;
@@ -235,7 +250,7 @@ void Game::processGameInput(float deltaTime) {
         inputProcessed = true;
     }
     
-    // Movement using key bindings
+    // Movement using key bindings (from the settings file)
     glm::vec3 movement(0.0f);
     float moveSpeed = 5.0f;
     
@@ -276,44 +291,42 @@ void Game::processGameInput(float deltaTime) {
         inputProcessed = true;
     }
     
-    // Shoot input (now uses mouse button)
-    if (glfwGetMouseButton(window, keyBindings.shoot) == GLFW_PRESS) {
-        // Always shoot locally for responsiveness
-        // In multiplayer, the server will also broadcast to other players
+    // Shoot input: mouse button by default, rebindable in Settings > Controls
+    // (the binding may also be a key). glfwGetMouseButton() only accepts mouse
+    // buttons and glfwGetKey() only accepts keys, hence the two checks.
+    const bool shootDown =
+        (keyBindings.shootButton >= 0 &&
+         glfwGetMouseButton(window, keyBindings.shootButton) == GLFW_PRESS) ||
+        (keyBindings.shootKey >= 0 && glfwGetKey(window, keyBindings.shootKey) == GLFW_PRESS);
+    if (shootDown) {
         shoot();
         inputProcessed = true;
     }
     
-    // Weapon switching input
-    if (glfwGetKey(window, GLFW_KEY_1) == GLFW_PRESS) {
-        switchWeapon(1);
-    }
-    if (glfwGetKey(window, GLFW_KEY_2) == GLFW_PRESS) {
-        switchWeapon(2);
-    }
-    if (glfwGetKey(window, GLFW_KEY_3) == GLFW_PRESS) {
-        switchWeapon(3);
-    }
-    if (glfwGetKey(window, GLFW_KEY_4) == GLFW_PRESS) {
-        switchWeapon(4);
-    }
-    if (glfwGetKey(window, GLFW_KEY_G) == GLFW_PRESS && !inp.gameplayGPressed) {
-        inp.gameplayGPressed = true;
-        // Toggle between grenade and flashbang
-        if (currentWeapon == GRENADE) {
-            currentWeapon = FLASHBANG;
-            currentWeaponInstance = flashbang;
-            std::cout << "Switched to Flashbang! Flashbangs left: " << (infiniteAmmoMode ? "∞" : std::to_string(flashbangCount)) << std::endl;
-        } else if (currentWeapon == FLASHBANG) {
-            currentWeapon = GRENADE;
-            currentWeaponInstance = grenade;
-            std::cout << "Switched to Grenade! Grenades left: " << (infiniteAmmoMode ? "∞" : std::to_string(grenadeCount)) << std::endl;
-        } else {
-            currentWeapon = GRENADE;
-            currentWeaponInstance = grenade;
-            std::cout << "Switched to Grenade! Grenades left: " << (infiniteAmmoMode ? "∞" : std::to_string(grenadeCount)) << std::endl;
+    // Weapon switching input.
+    // Key 1..4 selects the weapon in array order; the grenade key toggles
+    // grenade/flashbang. Only the press edge is handled, so holding a key
+    // doesn't re-trigger it.
+    static const WeaponType weaponForKey[4] = { PISTOL, PUMP_SHOTGUN, GRENADE, FLASHBANG };
+    for (int key = 0; key < 4; key++) {
+        if (glfwGetKey(window, GLFW_KEY_1 + key) != GLFW_PRESS) {
+            inp.gameplayWeaponPressed[key] = false;
+            continue;
         }
-    } else if (glfwGetKey(window, GLFW_KEY_G) == GLFW_RELEASE) {
+        if (!inp.gameplayWeaponPressed[key]) {
+            inp.gameplayWeaponPressed[key] = true;
+            switchWeapon(weaponForKey[key]);
+        }
+    }
+
+    // Grenade key: toggle between the two throwables (selecting the throwable
+    // you're not holding, or the grenade if you're holding a gun).
+    if (glfwGetKey(window, keyBindings.grenade) == GLFW_PRESS) {
+        if (!inp.gameplayGPressed) {
+            inp.gameplayGPressed = true;
+            switchWeapon(currentWeapon == GRENADE ? FLASHBANG : GRENADE);
+        }
+    } else {
         inp.gameplayGPressed = false;
     }
 }

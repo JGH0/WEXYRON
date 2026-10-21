@@ -27,6 +27,9 @@ public:
     int height;
     /// Number of color channels
     int nrChannels;
+    /// Owned RGBA copy of the source image (width * height * 4), or nullptr.
+    /// Kept so the renderer can upload it into the shared texture array.
+    unsigned char* pixels = nullptr;
     
     /**
      * @brief Construct a new Texture object

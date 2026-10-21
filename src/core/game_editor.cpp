@@ -13,12 +13,10 @@ void Game::renderEditor() {
     if (fbH <= 0) fbH = 600;
     renderer.setViewport(0, 0, fbW, fbH);
 
-    renderer.clear();
-
     glm::mat4 view = camera.GetViewMatrix();
     glm::mat4 projection = glm::perspective(glm::radians(camera.Zoom),
                                             (float)fbW / (float)fbH, 0.1f, 1000.0f);
-    renderer.setViewProjection(view, projection);
+    renderer.setCamera(view, projection);
 
     // Render the map
     if (currentMap) {
@@ -123,7 +121,7 @@ void Game::renderEditor() {
     // SHAPE mode - render simple indicator
     if (editorMode == MODE_SHAPE) {
         // Ensure 3D projection is set
-        renderer.setViewProjection(view, projection);
+        renderer.setCamera(view, projection);
 
         // Simple indicator at grid position
         glm::mat4 indicator = glm::mat4(1.0f);
@@ -713,8 +711,8 @@ void Game::processEditorInput() {
         inp.escapePressed = true;
         inp.resetNavKeys();
         menuJustEntered = true;
+        openMainMenu();
         gameState = MENU;
-        menuSelection = isConnectedToServer() ? 1 : 2;
         glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
     } else if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_RELEASE) {
         inp.escapePressed = false;

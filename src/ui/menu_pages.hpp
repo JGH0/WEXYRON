@@ -1,0 +1,48 @@
+/**
+ * @file menu_pages.hpp
+ * @brief Ready-made menu pages built from the settings registry
+ *
+ * game_menus.cpp composes its screens from these: the main menu, the settings
+ * page (one row per setting), the controls page (one row per key binding) and
+ * helper pages for data the game provides at runtime (maps, servers).
+ */
+
+#ifndef MENU_PAGES_HPP
+#define MENU_PAGES_HPP
+
+#include "menu_core.hpp"
+#include "../core/settings.hpp"
+#include <functional>
+#include <string>
+#include <vector>
+
+namespace menu {
+
+/// Settings screen: one row per setting the registry describes, grouped by
+/// "GAMEPLAY" / "VIDEO" / "AUDIO" headers. Key bindings live on the controls
+/// page instead. `onChanged` runs after any value changed (save the file).
+Page buildSettingsPage(const std::vector<settings::SettingDef>& defs,
+                       std::function<void()> onChanged = nullptr);
+
+/// Only the VIDEO group (for a future "video" sub-screen).
+Page buildVideoGroupPage(const std::vector<settings::SettingDef>& defs,
+                         std::function<void()> onChanged = nullptr);
+
+/// Controls screen: one key-cap row per binding, grouped like the registry.
+Page buildControlsPage(const std::vector<settings::SettingDef>& defs,
+                       std::function<void()> onChanged = nullptr);
+
+/// Append one key-cap row per binding of `group` (empty = all groups),
+/// grouped like the registry. Used to place controls inside another page.
+void appendBindingRows(Page& page, const std::vector<settings::SettingDef>& defs,
+                       const std::function<void()>& onChanged,
+                       const std::string& groupFilter = std::string());
+
+/// Append one row per setting in `groupFilter` (empty = all groups).
+void appendSettingRows(Page& page, const std::vector<settings::SettingDef>& defs,
+                       const std::function<void()>& onChanged,
+                       const std::string& groupFilter = std::string());
+
+} // namespace menu
+
+#endif // MENU_PAGES_HPP

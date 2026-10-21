@@ -86,9 +86,15 @@ inline float fitScale(const std::string& text, float maxWidth,
 #include <glm/gtc/matrix_transform.hpp>
 
 inline void UIHelpers::setProjection(Renderer& renderer, GLFWwindow* window) {
-    auto b = getBounds(window);
+    const UIBounds b = getBounds(window);
+    // Canvas y grows downwards: getBounds() returns top as the negative edge and
+    // bottom as the positive one, so passing (bottom, top) to glm::ortho flips y
+    // on screen exactly once. One canvas unit is one scale unit in both axes,
+    // because `bottom - top` equals `right - left` in the design aspect.
     glm::mat4 proj = glm::ortho(b.left, b.right, b.bottom, b.top, -1.0f, 1.0f);
-    renderer.setViewProjection(glm::mat4(1.0f), proj);
+    // Everything submitted from here on is drawn in screen space, batched
+    // separately from the 3D world.
+    renderer.setProjection(glm::mat4(1.0f), proj);
 }
 
 #endif // UI_HELPERS_HPP

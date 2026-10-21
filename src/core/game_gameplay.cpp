@@ -227,25 +227,30 @@ void Game::shoot() {
     }
 }
 
-void Game::switchWeapon(int weaponNumber) {
-    switch (weaponNumber) {
-        case 1:
-            currentWeapon = PISTOL;
+void Game::switchWeapon(WeaponType weapon) {
+    // Nothing to do if we already hold this weapon (the "Switched to ..." log
+    // must not repeat), and never let currentWeapon and currentWeaponInstance
+    // drift apart: both are always assigned together in one place below.
+    if (currentWeapon == weapon) {
+        return;
+    }
+
+    currentWeapon = weapon;
+
+    switch (weapon) {
+        case PISTOL:
             currentWeaponInstance = pistol;
             std::cout << "Switched to Pistol! Ammo: " << (infiniteAmmoMode ? "∞" : std::to_string(pistolAmmo)) << std::endl;
             break;
-        case 2:
-            currentWeapon = PUMP_SHOTGUN;
+        case PUMP_SHOTGUN:
             currentWeaponInstance = shotgun;
             std::cout << "Switched to Pump Shotgun! Ammo: " << (infiniteAmmoMode ? "∞" : std::to_string(shotgunAmmo)) << std::endl;
             break;
-        case 3:
-            currentWeapon = GRENADE;
+        case GRENADE:
             currentWeaponInstance = grenade;
             std::cout << "Switched to Grenade! Count: " << (infiniteAmmoMode ? "∞" : std::to_string(grenadeCount)) << std::endl;
             break;
-        case 4:
-            currentWeapon = FLASHBANG;
+        case FLASHBANG:
             currentWeaponInstance = flashbang;
             std::cout << "Switched to Flashbang! Count: " << (infiniteAmmoMode ? "∞" : std::to_string(flashbangCount)) << std::endl;
             break;

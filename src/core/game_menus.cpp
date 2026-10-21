@@ -1,661 +1,606 @@
+/**
+ * @file game_menus.cpp
+ * @brief Menu screens: main menu, settings, controls, map selection
+ *
+ * Every screen is built with the menu framework (ui/menu.hpp + ui/menu_pages.hpp):
+ * a screen is a menu::Page (title + rows) shown in a menu::MenuView, and the
+ * framework handles drawing, selection, scrolling, mouse handling and key
+ * capture. This file only describes the screens and wires their rows to game
+ * actions.
+ *
+ *   openMainMenu()    – (re)build the main menu for the current game state
+ *   openSettings()    – settings page (values) + controls page (rebinding)
+ *   openMapSelection()– map list + game mode
+ *   menu()            – draw the active menu
+ *   processMenuInput() (game_input.cpp) – route input to the active menu
+ *
+ * The connect-to-server screen lives in game_server_menu.cpp, the settings
+ * file and value model in core/settings.cpp.
+ */
+
+#define GLFW_INCLUDE_NONE
 #include "game.hpp"
 #include "../ui/ui_helpers.hpp"
 #include <iostream>
-#include <cstring>
 #include <algorithm>
-#include <glm/gtc/matrix_transform.hpp>
+#include <cmath>
+#include <cstdlib>
+#include <set>
 
-void Game::renderMenu() {
-    // Render menu options as colored rectangles with text
-    float menuWidth = 300.0f;
-    float menuHeight = 50.0f;
-    float menuX = (800.0f - menuWidth) / 2.0f; // Center horizontally
-    float startY = 150.0f;
-    float spacing = 70.0f;
+// ---------------------------------------------------------------------------
+// View management
+// ---------------------------------------------------------------------------
 
-    // Menu items: Play Game, Map Selection, Map Editor, Connect to Server, Settings, Exit
-    // Note: Map Editor is hidden when connected to server
-    const char* allMenuItems[] = {"Play Game", "Map Selection", "Map Editor", "Connect to Server", "Settings", "Exit"};
-    glm::vec3 allColors[] = {
-        glm::vec3(0.2f, 0.8f, 0.2f), // Green for Play
-        glm::vec3(0.2f, 0.4f, 0.8f), // Blue for Map Selection
-        glm::vec3(0.2f, 0.8f, 0.8f), // Cyan for Map Editor
-        glm::vec3(0.8f, 0.2f, 0.8f), // Purple for Connect to Server
-        glm::vec3(0.8f, 0.6f, 0.2f), // Orange for Settings
-        glm::vec3(0.8f, 0.2f, 0.2f)  // Red for Exit
+void Game::openMenuView(menu::MenuView& view, menu::Page page) {
+    view.theme = menu::Theme();
+    view.legend = {{"UP/DOWN", "SELECT"}, {"ENTER", "CONFIRM"}, {"ESC", "BACK"}};
+    view.onClose = nullptr;
+    // Drop hit rects from the previous page: a click before the first draw of
+    // the new page must not activate a row of the old one.
+    view.hits.clear();
+    view.hoverIndex = -1;
+    menu::begin(view, std::move(page));
+    menuJustEntered = true;   // ignore keys still held from the previous screen
+}
+
+menu::MenuView& Game::activeMenuView() {
+    switch (gameState) {
+        case SETTINGS:        return settingsMenu_;
+        case MAP_SELECTION:   return mapMenu_;
+        case SERVER_CONNECT:  return serverMenu_;
+        case MENU:
+        default:              return mainMenu_;
+    }
+}
+
+const menu::MenuView& Game::activeMenuViewConst() const {
+    switch (gameState) {
+        case SETTINGS:        return settingsMenu_;
+        case MAP_SELECTION:   return mapMenu_;
+        case SERVER_CONNECT:  return serverMenu_;
+        case MENU:
+        default:              return mainMenu_;
+    }
+}
+
+void Game::menu() {
+    menu::draw(activeMenuView(), renderer, window);
+}
+
+// ---------------------------------------------------------------------------
+// Main menu
+// ---------------------------------------------------------------------------
+
+void Game::openMainMenu() {
+    inp.resetNavKeys();
+    menuJustEntered = true;
+
+    menu::Page page("CUBE CS LITE", "MAIN MENU");
+    if (isConnectedToServer()) {
+        page.add(menu::info("CONNECTION", std::to_string(playerCount) + " PLAYERS ONLINE",
+                            "Connected to a LAN server"));
+    }
+
+    // The menu can be opened before the first game starts (nothing to
+    // resume) and from the game itself (the first row resumes it).
+    const bool resumable = gameInProgress_;
+    page.add(menu::action(resumable ? "RESUME GAME" : "PLAY GAME", [this]() {
+        inp.resetNavKeys();
+        menuJustEntered = true;
+        gameState = PLAYING;
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    }, resumable ? "Back to the match" : "Start a match on the selected map"));
+
+    page.add(menu::action("MAP SELECTION", [this]() {
+        openMapSelection();
+        gameState = MAP_SELECTION;
+    }, "Choose the map and game mode"));
+
+    if (!isConnectedToServer()) {
+        page.add(menu::action("MAP EDITOR", [this]() {
+            inp.resetNavKeys();
+            menuJustEntered = true;
+            gameState = MAP_EDITOR;
+            editorNoclip = true;
+            editorMode = MODE_BLOCK;
+            editorSpawnMode = SPAWN_NONE;
+            camera.Position = glm::vec3(0.0f, 5.0f, 10.0f);
+            camera.Yaw = -90.0f;
+            camera.Pitch = 0.0f;
+            camera.updateCameraVectors();
+            editorGridPos = camera.Position + camera.Front * 5.0f;
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        }, "Build and save maps"));
+    }
+
+    page.add(menu::action("CONNECT TO SERVER", [this]() {
+        openServerConnect();
+        gameState = SERVER_CONNECT;
+    }, "Play over the local network"));
+
+    page.add(menu::action("SETTINGS", [this]() {
+        openSettings();
+        gameState = SETTINGS;
+    }, "Video, audio, gameplay and controls"));
+
+    page.add(menu::action("EXIT", [this]() {
+        glfwSetWindowShouldClose(window, true);
+    }, "Close the game"));
+    page.rows.back().destructive = true;
+
+    openMenuView(mainMenu_, std::move(page));
+    mainMenu_.legend = {{"UP/DOWN", "SELECT"}, {"ENTER", "CONFIRM"}, {"ESC", "CLOSE"}};
+    menuSelection = mainMenu_.stack.selection();
+}
+
+// ---------------------------------------------------------------------------
+// Settings + controls
+// ---------------------------------------------------------------------------
+
+void Game::openSettings() {
+    // One stack: SETTINGS (values). CONTROLS is pushed on top when chosen, and
+    // ESC returns to SETTINGS with the CONTROLS row still selected.
+    menu::Page page = menu::buildSettingsPage(settingDefs_, [this]() { saveSettings(); });
+    page.add(menu::separator("INPUT"));
+    page.add(menu::action("CONTROLS", [this]() {
+        menu::Page controls("CONTROLS", "KEYBOARD AND MOUSE BINDINGS");
+        appendBindingRows(controls);
+        controls.add(menu::separator("ACTIONS"));
+        controls.add(menu::action("RESET BINDINGS", [this]() { resetBindingsToDefaults(); },
+                                  "Restore the default key bindings"));
+        menu::push(settingsMenu_, std::move(controls));
+        settingsMenu_.legend = {{"ENTER", "REBIND"}, {"R", "DEFAULTS"}, {"ESC", "BACK"}};
+    }, "Change the keyboard and mouse bindings"));
+
+    openMenuView(settingsMenu_, std::move(page));
+    settingsMenu_.legend = {{"UP/DOWN", "SELECT"}, {"ENTER", "CHANGE"},
+                            {"LEFT/RIGHT", "ADJUST"}, {"ESC", "LEAVE"}};
+    settingsMenu_.onClose = [this]() { closeMenuToGame(); };
+}
+
+void Game::appendBindingRows(menu::Page& page) {
+    menu::appendBindingRows(page, settingDefs_, [this]() { saveSettings(); });
+}
+
+void Game::resetBindingsToDefaults() {
+    const settings::GameSettings defaults;
+    gameSettings_.bindForward  = defaults.bindForward;
+    gameSettings_.bindBackward = defaults.bindBackward;
+    gameSettings_.bindLeft     = defaults.bindLeft;
+    gameSettings_.bindRight    = defaults.bindRight;
+    gameSettings_.bindJump     = defaults.bindJump;
+    gameSettings_.bindShoot    = defaults.bindShoot;
+    gameSettings_.bindGrenade  = defaults.bindGrenade;
+    gameSettings_.bindMenu     = defaults.bindMenu;
+
+    // Refresh the key caps shown on the controls page.
+    menu::Page* page = settingsMenu_.stack.current();
+    if (page) {
+        for (menu::Row& row : page->rows) {
+            if (row.kind != menu::RowKind::Keybind) continue;
+            for (const settings::SettingDef& def : settingDefs_) {
+                if (def.label == row.label && def.value->type == settings::ValueType::Key) {
+                    row.code = def.value->i;
+                    break;
+                }
+            }
+        }
+    }
+    settings::syncSettingDefs(gameSettings_, settingDefs_);
+    applySettings();
+    saveSettings();
+}
+
+// ---------------------------------------------------------------------------
+// Map selection
+// ---------------------------------------------------------------------------
+
+void Game::openMapSelection() {
+    menu::Page page("SELECT MAP", "CHOOSE A MAP AND A GAME MODE");
+    if (mapDisplayNames.empty()) {
+        page.add(menu::info("MAPS", "NONE FOUND", "No .map files in assets/maps"));
+    }
+    page.add(menu::separator("MAPS"));
+    for (size_t i = 0; i < mapDisplayNames.size(); ++i) {
+        std::string label = mapDisplayNames[i];
+        if (isConnectedToServer() && i < mapPlayerCounts.size() && mapPlayerCounts[i] > 0) {
+            label += "   [" + std::to_string(mapPlayerCounts[i]) + "]";
+        }
+        page.add(menu::action(label, [this, i]() {
+            mapSelection = static_cast<int>(i);
+            startSelectedMap(mapFiles[i]);
+        }, "Play this map"));
+    }
+
+    static const char* const kModeNames[] = {"DEATHMATCH", "TEAM VS TEAM", "BOMB DEFUSAL"};
+    page.add(menu::separator("GAME MODE"));
+    page.add(menu::cycle("MODE", {kModeNames[0], kModeNames[1], kModeNames[2]},
+                         static_cast<int>(currentGameMode),
+                         [this](int index) { currentGameMode = static_cast<GameMode>(index); },
+                         "LEFT/RIGHT change the mode"));
+
+    openMenuView(mapMenu_, std::move(page));
+    mapMenu_.legend = {{"UP/DOWN", "MAP"}, {"LEFT/RIGHT", "MODE"},
+                       {"ENTER", "PLAY"}, {"ESC", "LEAVE"}};
+    mapMenu_.onClose = [this]() { closeMenuToGame(); };
+}
+
+// ---------------------------------------------------------------------------
+// Starting a map
+// ---------------------------------------------------------------------------
+
+void Game::startSelectedMap(const std::string& mapFile) {
+    static const char* const kModeNames[] = {"Deathmatch", "Team vs Team", "Bomb Defusal"};
+    const int modeIndex = static_cast<int>(currentGameMode);
+    std::cout << "Loading " << mapFile << " with game mode "
+              << kModeNames[(modeIndex >= 0 && modeIndex < 3) ? modeIndex : 0] << "..." << std::endl;
+
+    // Tell the server (if any) and drop remote players from the old map.
+    if (networkClient && networkClient->isConnected()) {
+        networkClient->sendMapChange(mapFile);
+        for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
+            remotePlayers[i].active         = false;
+            remotePlayers[i].id             = 0;
+            remotePlayers[i].position       = glm::vec3(0.0f);
+            remotePlayers[i].renderPosition = glm::vec3(0.0f);
+            remotePlayers[i].velocity       = glm::vec3(0.0f);
+            remotePlayers[i].yaw            = 0.0f;
+            remotePlayers[i].pitch          = 0.0f;
+            remotePlayers[i].health         = 0.0f;
+            remotePlayers[i].isDead         = true;
+        }
+        playerCount = 1;
+    }
+
+    // Loads on a worker thread when possible; the menu stays responsive and
+    // the map is swapped in by pollMapLoad() once ready.
+    requestMapLoad(mapFile);
+
+    if (currentGameMode == TEAM_VS_TEAM || currentGameMode == BOMB_DEFUSAL) {
+        playerTeam = 0;
+    }
+    menuJustEntered = true;
+    gameInProgress_ = true;
+    gameState = PLAYING;
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+}
+
+// ---------------------------------------------------------------------------
+// Settings persistence
+// ---------------------------------------------------------------------------
+
+bool Game::saveSettings() {
+    settings::SettingsFile file(settings::defaultSettingsPath());
+    const bool ok = file.save(settingDefs_);
+    if (ok) rememberSettingsText();
+    return ok;
+}
+
+void Game::rememberSettingsText() {
+    settingFileText_.clear();
+    for (const settings::SettingDef& def : settingDefs_) {
+        settingFileText_.push_back(settings::serializeValue(def));
+    }
+}
+
+void Game::applySettings() {
+    gameSettings_.maxFps = std::max(0, std::min(gameSettings_.maxFps, 1000));
+    gameSettings_.performance = std::max(0, std::min(gameSettings_.performance, 2));
+
+    // Mirror into the engine members the rest of the game uses.
+    showFps = gameSettings_.showFps;
+    maxFps = gameSettings_.maxFps;
+    vsyncEnabled = gameSettings_.vsync;
+    setPerformanceLevel(gameSettings_.performance);
+    if (glfwGetCurrentContext()) glfwSwapInterval(vsyncEnabled ? 1 : 0);
+
+    // Infinite ammo is read from the game member by the gameplay code, and
+    // mirrored into the weapons (their own check is what stops ammo loss).
+    if (gameSettings_.infiniteAmmo != infiniteAmmoMode) {
+        infiniteAmmoMode = gameSettings_.infiniteAmmo;
+        if (pistol)    pistol->setInfiniteAmmo(infiniteAmmoMode);
+        if (shotgun)   shotgun->setInfiniteAmmo(infiniteAmmoMode);
+        if (grenade)   grenade->setInfiniteAmmo(infiniteAmmoMode);
+        if (flashbang) flashbang->setInfiniteAmmo(infiniteAmmoMode);
+    }
+
+    keyBindings.forward  = gameSettings_.bindForward;
+    keyBindings.backward = gameSettings_.bindBackward;
+    keyBindings.left     = gameSettings_.bindLeft;
+    keyBindings.right    = gameSettings_.bindRight;
+    keyBindings.jump     = gameSettings_.bindJump;
+    // Bindings are stored as one integer for keys *and* mouse buttons:
+    // keyboard codes are 32..348 and mouse buttons are encoded as 1000 + n.
+    // glfwGetKeyName/glfwGetKey belong to keyboard codes only, so the engine
+    // needs the two split apart here.
+    keyBindings.shootButton = settings::mouseButtonOf(gameSettings_.bindShoot);
+    keyBindings.shootKey    = keyBindings.shootButton >= 0 ? -1 : gameSettings_.bindShoot;
+    keyBindings.shoot       = keyBindings.shootKey;   // kept for compatibility
+    keyBindings.grenade  = gameSettings_.bindGrenade;
+    keyBindings.menu     = gameSettings_.bindMenu;
+}
+
+void Game::loadSettings() {
+    settingDefs_ = settings::makeGameSettingDefs(gameSettings_);
+    settings::SettingsFile file(settings::defaultSettingsPath());
+    file.load(settingDefs_);
+    if (!file.lastMessage().empty()) std::cout << file.lastMessage() << std::endl;
+
+    // The file load updated the registry rows; write them into the game's
+    // settings and apply them to the engine.
+    settings::applySettingDefs(gameSettings_, settingDefs_);
+    applySettings();
+
+    rememberSettingsText();
+
+    std::cout << "Settings loaded:";
+    for (const settings::SettingDef& def : settingDefs_) {
+        std::cout << " " << def.key << "=" << settings::serializeValue(def);
+    }
+    std::cout << std::endl;
+}
+
+void Game::pollSettingsFile() {
+    // Once a second is plenty for a hand-edited file and keeps the game free
+    // of file I/O in the frame loop.
+    const double now = glfwGetTime();
+    if (now < nextSettingsPoll_) return;
+    nextSettingsPoll_ = now + 1.0;
+
+    namespace fs = std::filesystem;
+    const std::string path = settings::defaultSettingsPath();
+    std::error_code ec;
+    const fs::file_time_type stamp = fs::last_write_time(path, ec);
+    if (ec) return;                          // file missing / not readable
+    if (stamp == settingsFileTime_) return;  // not touched since last look
+    settingsFileTime_ = stamp;
+
+    // The file was changed outside the game (editor, another process). Apply
+    // every value whose text differs from what the game last used.
+    settings::SettingsFile file(path);
+    std::vector<settings::SettingDef>& defs = settingDefs_;
+    if (!file.load(defs)) return;
+
+    bool changed = false;
+    for (size_t i = 0; i < defs.size(); ++i) {
+        const std::string text = settings::serializeValue(defs[i]);
+        if (i < settingFileText_.size() && text == settingFileText_[i]) continue;
+        if (defs[i].apply) defs[i].apply(*defs[i].value);
+        changed = true;
+    }
+    if (!changed) return;
+
+    // Update the values the menu shows, then apply to the engine.
+    settings::syncSettingDefs(gameSettings_, defs);
+    applySettings();
+    rememberSettingsText();
+
+    // Rebuild the settings screen so its rows show the new values.
+    if (gameState == SETTINGS) {
+        const menu::Page* page = settingsMenu_.stack.current();
+        const bool onControls = page && page->title == "CONTROLS";
+        openSettings();
+        if (onControls) {
+            menu::Page controls("CONTROLS", "KEYBOARD AND MOUSE BINDINGS");
+            appendBindingRows(controls);
+            controls.add(menu::separator("ACTIONS"));
+            controls.add(menu::action("RESET BINDINGS", [this]() { resetBindingsToDefaults(); },
+                                      "Restore the default key bindings"));
+            menu::push(settingsMenu_, std::move(controls));
+            settingsMenu_.legend = {{"ENTER", "REBIND"}, {"R", "DEFAULTS"}, {"ESC", "BACK"}};
+        }
+        menuJustEntered = true;
+    }
+    std::cout << "Settings reloaded from " << path << std::endl;
+}
+
+// ---------------------------------------------------------------------------
+// Key edges for the menu framework
+// ---------------------------------------------------------------------------
+
+void Game::syncMenuEdges(GLFWwindow* window) {
+    // Called once per frame, before the menu asks about any key. A key that is
+    // still physically down counts as "already handled": holding ENTER after a
+    // screen change must not activate a row on the new screen, and must not
+    // repeat the action every frame.
+    inp.menuEdgesNeedSync = false;
+    inp.upPressed    = glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS;
+    inp.downPressed  = glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS;
+    inp.leftPressed  = glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS;
+    inp.rightPressed = glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS;
+    inp.enterPressed = glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS ||
+                       glfwGetKey(window, GLFW_KEY_KP_ENTER) == GLFW_PRESS;
+    inp.escapePressed = glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS;
+    inp.upHeld = inp.downHeld = inp.leftHeld = inp.rightHeld = 0.0;
+}
+
+bool Game::menuKeyPressed(int key, GLFWwindow* window) {
+    // Only ever look at the *physical* state of `key`: the menu asks about many
+    // keys per frame, so "this key is not down" must not clear another key's
+    // edge (that made the same key press fire twice, or be lost).
+    const bool down = glfwGetKey(window, key) == GLFW_PRESS;
+
+    bool* edge = nullptr;
+    double* held = nullptr;
+    double* last = nullptr;
+    switch (key) {
+        case GLFW_KEY_UP:    edge = &inp.upPressed;    held = &inp.upHeld;    last = &inp.upLast;    break;
+        case GLFW_KEY_DOWN:  edge = &inp.downPressed;  held = &inp.downHeld;  last = &inp.downLast;  break;
+        case GLFW_KEY_LEFT:  edge = &inp.leftPressed;  held = &inp.leftHeld;  last = &inp.leftLast;  break;
+        case GLFW_KEY_RIGHT: edge = &inp.rightPressed; held = &inp.rightHeld; last = &inp.rightLast; break;
+        case GLFW_KEY_ENTER:
+        case GLFW_KEY_KP_ENTER: edge = &inp.enterPressed; break;
+        case GLFW_KEY_ESCAPE:   edge = &inp.escapePressed; break;
+        default: break;
+    }
+    if (!edge) {
+        // Letters, digits, function keys... only matter while capturing a key
+        // binding, where a held key is fine.
+        return down;
+    }
+    if (!down) {
+        *edge = false;
+        if (held) { *held = 0.0; *last = 0.0; }
+        return false;
+    }
+
+    if (edge == &inp.enterPressed || edge == &inp.escapePressed) {
+        if (*edge) return false;   // still the same physical press
+        *edge = true;
+        return true;
+    }
+
+    // Navigation keys: fire once on press, then repeat while held (like text
+    // cursors), so holding UP/DOWN scrolls through long lists. LEFT/RIGHT
+    // adjust a value, where a repeat would race through all options, so they
+    // only fire on the initial press.
+    const double now = glfwGetTime();
+    if (!*edge) {
+        *edge = true;
+        *held = 0.0;
+        *last = now;
+        return true;
+    }
+    if (key == GLFW_KEY_LEFT || key == GLFW_KEY_RIGHT) {
+        *last = now;
+        return false;
+    }
+    const double step = std::min(InputState::kMaxHeldStep, std::max(0.0, now - *last));
+    *held += step;
+    *last = now;
+    if (*held >= InputState::kRepeatDelay) {
+        *held = InputState::kRepeatDelay - InputState::kRepeatRate;
+        return true;
+    }
+    return false;
+}
+
+void Game::resetMenuKeyEdges(GLFWwindow* window) {
+    inp.resetNavKeys();
+    // Keys still held stay marked as pressed, so they are not re-triggered on
+    // release; keys released in the meantime are cleared by menuKeyPressed().
+    if (glfwGetKey(window, GLFW_KEY_ENTER) != GLFW_PRESS &&
+        glfwGetKey(window, GLFW_KEY_KP_ENTER) != GLFW_PRESS) {
+        inp.enterPressed = false;
+    }
+    if (glfwGetKey(window, GLFW_KEY_ESCAPE) != GLFW_PRESS) {
+        inp.escapePressed = false;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Developer hook (see game.hpp): drives the menus without GLFW keyboard input
+// ---------------------------------------------------------------------------
+
+bool Game::debugMenuKey(const std::string& key) {
+    if (gameState != MENU && gameState != SETTINGS &&
+        gameState != MAP_SELECTION && gameState != SERVER_CONNECT) {
+        return false;
+    }
+    menu::MenuView& view = activeMenuView();
+
+    // "capture:<code>" finishes a key-binding capture with that key code.
+    const bool capturing = key.rfind("capture:", 0) == 0;
+    const int captureCode = capturing ? std::atoi(key.c_str() + 8) : -1;
+
+    // Which keys this synthetic press reports. Like a real key edge, each one
+    // reports down only once (menu code may ask several times per frame).
+    std::set<int> pressedKeys;
+    if (capturing) {
+        pressedKeys.insert(captureCode);
+    } else if (key == "up")          { pressedKeys.insert(GLFW_KEY_UP); }
+    else if (key == "down")          { pressedKeys.insert(GLFW_KEY_DOWN); }
+    else if (key == "left")          { pressedKeys.insert(GLFW_KEY_LEFT); }
+    else if (key == "right")         { pressedKeys.insert(GLFW_KEY_RIGHT); }
+    else if (key == "enter")         { pressedKeys.insert(GLFW_KEY_ENTER); }
+    else if (key == "space")         { pressedKeys.insert(GLFW_KEY_SPACE); }
+    else if (key == "escape")        { pressedKeys.insert(GLFW_KEY_ESCAPE); }
+
+    menu::MenuInput input;
+    std::set<int> consumed;
+    input.pressed = [pressedKeys, consumed](int k) mutable {
+        if (pressedKeys.count(k) == 0 || consumed.count(k)) return false;
+        consumed.insert(k);
+        return true;
     };
+    input.held = [](int) { return false; };
+    input.isModifier = [](int) { return false; };
 
-    // Filter items based on connection status
-    const char* menuItems[6];
-    glm::vec3 colors[6];
-    int numItems = 0;
-    int editorIndex = -1;
+    menu::MouseState mouse;   // no mouse in the hook
+    mouse.inside = false;
+    mouse.clicked = false;
+    return menu::processInput(view, window, mouse, input);
+}
 
-    for (int i = 0; i < 6; i++) {
-        // Skip Map Editor (index 2) if connected to server
-        if (i == 2 && isConnectedToServer()) {
+bool Game::debugMenuSelect(const std::string& label) {
+    menu::Page* page = activeMenuView().stack.current();
+    if (!page) return false;
+    for (size_t i = 0; i < page->rows.size(); ++i) {
+        if (page->rows[i].label == label && page->rows[i].selectable()) {
+            activeMenuView().stack.setSelection(static_cast<int>(i));
+            return true;
+        }
+    }
+    return false;
+}
+
+void Game::debugRunFrames(int frames) {
+    for (int i = 0; i < frames; ++i) {
+        gameState = PLAYING;
+        update(1.0f / 60.0f);
+        render();
+    }
+}
+
+void Game::debugShowPage(menu::Page page) {
+    openMenuView(settingsMenu_, std::move(page));
+    gameState = SETTINGS;
+    menuJustEntered = false;
+}
+
+menu::Page* Game::debugMenuPage() {
+    return activeMenuView().stack.current();
+}
+
+// Console dump of the active page, for scripts and bug reports.
+void Game::debugMenuDump() const {
+    const menu::Page* page = activeMenuViewConst().stack.current();
+    if (!page) { std::cout << "(no menu)" << std::endl; return; }
+    std::cout << "=== " << page->title << " (depth " << activeMenuViewConst().stack.depth()
+              << ") ===" << std::endl;
+    const int selected = activeMenuViewConst().stack.selection();
+    for (size_t i = 0; i < page->rows.size(); ++i) {
+        const menu::Row& row = page->rows[i];
+        if (row.kind == menu::RowKind::Separator) {
+            std::cout << "-- " << row.label << " --" << std::endl;
             continue;
         }
-        menuItems[numItems] = allMenuItems[i];
-        colors[numItems] = allColors[i];
-        if (i == 2) editorIndex = numItems;
-        numItems++;
-    }
-
-    // Adjust menuSelection if it now points to a non-existent item
-    if (menuSelection >= numItems) {
-        menuSelection = numItems - 1;
-    }
-    if (menuSelection < 0) {
-        menuSelection = 0;
-    }
-
-    auto _b = UIHelpers::getBounds(window);
-    float left = _b.left, right = _b.right, top = _b.top, bottom = _b.bottom;
-    float uiWidth  = _b.width();
-    float uiHeight = _b.height();
-    float uiScale = std::max(0.8f, std::min(uiWidth / 800.0f, uiHeight / 600.0f));
-    float menuTextScale = std::max(0.7f, std::min(1.05f, 0.9f * uiScale));
-
-    // Populate menuButtons for hit-testing (used by processInput)
-    menuButtons.clear();
-    menuButtons.reserve(numItems);
-    for (int i = 0; i < numItems; i++) {
-        float y = startY + i * spacing;
-
-        // Record the button rect (virtual coords, Y-up)
-        int actionIndex = i;
-        if (isConnectedToServer() && i >= 2) actionIndex = i + 1;
-        menuButtons.push_back({ menuX, y, menuX + menuWidth, y + menuHeight, actionIndex });
-
-        // Create model matrix for this menu item
-        glm::mat4 model = glm::mat4(1.0f);
-        model = glm::translate(model, glm::vec3(menuX + menuWidth/2.0f, y + menuHeight/2.0f, 0.0f));
-        model = glm::scale(model, glm::vec3(menuWidth, menuHeight, 1.0f));
-
-        // Set color (brighter if selected)
-        if (i == menuSelection) {
-            renderer.drawColoredQuad(model, colors[i] * 1.5f); // Brighter when selected
-        } else {
-            renderer.drawColoredQuad(model, colors[i]);
-        }
-
-        // Add a visual indicator for selection - draw a small white square on the left
-        if (i == menuSelection) {
-            glm::mat4 indicatorModel = glm::mat4(1.0f);
-            indicatorModel = glm::translate(indicatorModel, glm::vec3(menuX + 15.0f, y + menuHeight/2.0f, 0.0f));
-            indicatorModel = glm::scale(indicatorModel, glm::vec3(10.0f, 10.0f, 1.0f));
-            renderer.drawColoredQuad(indicatorModel, glm::vec3(1.0f, 1.0f, 1.0f)); // White indicator
-        }
-
-        // Draw text label — use drawTextFit so labels never overflow the button box
-        float textX = menuX + 30.0f; // Left padding after indicator
-        float textY = y + menuHeight/2.0f - 6.0f;
-        renderer.drawTextFit(menuItems[i], textX, textY, menuWidth - 40.0f, menuTextScale);
-    }
-
-    // Show multiplayer status if connected
-    if (isConnectedToServer()) {
-        glm::mat4 statusBg = glm::mat4(1.0f);
-        statusBg = glm::translate(statusBg, glm::vec3(400.0f, 520.0f, 0.0f));
-        statusBg = glm::scale(statusBg, glm::vec3(300.0f, 30.0f, 1.0f));
-        renderer.drawColoredQuad(statusBg, glm::vec3(0.0f, 0.8f, 0.0f)); // Green background
-
-        std::string statusText = "CONNECTED - " + std::to_string(playerCount) + " PLAYERS";
-        float textWidth = statusText.length() * 8.0f;
-        renderer.drawTextFit(statusText.c_str(), 400.0f - textWidth/2.0f, 515.0f, 300.0f - 40.0f, 1.0f);
-    }
-
-    // Only print to console when selection actually changes (to reduce spam)
-    static int lastMenuSelection = -1;
-    if (menuSelection != lastMenuSelection) {
-        std::cout << "\n=== MAIN MENU ===" << std::endl;
-        std::cout << (menuSelection == 0 ? "> " : "  ") << "Play Game" << std::endl;
-        std::cout << (menuSelection == 1 ? "> " : "  ") << "Map Selection" << std::endl;
-        std::cout << (menuSelection == 2 ? "> " : "  ") << "Map Editor" << std::endl;
-        std::cout << (menuSelection == 3 ? "> " : "  ") << "Connect to Server" << std::endl;
-        std::cout << (menuSelection == 4 ? "> " : "  ") << "Settings" << std::endl;
-        std::cout << (menuSelection == 5 ? "> " : "  ") << "Exit" << std::endl;
-        std::cout << "Use UP/DOWN to select, ENTER to confirm, ESC to resume" << std::endl;
-        lastMenuSelection = menuSelection;
-    }
-
-    // suppress unused-variable warning for editorIndex
-    (void)editorIndex;
-    (void)left; (void)right; (void)top; (void)bottom;
-}
-
-void Game::renderSettings() {
-    // Render settings options as colored rectangles with visual indicators
-    float menuWidth = 400.0f;
-    float menuHeight = 40.0f;
-    float menuX = (800.0f - menuWidth) / 2.0f; // Center horizontally
-    float startY = 100.0f;
-    float spacing = 45.0f;
-
-    // Settings items: Forward, Backward, Left, Right, Jump, Menu, Infinite Ammo,
-    // Show FPS, Max FPS, V-Sync
-    const char* settingItems[] = {"Forward", "Backward", "Left", "Right", "Jump",
-                                  "Menu", "Infinite Ammo", "Show FPS", "Max FPS",
-                                  "V-Sync"};
-    const int numSettings = 10;
-
-    // Safe key name retrieval with null checks
-    const char* keyNames[10];
-    keyNames[0] = glfwGetKeyName(keyBindings.forward,  0) ? glfwGetKeyName(keyBindings.forward,  0) : "Unknown";
-    keyNames[1] = glfwGetKeyName(keyBindings.backward, 0) ? glfwGetKeyName(keyBindings.backward, 0) : "Unknown";
-    keyNames[2] = glfwGetKeyName(keyBindings.left,     0) ? glfwGetKeyName(keyBindings.left,     0) : "Unknown";
-    keyNames[3] = glfwGetKeyName(keyBindings.right,    0) ? glfwGetKeyName(keyBindings.right,    0) : "Unknown";
-    keyNames[4] = glfwGetKeyName(keyBindings.jump,     0) ? glfwGetKeyName(keyBindings.jump,     0) : "Unknown";
-    keyNames[5] = glfwGetKeyName(keyBindings.menu,     0) ? glfwGetKeyName(keyBindings.menu,     0) : "Unknown";
-    keyNames[6] = infiniteAmmoMode ? "ON" : "OFF"; // Infinite ammo status
-    keyNames[7] = showFps ? "ON" : "OFF";
-    // Max FPS value displayed as the actual number (or 'infinity' for 0)
-    {
-        static char fpsBuf[16];
-        if (maxFps == 0) {
-            snprintf(fpsBuf, sizeof(fpsBuf), "infinity");
-        } else {
-            snprintf(fpsBuf, sizeof(fpsBuf), "%d", maxFps);
-        }
-        keyNames[8] = fpsBuf;
-    }
-    keyNames[9] = vsyncEnabled ? "ON" : "OFF";
-
-    menuButtons.clear();
-
-    // Render each setting option
-    for (int i = 0; i < numSettings; i++) {
-        float y = startY + i * spacing;
-
-        // Register clickable rect for this item
-        menuButtons.push_back({menuX, y, menuX + menuWidth, y + menuHeight, i});
-
-        // Create background rectangle for this setting
-        glm::mat4 bgModel = glm::mat4(1.0f);
-        bgModel = glm::translate(bgModel, glm::vec3(menuX + menuWidth/2.0f, y + menuHeight/2.0f, 0.0f));
-        bgModel = glm::scale(bgModel, glm::vec3(menuWidth, menuHeight, 1.0f));
-
-        // Use different colors based on setting type and selection
-        glm::vec3 bgColor;
-        if (i == settingsSelection) {
-            bgColor = glm::vec3(0.6f, 0.8f, 0.2f); // Bright green when selected
-        } else if (i >= 6) { // Toggle settings - special colors
-            bool isOn = (i == 6) ? infiniteAmmoMode :
-                        (i == 7) ? showFps :
-                                   vsyncEnabled;
-            bgColor = isOn ? glm::vec3(0.8f, 0.8f, 0.2f) : glm::vec3(0.4f, 0.4f, 0.4f);
-        } else {
-            bgColor = glm::vec3(0.3f, 0.5f, 0.7f); // Blue for controls
-        }
-
-        renderer.drawColoredQuad(bgModel, bgColor);
-
-        // Calculate text layout similar to map selection menu
-        float pad = 6.0f;
-        float boxL = menuX + pad;
-        float boxR = menuX + menuWidth - pad;
-        float rowTextScale = std::max(0.65f, std::min(0.82f, 1.0f));
-        float textH = 5.0f * 8.0f * rowTextScale;
-        float textY = y + (menuHeight - textH) * 0.5f;
-
-        // Draw key assignment on the right (right-aligned)
-        const char* keyText = keyNames[i];
-        float keyScale = rowTextScale * 0.85f;
-        float keyW = renderer.getTextWidth(keyText, keyScale);
-        float keyX = boxR - keyW;
-        renderer.drawText(keyText, keyX, textY, keyScale);
-
-        // Draw setting name on the left, using remaining space
-        float nameL = boxL + 12.0f; // Extra space for indicator
-        float nameMaxW = keyX - nameL - 8.0f; // Gap before key text
-        renderer.drawTextFit(settingItems[i], nameL, textY, nameMaxW, rowTextScale);
-
-        // Draw selection indicator on the left edge
-        if (i == settingsSelection) {
-            glm::mat4 indicatorModel = glm::mat4(1.0f);
-            indicatorModel = glm::translate(indicatorModel, glm::vec3(menuX + 4.0f, y + menuHeight/2.0f, 0.0f));
-            indicatorModel = glm::scale(indicatorModel, glm::vec3(6.0f, 6.0f, 1.0f));
-            renderer.drawColoredQuad(indicatorModel, glm::vec3(1.0f, 1.0f, 1.0f));
-        }
-    }
-
-    // Only print to console when selection actually changes (to reduce spam)
-    static int lastSettingsSelection = -1;
-    if (settingsSelection != lastSettingsSelection) {
-        std::cout << "\n=== SETTINGS ===" << std::endl;
-        std::cout << (settingsSelection == 0 ? "> " : "  ") << "Forward: "        << keyNames[0] << std::endl;
-        std::cout << (settingsSelection == 1 ? "> " : "  ") << "Backward: "       << keyNames[1] << std::endl;
-        std::cout << (settingsSelection == 2 ? "> " : "  ") << "Left: "           << keyNames[2] << std::endl;
-        std::cout << (settingsSelection == 3 ? "> " : "  ") << "Right: "          << keyNames[3] << std::endl;
-        std::cout << (settingsSelection == 4 ? "> " : "  ") << "Jump: "           << keyNames[4] << std::endl;
-        std::cout << (settingsSelection == 5 ? "> " : "  ") << "Menu: "           << keyNames[5] << std::endl;
-        std::cout << (settingsSelection == 6 ? "> " : "  ") << "Infinite Ammo: "  << keyNames[6] << std::endl;
-        std::cout << (settingsSelection == 7 ? "> " : "  ") << "Show FPS: "       << keyNames[7] << std::endl;
-        std::cout << (settingsSelection == 8 ? "> " : "  ") << "Max FPS: "        << keyNames[8] << std::endl;
-        std::cout << (settingsSelection == 9 ? "> " : "  ") << "V-Sync: "         << keyNames[9] << std::endl;
-        std::cout << "Use UP/DOWN to select, ENTER to change, ESC to go back" << std::endl;
-        lastSettingsSelection = settingsSelection;
+        std::cout << (static_cast<int>(i) == selected ? "> " : "  ") << row.label;
+        if (!row.value.empty()) std::cout << "  [" << row.value << "]";
+        if (!row.enabled) std::cout << "  (disabled)";
+        std::cout << std::endl;
     }
 }
+// DEBUG-TEMP
+#include <cstdio>
 
-void Game::saveKeyBindings() {
-    // Save to file (simplified version)
-    std::cout << "Key bindings saved!" << std::endl;
-}
+// ---------------------------------------------------------------------------
+// Developer hooks (see game.hpp): scripted UI checks without keyboard input
+// ---------------------------------------------------------------------------
 
-void Game::loadKeyBindings() {
-    // Load from file (simplified version)
-    std::cout << "Key bindings loaded!" << std::endl;
-}
-
-void Game::actOnSettingsItem(int index) {
-    if (index == 6) {
-        infiniteAmmoMode = !infiniteAmmoMode;
-        pistol->setInfiniteAmmo(infiniteAmmoMode);
-        shotgun->setInfiniteAmmo(infiniteAmmoMode);
-        grenade->setInfiniteAmmo(infiniteAmmoMode);
-        flashbang->setInfiniteAmmo(infiniteAmmoMode);
-        std::cout << "Infinite ammo mode: " << (infiniteAmmoMode ? "ON" : "OFF") << std::endl;
-    } else if (index == 7) {
-        showFps = !showFps;
-        std::cout << "Show FPS: " << (showFps ? "ON" : "OFF") << std::endl;
-    } else if (index == 8) {
-        // Cycle through Max FPS presets: 20 30 60 100 120 144 200 240 0 (infinity)
-        static const int fpsPresets[] = {20, 30, 60, 100, 120, 144, 200, 240, 0};
-        static constexpr int numPresets = sizeof(fpsPresets) / sizeof(fpsPresets[0]);
-        int current = maxFps;
-        int next = fpsPresets[0];
-        for (int i = 0; i < numPresets; i++) {
-            if (fpsPresets[i] == current) {
-                next = fpsPresets[(i + 1) % numPresets];
-                break;
-            }
-        }
-        maxFps = next;
-        std::cout << "Max FPS: " << (maxFps == 0 ? "infinity" : std::to_string(maxFps)) << std::endl;
-    } else if (index == 9) {
-        vsyncEnabled = !vsyncEnabled;
-        glfwSwapInterval(vsyncEnabled ? 1 : 0);
-        std::cout << "VSync: " << (vsyncEnabled ? "ON" : "OFF") << std::endl;
-    } else {
-        // Wait for key release and capture new key
-        glfwWaitEvents();
-        while (glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS) {
-            glfwWaitEvents();
-        }
-
-        int newKey = -1;
-        for (int key = GLFW_KEY_SPACE; key <= GLFW_KEY_LAST; key++) {
-            if (glfwGetKey(window, key) == GLFW_PRESS) {
-                newKey = key;
-                break;
-            }
-        }
-
-        if (newKey != -1) {
-            switch (index) {
-                case 0: keyBindings.forward  = newKey; break;
-                case 1: keyBindings.backward = newKey; break;
-                case 2: keyBindings.left     = newKey; break;
-                case 3: keyBindings.right    = newKey; break;
-                case 4: keyBindings.jump     = newKey; break;
-                case 5: keyBindings.menu     = newKey; break;
-            }
-            saveKeyBindings();
-        }
-    }
-}
-
-void Game::processSettingsInput() {
-    // ── Mouse hover + click ──────────────────────────────────────────
-    // menuButtons populated by renderSettings() each frame.
-    bool hoveredAny = false;
-    for (const auto& btn : menuButtons) {
-        if (mouseGUIPosX >= btn.x0 && mouseGUIPosX <= btn.x1 &&
-            mouseGUIPosY >= btn.y0 && mouseGUIPosY <= btn.y1) {
-            settingsSelection = btn.actionIndex;
-            hoveredAny = true;
-            if (mouseClicked) {
-                actOnSettingsItem(btn.actionIndex);
-            }
-            break;
-        }
-    }
-    if (glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_NORMAL) {
-        glfwSetCursor(window, hoveredAny ? handCursor : nullptr);
-    }
-
-    // Handle UP key
-    if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS && !inp.upPressed) {
-        inp.upPressed = true;
-        settingsSelection = (settingsSelection - 1 + 10) % 10;
-    } else if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_RELEASE) {
-        inp.upPressed = false;
-    }
-
-    // Handle DOWN key
-    if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS && !inp.downPressed) {
-        inp.downPressed = true;
-        settingsSelection = (settingsSelection + 1) % 10;
-    } else if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_RELEASE) {
-        inp.downPressed = false;
-    }
-
-    // Handle ENTER key
-    if (glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS && !inp.enterPressed) {
-        inp.enterPressed = true;
-        actOnSettingsItem(settingsSelection);
-    } else if (glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_RELEASE) {
-        inp.enterPressed = false;
-    }
-
-    // Handle ESC key
-    if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS && !inp.escapePressed) {
-        inp.escapePressed = true;
+void Game::debugOpenMenu(const std::string& name) {
+    if (name == "main") {
+        openMainMenu();
         gameState = MENU;
-        menuSelection = 0;
-    } else if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_RELEASE) {
-        inp.escapePressed = false;
+    } else if (name == "settings") {
+        openSettings();
+        gameState = SETTINGS;
+    } else if (name == "maps") {
+        openMapSelection();
+        gameState = MAP_SELECTION;
+    } else if (name == "server") {
+        openServerConnect();
+        gameState = SERVER_CONNECT;
     }
-}
-
-void Game::renderMapSelection() {
-    // Clear screen with dark background
-    renderer.clear();
-
-    UIHelpers::setProjection(renderer, window);
-
-    // Title bar - orange like settings
-    glm::mat4 titleBg = glm::mat4(1.0f);
-    titleBg = glm::translate(titleBg, glm::vec3(400.0f, 80.0f, 0.0f));
-    titleBg = glm::scale(titleBg, glm::vec3(600.0f, 60.0f, 1.0f));
-    renderer.drawColoredQuad(titleBg, glm::vec3(0.8f, 0.4f, 0.1f));
-
-    auto _b = UIHelpers::getBounds(window);
-    float left = _b.left, right = _b.right, top = _b.top, bottom = _b.bottom;
-    float uiWidth  = _b.width();
-    float uiHeight = _b.height();
-    float titleScale = std::max(1.0f, std::min(1.5f, std::min(uiWidth / 800.0f, uiHeight / 600.0f) * 1.2f));
-    renderer.drawTextCentered("SELECT MAP", 400.0f, 75.0f, titleScale);
-
-    // Map data - loaded dynamically from assets/maps folder
-    const int numMaps = mapDisplayNames.size();
-
-    // Ensure mapSelection is within bounds
-    if (numMaps > 0 && mapSelection >= numMaps) {
-        mapSelection = numMaps - 1;
-    }
-
-    float menuWidth = 400.0f;
-    float menuHeight = 40.0f;
-    float menuX = (800.0f - menuWidth) / 2.0f;
-    float startY = 150.0f;
-    float spacing = 50.0f;
-
-    menuButtons.clear();
-
-    // Draw map boxes like settings items
-    for (int i = 0; i < numMaps; i++) {
-        float y = startY + i * spacing;
-        bool isSelected = (i == mapSelection);
-
-        // Register clickable rect for this map item
-        menuButtons.push_back({menuX, y, menuX + menuWidth, y + menuHeight, i});
-
-        // Create background rectangle for this map
-        glm::mat4 bgModel = glm::mat4(1.0f);
-        bgModel = glm::translate(bgModel, glm::vec3(menuX + menuWidth/2.0f, y + menuHeight/2.0f, 0.0f));
-        bgModel = glm::scale(bgModel, glm::vec3(menuWidth, menuHeight, 1.0f));
-
-        // Use blue for normal, green for selected (matching settings style)
-        glm::vec3 bgColor = isSelected ? glm::vec3(0.6f, 0.8f, 0.2f) : glm::vec3(0.3f, 0.5f, 0.7f);
-        renderer.drawColoredQuad(bgModel, bgColor);
-
-        // --- Text layout ---
-        // Scale: 0.8 gives text height = 5*8*0.8 = 32 px, leaving 4px margin top+bottom in a 40px box.
-        // Clamp slightly smaller on tiny viewports.
-        float rowTextScale = std::max(0.65f, std::min(0.82f,
-                                std::min(uiWidth / 800.0f, uiHeight / 600.0f) * 0.82f));
-
-        // Vertical centre of text inside the box
-        float textH = 5.0f * 8.0f * rowTextScale;          // actual rendered text height
-        float textY = y + (menuHeight - textH) * 0.5f;     // top-of-text that centres it
-
-        // Horizontal zones (leave 6 px padding each side)
-        float pad   = 6.0f;
-        float boxL  = menuX + pad;
-        float boxR  = menuX + menuWidth - pad;
-
-        // Optional player-count badge on the far left (only when online with players)
-        float nameL = boxL;                                 // map name starts here
-        if (isConnectedToServer() && i < (int)mapPlayerCounts.size() && mapPlayerCounts[i] > 0) {
-            char countStr[8];
-            snprintf(countStr, sizeof(countStr), "[%d]", mapPlayerCounts[i]);
-            float cw = renderer.getTextWidth(countStr, rowTextScale * 0.85f);
-            renderer.drawText(countStr, boxL, textY, rowTextScale * 0.85f);
-            nameL = boxL + cw + 6.0f;
-        }
-
-        // Map name fills the remaining space, shrunk to fit if needed
-        float nameMaxW  = boxR - nameL;                     // use full remaining width
-        renderer.drawTextFit(mapDisplayNames[i].c_str(), nameL, textY, nameMaxW, rowTextScale);
-
-        // Selection indicator square on the left edge
-        if (isSelected) {
-            glm::mat4 indicatorModel = glm::mat4(1.0f);
-            indicatorModel = glm::translate(indicatorModel, glm::vec3(menuX + 4.0f, y + menuHeight/2.0f, 0.0f));
-            indicatorModel = glm::scale(indicatorModel, glm::vec3(6.0f, 6.0f, 1.0f));
-            renderer.drawColoredQuad(indicatorModel, glm::vec3(1.0f, 1.0f, 1.0f));
-        }
-    }
-
-    // Game Mode selection row — clickable (cycles mode)
-    float gameModeY = startY + numMaps * spacing + 20.0f;
-    // Index numMaps is reserved for the mode row, numMaps+1 for nothing (or back button if needed)
-    menuButtons.push_back({menuX, gameModeY, menuX + menuWidth, gameModeY + menuHeight, numMaps});
-
-    glm::mat4 gmBg = glm::mat4(1.0f);
-    gmBg = glm::translate(gmBg, glm::vec3(menuX + menuWidth/2.0f, gameModeY + menuHeight/2.0f, 0.0f));
-    gmBg = glm::scale(gmBg, glm::vec3(menuWidth, menuHeight, 1.0f));
-    renderer.drawColoredQuad(gmBg, glm::vec3(0.7f, 0.3f, 0.3f));
-
-    const char* gameModeStr = (currentGameMode == DEATHMATCH) ? "Deathmatch" : 
-                            (currentGameMode == TEAM_VS_TEAM) ? "Team vs Team" : "Bomb Defusal";
-    char gmText[64];
-    snprintf(gmText, sizeof(gmText), "Game Mode: %s", gameModeStr);
-    {
-        float gmScale = std::max(0.65f, std::min(0.85f, std::min(uiWidth / 800.0f, uiHeight / 600.0f) * 0.85f));
-        float gmTextH = 5.0f * 8.0f * gmScale;
-        float gmTextY = gameModeY + (menuHeight - gmTextH) * 0.5f;
-        renderer.drawTextFit(gmText, menuX + 10.0f, gmTextY, menuWidth - 20.0f, gmScale);
-    }
-
-    // Instructions at bottom — use drawTextFit so it never overflows on narrow screens
-    renderer.drawTextFit("UP/DOWN=map LEFT/RIGHT=mode ENTER=load ESC=back",
-                         left + 20.0f, bottom - 18.0f, _b.width() - 40.0f, 0.9f);
-
-    // Only print to console when selection actually changes (to reduce spam)
-    static int lastMapSelection = -1;
-    if (mapSelection != lastMapSelection) {
-        std::cout << "\n=== MAP SELECTION ===" << std::endl;
-        for (int i = 0; i < numMaps; i++) {
-            std::cout << (i == mapSelection ? "> " : "  ") << mapDisplayNames[i] << std::endl;
-        }
-        std::cout << "Game Mode: " << gameModeStr << std::endl;
-        std::cout << "Use UP/DOWN to select, LEFT/RIGHT for game mode, ENTER to load, ESC to go back" << std::endl;
-        lastMapSelection = mapSelection;
-    }
-
-    // Suppress unused-variable warnings for bounds variables not referenced above
-    (void)right; (void)top;
-}
-
-void Game::processMapSelectionInput() {
-    // Note: static bool key-state variables have been moved to inp (InputState member)
-
-    // Reset key states when entering menu to prevent stuck keys.
-    // Return early so a still-held ENTER from the main menu doesn't
-    // instantly load the currently highlighted map on the first frame.
-    if (menuJustEntered) {
-        inp.resetNavKeys();
-        menuJustEntered = false;
-        return;
-    }
-
-    const int numMaps = mapFiles.size();
-
-    // Ensure mapSelection is within bounds
-    if (numMaps == 0) {
-        mapSelection = 0;
-    } else if (mapSelection >= numMaps) {
-        mapSelection = numMaps - 1;
-    }
-
-    // ── Mouse hover + click ──────────────────────────────────────────
-    // menuButtons populated by renderMapSelection() each frame.
-    // Map items use actionIndex 0..numMaps-1, Game Mode row uses numMaps.
-    bool hoveredAny = false;
-    for (const auto& btn : menuButtons) {
-        if (mouseGUIPosX >= btn.x0 && mouseGUIPosX <= btn.x1 &&
-            mouseGUIPosY >= btn.y0 && mouseGUIPosY <= btn.y1) {
-            int idx = btn.actionIndex;
-            if (idx < numMaps) {
-                mapSelection = idx;
-                hoveredAny = true;
-                if (mouseClicked) {
-                    // Load map — same logic as ENTER
-                    const char* modeName = (currentGameMode == DEATHMATCH) ? "Deathmatch" : 
-                                          (currentGameMode == TEAM_VS_TEAM) ? "Team vs Team" : "Bomb Defusal";
-                    std::cout << "Loading " << mapFiles[idx] << " with game mode " << modeName << "..." << std::endl;
-                    if (isConnectedToServer() && networkClient) {
-                        networkClient->sendMapChange(mapFiles[idx]);
-                        for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
-                            remotePlayers[i].active   = false;
-                            remotePlayers[i].id       = 0;
-                            remotePlayers[i].position = glm::vec3(0.0f);
-                            remotePlayers[i].renderPosition = glm::vec3(0.0f);
-                            remotePlayers[i].velocity = glm::vec3(0.0f);
-                            remotePlayers[i].yaw      = 0.0f;
-                            remotePlayers[i].pitch    = 0.0f;
-                            remotePlayers[i].health   = 0.0f;
-                            remotePlayers[i].isDead   = true;
-                        }
-                        playerCount = 1;
-                    }
-                    loadMap(mapFiles[idx]);
-                    if (currentGameMode == TEAM_VS_TEAM || currentGameMode == BOMB_DEFUSAL) {
-                        playerTeam = 0;
-                    }
-                    resetGame();
-                    if (bombDefusalMode) startRound();
-                    menuJustEntered = true;
-                    gameState = PLAYING;
-                    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-                }
-            } else if (idx == numMaps) {
-                // Game Mode row — cycle mode on click
-                hoveredAny = true;
-                if (mouseClicked) {
-                    int newMode = (static_cast<int>(currentGameMode) + 1) % 3;
-                    currentGameMode = static_cast<GameMode>(newMode);
-                    const char* modeName = (currentGameMode == DEATHMATCH) ? "Deathmatch" : 
-                                          (currentGameMode == TEAM_VS_TEAM) ? "Team vs Team" : "Bomb Defusal";
-                    std::cout << "Game Mode: " << modeName << std::endl;
-                }
-            }
-            break;
-        }
-    }
-    if (glfwGetInputMode(window, GLFW_CURSOR) == GLFW_CURSOR_NORMAL) {
-        glfwSetCursor(window, hoveredAny ? handCursor : nullptr);
-    }
-
-    // Handle UP key
-    if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS && !inp.upPressed) {
-        inp.upPressed = true;
-        if (numMaps > 0) {
-            mapSelection = (mapSelection - 1 + numMaps) % numMaps;
-        }
-    } else if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_RELEASE) {
-        inp.upPressed = false;
-    }
-
-    // Handle DOWN key
-    if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS && !inp.downPressed) {
-        inp.downPressed = true;
-        if (numMaps > 0) {
-            mapSelection = (mapSelection + 1) % numMaps;
-        }
-    } else if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_RELEASE) {
-        inp.downPressed = false;
-    }
-
-    // Handle LEFT/RIGHT for game mode selection
-    if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS && !inp.leftPressed) {
-        inp.leftPressed = true;
-        int newMode = (static_cast<int>(currentGameMode) + 2) % 3; // Cycle backwards
-        currentGameMode = static_cast<GameMode>(newMode);
-        const char* modeName = (currentGameMode == DEATHMATCH) ? "Deathmatch" : 
-                              (currentGameMode == TEAM_VS_TEAM) ? "Team vs Team" : "Bomb Defusal";
-        std::cout << "Game Mode: " << modeName << std::endl;
-    } else if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_RELEASE) {
-        inp.leftPressed = false;
-    }
-
-    if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS && !inp.rightPressed) {
-        inp.rightPressed = true;
-        int newMode = (static_cast<int>(currentGameMode) + 1) % 3; // Cycle forwards
-        currentGameMode = static_cast<GameMode>(newMode);
-        const char* modeName = (currentGameMode == DEATHMATCH) ? "Deathmatch" : 
-                              (currentGameMode == TEAM_VS_TEAM) ? "Team vs Team" : "Bomb Defusal";
-        std::cout << "Game Mode: " << modeName << std::endl;
-    } else if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_RELEASE) {
-        inp.rightPressed = false;
-    }
-
-    // Handle ENTER key
-    if (glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS && !inp.enterPressed) {
-        inp.enterPressed = true;
-        if (mapSelection < (int)mapFiles.size()) {
-            const char* modeName = (currentGameMode == DEATHMATCH) ? "Deathmatch" : 
-                                  (currentGameMode == TEAM_VS_TEAM) ? "Team vs Team" : "Bomb Defusal";
-            std::cout << "Loading " << mapFiles[mapSelection] << " with game mode " << modeName << "..." << std::endl;
-            if (isConnectedToServer() && networkClient) {
-                networkClient->sendMapChange(mapFiles[mapSelection]);
-                for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
-                    remotePlayers[i].active   = false;
-                    remotePlayers[i].id       = 0;
-                    remotePlayers[i].position = glm::vec3(0.0f);
-                    remotePlayers[i].renderPosition = glm::vec3(0.0f);
-                    remotePlayers[i].velocity = glm::vec3(0.0f);
-                    remotePlayers[i].yaw      = 0.0f;
-                    remotePlayers[i].pitch    = 0.0f;
-                    remotePlayers[i].health   = 0.0f;
-                    remotePlayers[i].isDead   = true;
-                }
-                playerCount = 1;
-            }
-            loadMap(mapFiles[mapSelection]);
-            if (currentGameMode == TEAM_VS_TEAM || currentGameMode == BOMB_DEFUSAL) {
-                playerTeam = 0;
-            }
-            resetGame();
-            if (bombDefusalMode) startRound();
-            menuJustEntered = true;
-            gameState = PLAYING;
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-        }
-    } else if (glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_RELEASE) {
-        inp.enterPressed = false;
-    }
-
-    // Handle ESC key - go back to menu
-    if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS && !inp.escapePressed) {
-        inp.escapePressed = true;
-        gameState = MENU;
-        menuSelection = 1;
-    } else if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_RELEASE) {
-        inp.escapePressed = false;
-    }
+    menuJustEntered = false;
 }

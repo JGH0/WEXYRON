@@ -21,6 +21,7 @@ Texture::Texture(const char* path, GLenum textureUnit)
 }
 
 Texture::~Texture() {
+    if (pixels) stbi_image_free(pixels);
     if (ID != 0) {
         glDeleteTextures(1, &ID);
     }
@@ -59,6 +60,11 @@ bool Texture::loadFromFile(const char* path) {
     
     // Free image data
     stbi_image_free(data);
+
+    // Keep an RGBA copy of the source pixels. The renderer copies textures into
+    // a single texture array, and CPUs cannot read a GPU texture back cheaply
+    // (the old FBO readback also crashed inside the Mesa driver).
+    pixels = stbi_load(path, &width, &height, &nrChannels, 4);
     
     return true;
 }

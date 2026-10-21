@@ -7,32 +7,15 @@
 
 void Game::renderFlashbangEffect() {
     if (isFlashed && flashEffectTime > 0.0f) {
-        // Create a white overlay effect for flash
-        float alpha = flashEffectTime / 3.0f; // Normalize to 0-1 range
+        // Full-screen white flash that fades out as the effect wears off.
+        float alpha = flashEffectTime / 3.0f;
         if (alpha > 1.0f) alpha = 1.0f;
+        if (alpha < 0.0f) alpha = 0.0f;
 
-        UIHelpers::setProjection(renderer, window);
-        auto _b = UIHelpers::getBounds(window); float left=_b.left, right=_b.right, top=_b.top, bottom=_b.bottom;
-        float centerX = (left + right) * 0.5f;
-        float centerY = (top + bottom) * 0.5f;
-        float w = (right - left);
-        float h = (bottom - top);
-
-        // Ensure overlay is visible over the 3D scene
-        glDisable(GL_DEPTH_TEST);
-
-        // Enable blending for transparency
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-        // Draw white overlay with proper alpha
-        glm::mat4 model = glm::mat4(1.0f);
-        model = glm::translate(model, glm::vec3(centerX, centerY, 0.0f));
-        model = glm::scale(model, glm::vec3(w, h, 1.0f));
-        renderer.drawColoredQuad(model, glm::vec3(alpha, alpha, alpha)); // White with alpha
-
-        glDisable(GL_BLEND);
-        glEnable(GL_DEPTH_TEST);
+        if (alpha > 0.0f) {
+            UIHelpers::setProjection(renderer, window);
+            renderer.submitOverlay(glm::vec3(1.0f), alpha);
+        }
     }
 }
 
@@ -74,108 +57,49 @@ void Game::renderDamageEffect() {
     if (damageEffectTime > 0.0f) {
         UIHelpers::setProjection(renderer, window);
 
-        auto _b = UIHelpers::getBounds(window); float left=_b.left, right=_b.right, top=_b.top, bottom=_b.bottom;
-        float centerX = (left + right) * 0.5f;
-        float centerY = (top + bottom) * 0.5f;
-        float w = (right - left);
-        float h = (bottom - top);
-
-        // Calculate damage effect alpha (fade out over time)
-        float alpha = damageEffectTime / 0.5f; // 0.5 second duration
+        // A short red flash over the whole screen each time the player is hit;
+        // it fades out over the effect's lifetime.
+        const float duration = 0.5f;
+        float alpha = damageEffectTime / duration;
         if (alpha > 1.0f) alpha = 1.0f;
+        if (alpha < 0.0f) alpha = 0.0f;
 
-        // Disable depth test and enable blending for transparency
-        glDisable(GL_DEPTH_TEST);
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-        // Draw full-screen red pulse
-        glm::mat4 overlayModel = glm::mat4(1.0f);
-        overlayModel = glm::translate(overlayModel, glm::vec3(centerX, centerY, 0.0f));
-        overlayModel = glm::scale(overlayModel, glm::vec3(w, h, 1.0f));
-        glm::vec3 overlayColor = glm::vec3(1.0f, 0.0f, 0.0f) * alpha * 0.5f; // Red with alpha
-        renderer.drawColoredQuad(overlayModel, overlayColor);
-
-        // Restore state
-        glDisable(GL_BLEND);
-        glEnable(GL_DEPTH_TEST);
+        renderer.submitOverlay(glm::vec3(1.0f, 0.0f, 0.0f), alpha * 0.55f);
     }
 }
 
 void Game::renderHealthEffect() {
+    // Low health: a red pulse over the whole screen that gets stronger and
+    // faster the lower the player's health.
     if (playerHealth < playerMaxHealth && playerHealth > 0.0f && window) {
         UIHelpers::setProjection(renderer, window);
 
-        auto _b = UIHelpers::getBounds(window); float left=_b.left, right=_b.right, top=_b.top, bottom=_b.bottom;
-        float centerX = (left + right) * 0.5f;
-        float centerY = (top + bottom) * 0.5f;
-        float w = (right - left);
-        float h = (bottom - top);
+        const float healthPercent = playerHealth / playerMaxHealth;
+        const float missing = 1.0f - healthPercent;   // 0 = full health, 1 = dead
 
-        // Calculate health percentage (0.0 to 1.0)
-        float healthPercent = playerHealth / playerMaxHealth;
-        
-        // Calculate red intensity based on health (lower health = more red)
-        // Full HP = 0.0 intensity, Low HP = 0.3 intensity
-        float redIntensity = (1.0f - healthPercent) * 0.3f;
-        
-        // Calculate pulse speed based on health (lower health = faster pulse)
-        // Full HP = 0.0 speed, Low HP = 8.0 speed
-        float pulseSpeed = (1.0f - healthPercent) * 8.0f;
-        
-        // Get current time for pulsing
-        double currentTime = glfwGetTime();
-        
-        // Calculate pulse using sine wave (0.0 to 1.0)
-        float pulse = static_cast<float>((sin(currentTime * pulseSpeed) + 1.0f) * 0.5f);
-        
-        // Combine base intensity with pulse
-        float finalAlpha = redIntensity * (0.5f + pulse * 0.5f);
-        
-        // Disable depth test and enable blending for transparency
-        glDisable(GL_DEPTH_TEST);
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        // Peak opacity grows with the damage taken (up to ~0.35, so the screen
+        // stays readable at low health).
+        const float intensity = 0.35f * std::pow(missing, 1.3f);
+        // The pulse starts at ~2 Hz and speeds up towards ~7 Hz near death.
+        const float pulseHz = 2.0f + 5.0f * missing;
+        const float phase = static_cast<float>(glfwGetTime()) * pulseHz * 6.2831853f;
+        const float pulse = 0.5f + 0.5f * std::sin(phase);   // 0..1
 
-        // Draw full-screen red overlay
-        glm::mat4 overlayModel = glm::mat4(1.0f);
-        overlayModel = glm::translate(overlayModel, glm::vec3(centerX, centerY, 0.0f));
-        overlayModel = glm::scale(overlayModel, glm::vec3(w, h, 1.0f));
-        glm::vec3 overlayColor = glm::vec3(1.0f, 0.0f, 0.0f) * finalAlpha;
-        renderer.drawColoredQuad(overlayModel, overlayColor);
-
-        // Restore state
-        glDisable(GL_BLEND);
-        glEnable(GL_DEPTH_TEST);
+        // Start from a low baseline so the red never disappears completely.
+        const float alpha = intensity * (0.45f + 0.55f * pulse);
+        if (alpha > 0.0f) renderer.submitOverlay(glm::vec3(1.0f, 0.0f, 0.0f), alpha);
     }
 }
 
 void Game::renderDeathScreen() {
     UIHelpers::setProjection(renderer, window);
     
-    auto _b = UIHelpers::getBounds(window); float left=_b.left, right=_b.right, top=_b.top, bottom=_b.bottom;
-    float centerX = (left + right) * 0.5f;
-    float centerY = (top + bottom) * 0.5f;
-    float w = (right - left);
-    float h = (bottom - top);
-
-    // Disable depth test and enable blending for transparency
-    glDisable(GL_DEPTH_TEST);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-    // Render strong red background
-    glm::mat4 backgroundModel = glm::mat4(1.0f);
-    backgroundModel = glm::translate(backgroundModel, glm::vec3(centerX, centerY, 0.0f));
-    backgroundModel = glm::scale(backgroundModel, glm::vec3(w, h, 1.0f));
-    renderer.drawColoredQuad(backgroundModel, glm::vec3(0.8f, 0.0f, 0.0f)); // Strong red background
-    
-    // Render "YOU DIED" text centered on screen
-    renderer.drawTextCentered("YOU DIED", centerX, centerY, 3.0f); // Big centered text
-
-    // Restore state
-    glDisable(GL_BLEND);
-    glEnable(GL_DEPTH_TEST);
+    auto _b = UIHelpers::getBounds(window);
+    float centerX = _b.centerX();
+    float centerY = _b.centerY();
+    // Strong red background, then the label on top.
+    renderer.submitOverlay(glm::vec3(0.8f, 0.0f, 0.0f), 1.0f);
+    renderer.drawTextCentered("YOU DIED", centerX, centerY, 3.0f);
 }
 
 void Game::renderBombSites() {
@@ -273,10 +197,8 @@ void Game::renderBombDefusalHUD() {
     float left=_b.left, right=_b.right, top=_b.top, bottom=_b.bottom;
     double currentTime = glfwGetTime();
     
-    // Disable depth test and enable blending for overlay
-    glDisable(GL_DEPTH_TEST);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    // UI is drawn as blended overlays by the batched renderer; no raw GL
+    // state changes are needed here anymore.
     
     // ── Team + Role indicator (top-left corner) ──
     {
@@ -464,7 +386,4 @@ void Game::renderBombDefusalHUD() {
         }
     }
     
-    // Restore state
-    glDisable(GL_BLEND);
-    glEnable(GL_DEPTH_TEST);
 }
