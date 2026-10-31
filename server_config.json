@@ -3,6 +3,7 @@
     "name": "Cube Game Server",
     "port": 7777,
     "maxPlayers": 16,
+    "maxPlayersPerMachine": -1,
     "region": "US-East",
     "description": "Custom game server"
   },

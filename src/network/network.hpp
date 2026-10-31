@@ -56,8 +56,18 @@ enum PacketType : uint8_t {
     PACKET_DISCOVER = 13,
     PACKET_DISCOVER_RESPONSE = 14,
     PACKET_MAP_CHANGE = 15,        // Client requesting map change
-    PACKET_MAP_PLAYER_COUNT = 16   // Server sending player counts per map
+    PACKET_MAP_PLAYER_COUNT = 16,  // Server sending player counts per map
+    PACKET_CONNECT_REJECT = 17     // Server refusing a connection (reason follows)
 };
+
+/// Why a connection attempt was refused (PACKET_CONNECT_REJECT.reason).
+enum RejectReason : uint8_t {
+    REJECT_SERVER_FULL = 1,        ///< maxPlayers reached
+    REJECT_MACHINE_LIMIT = 2       ///< maxPlayersPerMachine reached for this machine
+};
+
+/// Size of the machine GUID sent with the handshake (hex, no NUL needed).
+const size_t MACHINE_ID_LENGTH = 32;
 
 #pragma pack(push, 1)
 
@@ -68,6 +78,21 @@ struct PacketHeader {
     uint32_t sequence;
     uint32_t timestamp;
     uint32_t clientId;
+};
+
+/// First packet of a session. `machineId` is the stable id of the machine the
+/// client runs on (all instances on one PC share it), used for the server's
+/// per-machine player limit. All zeros is accepted (treated as one per IP).
+struct ConnectPacket {
+    PacketHeader header;
+    char machineId[MACHINE_ID_LENGTH];
+};
+
+/// Refusal of a CONNECT: the client shows `reason` instead of waiting.
+struct ConnectRejectPacket {
+    PacketHeader header;           ///< clientId == 0
+    uint8_t reason;                ///< RejectReason
+    uint8_t limit;                 ///< the limit that was hit (0 when n/a)
 };
 
 // Player input from client
@@ -157,10 +182,33 @@ public:
     NetworkClient();
     ~NetworkClient();
     
+    /// Start (or retry) the handshake with `serverAddress`.
+    ///
+    /// The session is only established once the server answers with a
+    /// PACKET_CONNECT_ACK, so a single client can only ever have one live
+    /// session: calling connect() again while this client is already
+    /// connected/connecting just re-sends the CONNECT for the *same*
+    /// address (handshake retry). The server recognises the re-send by the
+    /// client id carried in the packet and answers the existing player
+    /// instead of registering a new one.
     bool connect(const std::string& serverAddress, uint16_t port = DEFAULT_PORT);
     void disconnect();
     bool isConnected() const { return connected; }
     bool isConnecting() const { return connecting; }
+    /// Last failure reason (shown on the connect screen), empty when none.
+    const std::string& getLastError() const { return lastError; }
+    /// Address/port of the current (or last attempted) session.
+    const std::string& getServerAddress() const { return serverAddressText; }
+    uint16_t getServerPort() const { return remotePort; }
+    /// Stable id of this machine, sent with every handshake (all instances on
+    /// one PC share it; "" when it could not be determined).
+    const std::string& getMachineId() const { return machineId_; }
+    /// Override the machine id (tests); pass "" to fall back to detection.
+    void setMachineId(const std::string& id) { machineId_ = id; }
+    /// Refusal reason when the last handshake was rejected (see RejectReason).
+    int getRejectReason() const { return rejectReason_; }
+    /// Seconds since the last packet arrived (server-liveness check).
+    double secondsSinceLastReceive() const;
     
     // Send player input to server
     void sendPlayerInput(float moveX, float moveZ, float yaw, float pitch, bool jump, bool shoot, uint8_t weaponId, float posX, float posY, float posZ);
@@ -188,7 +236,30 @@ private:
     bool connecting;
     uint32_t clientId;
     uint32_t sequence;
-    
+
+    // Session bookkeeping
+    std::string serverAddressText; ///< address of the current target
+    uint16_t remotePort = 0;       ///< port of the current target
+    std::string lastError;         ///< last failure, empty when none
+    double lastHandshakeSend = 0.0;///< time of the last CONNECT transmission
+    double handshakeStart = 0.0;   ///< time the current attempt started
+    double lastReceive = 0.0;      ///< time of the last packet from the server
+    std::string machineId_;        ///< resolved machine id (see getMachineId)
+    int rejectReason_ = 0;         ///< RejectReason of the last refusal
+    /// Retransmission interval for an unanswered CONNECT (seconds). The
+    /// handshake must survive a lost UDP packet, but must not flood.
+    static constexpr double kHandshakeRetryInterval = 0.5;
+    /// Give up on an unanswered handshake after this long (seconds), so the
+    /// screen can report "no answer" instead of staying on CONNECTING forever.
+    static constexpr double kHandshakeTimeout = 8.0;
+
+    /// Resolve `address` into serverAddr; false when it is not a valid IPv4.
+    bool resolveTarget(const std::string& address, uint16_t port);
+    /// Send the CONNECT handshake (fresh id 0, or the current id on a retry).
+    bool sendConnectPacket();
+    /// Return to the "not connected" state and close the socket.
+    void closeSocket();
+
     bool sendPacket(const void* data, size_t size);
     bool receivePacket(void* buffer, size_t maxSize, size_t& received);
 };
@@ -205,8 +276,10 @@ struct ServerPlayer {
     bool active;
     uint32_t lastInputSequence;
     float lastPingTime;
+    float lastPacketTime = 0.0f; ///< seconds since the last packet (timeout)
     float shootCooldown;  // Shooting cooldown timer
     char mapName[32];     // Current map the player is on
+    char machineId[MACHINE_ID_LENGTH] = {}; ///< stable id of the player's PC
 };
 
 class NetworkServer {
@@ -217,6 +290,8 @@ public:
     bool start(uint16_t port = DEFAULT_PORT);
     void stop();
     bool isRunning() const { return running; }
+    /// Seconds without a packet before a player is dropped as timed out.
+    void setTimeoutSeconds(float seconds) { timeoutSeconds = seconds; }
     
     // Process network events - call every frame
     void update(float deltaTime);
@@ -256,7 +331,13 @@ public:
     // Set max players
     void setMaxPlayers(int max) { maxPlayers = max; }
     int getMaxPlayers() const { return maxPlayers; }
+    /// Max players from one machine (same IP + machine id). -1 = unlimited,
+    /// 0 = nobody may join, 1 = one instance per PC, ...
+    void setMaxPlayersPerMachine(int max) { maxPlayersPerMachine = max; }
+    int getMaxPlayersPerMachine() const { return maxPlayersPerMachine; }
     int getCurrentPlayerCount() const { return players.size(); }
+    /// Players currently connected from the machine `machineId` seen from `addr`.
+    int getPlayerCountForMachine(const sockaddr_in& addr, const char* machineId) const;
 
     // Callbacks
     std::function<void(uint32_t, const PlayerInputPacket&)> onPlayerInput;
@@ -271,12 +352,23 @@ private:
     std::map<uint32_t, ServerPlayer> players;
     std::string serverName;
     int maxPlayers;
+    int maxPlayersPerMachine = -1; ///< -1 = unlimited
+    float timeoutSeconds = 10.0f; ///< inactive players are dropped after this
+    float lastDeltaTime = 1.0f / 60.0f;
     
     bool createSocket(uint16_t port);
     void processPacket(const void* data, size_t size, const sockaddr_in& from);
     void sendPacket(const void* data, size_t size, const sockaddr_in& to);
     void broadcastPacket(const void* data, size_t size, uint32_t excludeId = 0);
+    /// Tell a client why its CONNECT was refused (clientId == 0).
+    void sendReject(const sockaddr_in& to, uint8_t reason, uint8_t limit);
+    /// True when `addr` (with `machineId`) is on the same PC as `player`.
+    /// An empty id degrades to "same IPv4 address".
+    static bool sameMachine(const ServerPlayer& player, const sockaddr_in& addr,
+                            const char* machineId);
     void removePlayer(uint32_t id);
+    /// Drop every player that has not sent a packet for timeoutSeconds.
+    void removeTimedOutPlayers();
     ServerPlayer* findPlayerByAddress(const sockaddr_in& addr);
 };
 

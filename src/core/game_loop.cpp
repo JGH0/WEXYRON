@@ -13,11 +13,12 @@ void Game::update(float deltaTime) {
     // Live settings: pick up edits to assets/settings.cfg without a restart.
     pollSettingsFile();
 
+    // Network session: runs in every state, so the handshake completes while
+    // the connect screen is open (the status there must turn CONNECTED) and a
+    // dropped server is noticed from the menus too.
+    updateNetwork();
+
     if (gameState == PLAYING) {
-        // Update network client
-        if (networkClient && (networkClient->isConnected() || networkClient->isConnecting())) {
-            networkClient->update();
-        }
         // Update player physics (always run, client controls own movement in multiplayer)
         updatePlayerPhysics(deltaTime);
 

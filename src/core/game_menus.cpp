@@ -544,6 +544,13 @@ bool Game::debugMenuSelect(const std::string& label) {
     return false;
 }
 
+void Game::debugPumpFrame() {
+    // The real per-frame network pump (update() also runs gameplay/physics,
+    // which needs no GL); then the input routing of the current state.
+    updateNetwork();
+    processInput(1.0f / 60.0f);
+}
+
 void Game::debugRunFrames(int frames) {
     for (int i = 0; i < frames; ++i) {
         gameState = PLAYING;

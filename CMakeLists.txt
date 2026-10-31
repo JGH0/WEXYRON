@@ -66,6 +66,7 @@ set(SYSTEMS_SOURCES
 
 set(NETWORK_SOURCES
     src/network/network.cpp
+    src/network/server_config.cpp
 )
 
 set(UI_SOURCES

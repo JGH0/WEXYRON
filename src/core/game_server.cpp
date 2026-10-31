@@ -24,7 +24,20 @@
 // ========== NETWORK MULTIPLAYER IMPLEMENTATION ==========
 
 bool Game::connectToServer(const std::string& address, uint16_t port) {
+    // One session per client. While connected (or still handshaking) the same
+    // address is a retry, not a second connection - asking the network layer
+    // for it again keeps a single player on the server.
     if (networkClient) {
+        if (isConnectedToServer() || isConnectingToServer()) {
+            if (networkClient->getServerAddress() == address &&
+                networkClient->getServerPort() == port) {
+                return networkClient->connect(address, port);   // handshake retry
+            }
+            serverConnectError_ =
+                "Already connected to " + networkClient->getServerAddress() + ":" +
+                std::to_string(networkClient->getServerPort()) + " - disconnect first";
+            return false;
+        }
         disconnectFromServer();
     }
 
@@ -150,16 +163,39 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
     };
 
     if (!networkClient->connect(address, port)) {
+        serverConnectError_ = networkClient->getLastError().empty()
+                            ? "Failed to connect to " + address + ":" + std::to_string(port)
+                            : networkClient->getLastError();
+        std::cerr << "Failed to connect to server at " << address << ":" << port << std::endl;
         delete networkClient;
         networkClient = nullptr;
-        std::cerr << "Failed to connect to server at " << address << ":" << port << std::endl;
         return false;
     }
 
+    serverConnectError_.clear();
     multiplayerMode = true;
     playerCount = 1; // Start with self (will be updated when others join)
-    std::cout << "Connected to server at " << address << ":" << port << std::endl;
+    std::cout << "Connecting to server at " << address << ":" << port << std::endl;
     return true;
+}
+
+void Game::connectionLossDetected() {
+    if (!networkClient) return;
+    serverConnectError_ = "Disconnected from " + networkClient->getServerAddress() + ":" +
+                          std::to_string(networkClient->getServerPort());
+    disconnectFromServer();
+}
+
+bool Game::hasServerSession() const {
+    return networkClient && (networkClient->isConnected() || networkClient->isConnecting());
+}
+
+std::string Game::getServerAddress() const {
+    return networkClient ? networkClient->getServerAddress() : std::string();
+}
+
+uint16_t Game::getServerPort() const {
+    return networkClient ? networkClient->getServerPort() : 0;
 }
 
 void Game::disconnectFromServer() {
@@ -202,6 +238,36 @@ bool Game::isConnectedToServer() const {
     uintptr_t addr = reinterpret_cast<uintptr_t>(networkClient);
     if (addr < 0x1000 || addr > 0x7fffffffffff) return false;
     return networkClient->isConnected();
+}
+
+void Game::updateNetwork() {
+    // A session may be in flight (CONNECTING) or live (CONNECTED) in any game
+    // state, including the connect screen: the handshake ACK, the disconnect
+    // and a dropped server must be noticed there too, not only in-game.
+    if (!networkClient) return;
+
+    // The network layer closed the session (unanswered or rejected handshake,
+    // server gone in-game): drop it and keep the reason for the menu.
+    if (!networkClient->isConnected() && !networkClient->isConnecting()) {
+        const std::string reason = networkClient->getLastError();
+        if (!reason.empty()) {
+            serverConnectError_ = reason;
+        }
+        disconnectFromServer();
+        return;
+    }
+
+    networkClient->update();
+    if (!networkClient->isConnected()) {
+        return;   // handshake still in flight (retried by the network layer)
+    }
+
+    // A live session goes silent when the server is gone: report it instead of
+    // keeping a dead connection (and the "CONNECTED" status) forever.
+    if (networkClient->secondsSinceLastReceive() > kServerTimeoutSeconds) {
+        std::cerr << "Server stopped responding - disconnecting" << std::endl;
+        connectionLossDetected();
+    }
 }
 
 // ========== LAN DISCOVERY HELPERS (file-scope statics) ==========

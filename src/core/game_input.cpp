@@ -201,17 +201,26 @@ void Game::processMenuInput() {
     if (gameState == SERVER_CONNECT) {
         processServerConnectTextInput();
         // The list, status and typed values change outside the framework, so
-        // rebuild the rows whenever one of them changed.
+        // rebuild the rows whenever one of them changed. The session state
+        // drives the status row and the CONNECT/DISCONNECT row, and the error
+        // text changes when a handshake fails or a server goes away.
         static int lastServerCount = -1;
         static bool lastConnected = false;
+        static bool lastConnecting = false;
+        static std::string lastError;
         static std::string lastAddress;
         static int lastPort = -1;
+        const bool connected  = isConnectedToServer();
+        const bool connecting = isConnectingToServer();
         if (static_cast<int>(discoveredServers.size()) != lastServerCount ||
-            isConnectedToServer() != lastConnected ||
+            connected != lastConnected || connecting != lastConnecting ||
+            getServerConnectError() != lastError ||
             serverAddress != lastAddress || serverPort != lastPort) {
             refreshServerRows();
             lastServerCount = static_cast<int>(discoveredServers.size());
-            lastConnected = isConnectedToServer();
+            lastConnected = connected;
+            lastConnecting = connecting;
+            lastError = getServerConnectError();
             lastAddress = serverAddress;
             lastPort = serverPort;
         }

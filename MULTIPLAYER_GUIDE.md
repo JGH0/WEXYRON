@@ -138,6 +138,21 @@ The server runs in terminal mode and supports:
 - **Ctrl+C**: Graceful shutdown
 - **Port Selection**: `./build/bin/server 7778` for different port
 
+## Multiple players on one PC
+
+Several game instances can run on the same PC and join the same server at the
+same time. How many are allowed is a server setting in `server_config.json`:
+
+```json
+{ "server": { "maxPlayersPerMachine": 2 } }
+```
+
+`-1` = unlimited (default), `0` = nobody, `N` = up to `N` instances per PC.
+All instances on one PC share the PC's machine id, so they are counted together
+even if they connect from different addresses. A client that is over the limit
+shows `FAILED` on the connect screen with the reason; the server logs
+`Connection rejected: machine limit reached`.
+
 ## Advanced Configuration
 
 ### Custom Ports

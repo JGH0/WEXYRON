@@ -62,6 +62,7 @@ The server can be configured using environment variables:
 | `SERVER_NAME` | Server display name | "Cube Game Server" |
 | `SERVER_PORT` | Server port | 7777 |
 | `MAX_PLAYERS` | Maximum connected players | 16 |
+| `MAX_PLAYERS_PER_MACHINE` | Players allowed from one machine (same PC). `-1` = unlimited, `0` = nobody, `N` = up to N instances per PC | from `server_config.json` |
 | `SERVER_REGION` | Server region | "US-East" |
 | `SERVER_DESCRIPTION` | Server description | "Custom game server" |
 | `DEFAULT_MAP` | Default map | "simple.map" |
@@ -72,6 +73,39 @@ The server can be configured using environment variables:
 | `TIMEOUT` | Connection timeout in seconds | 30.0 |
 | `MAX_PING` | Maximum allowed ping in ms | 500 |
 | `LOG_LEVEL` | Logging level (debug, info, warn, error) | info |
+
+Settings are resolved in this order (highest first): command line, environment
+variable, `server_config.json`, built-in default. The server prints where each
+value came from at startup. `server_config.json` is read from the working
+directory, or from `SERVER_CONFIG` when set.
+
+### Multiple players per PC (`maxPlayersPerMachine`)
+
+Several game instances can run on one PC and join the same server. The server
+decides how many are allowed from a single machine:
+
+```json
+{
+  "server": {
+    "maxPlayers": 16,
+    "maxPlayersPerMachine": 2
+  }
+}
+```
+
+| Value | Meaning |
+|-------|---------|
+| `-1`  | Unlimited (default) - any number of instances per PC |
+| `0`   | Nobody may join |
+| `N`   | Up to `N` players from one PC; the next one is refused |
+
+A "machine" is identified by the PC's machine id (derived from
+`/etc/machine-id` on Linux, `MachineGuid` on Windows, `gethostuuid` on macOS and
+cached as `assets/machine_id`), so instances on the same PC share a slot pool even
+when they connect from different addresses. Clients that cannot provide an id are
+grouped by IP address instead. A refused client shows
+`FAILED - Server limit: N player(s) per machine already connected` on the
+connect screen.
 
 ### Using .env file
 

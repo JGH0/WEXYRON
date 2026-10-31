@@ -4,18 +4,215 @@
  */
 
 #include "network.hpp"
-#include <iostream>
+#include <algorithm>
+#include <cctype>
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <functional>
+#include <iomanip>
+#include <iostream>
+#include <random>
+#include <sstream>
+
+#ifdef _WIN32
+  #include <windows.h>
+#else
+  #include <uuid/uuid.h>
+  #include <unistd.h>
+#endif
+
+namespace {
+/// Seconds on a monotonic clock (handshake retransmission bookkeeping).
+double nowSeconds() {
+    return std::chrono::duration<double>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+} // namespace
+
+// ========== MACHINE ID ==========
+//
+// All instances on one PC must present the same id, so it is derived from the
+// OS machine id rather than generated per process:
+//   Linux   /etc/machine-id, then /var/lib/dbus/machine-id
+//   Windows MachineGuid (crypto\\machine, registry)
+//   macOS   gethostuuid()
+// The raw id is hashed (so the registry/file value is not exposed) and cached
+// in assets/machine_id next to the client. Without an OS id (containers,
+// minimal images) a random id is generated once; it is stable per install but
+// cannot tell two PCs apart, so the server then groups players per IP.
+
+std::string machineIdFromOS() {
+#if defined(_WIN32)
+    HKEY key = nullptr;
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Cryptography", 0,
+                      KEY_READ | KEY_WOW64_64KEY, &key) == ERROR_SUCCESS) {
+        char buffer[256] = {};
+        DWORD size = sizeof(buffer);
+        DWORD type = 0;
+        const LONG rc = RegQueryValueExA(key, "MachineGuid", nullptr, &type,
+                                         reinterpret_cast<LPBYTE>(buffer), &size);
+        RegCloseKey(key);
+        if (rc == ERROR_SUCCESS && type == REG_SZ) return std::string(buffer);
+    }
+#elif defined(__APPLE__)
+    unsigned char uuid[16];
+    uuid_t raw;
+    if (gethostuuid(raw, nullptr) == 0) {
+        std::memcpy(uuid, raw, sizeof(uuid));
+        std::string text;
+        for (unsigned char byte : uuid) {
+            const char hex[] = "0123456789abcdef";
+            text += hex[byte >> 4];
+            text += hex[byte & 0x0f];
+        }
+        return text;
+    }
+#else
+    for (const char* path : {"/etc/machine-id", "/var/lib/dbus/machine-id"}) {
+        std::ifstream in(path);
+        std::string line;
+        if (in && std::getline(in, line) && !line.empty()) return line;
+    }
+#endif
+    return std::string();
+}
+
+/// Hex SHA-256 of `text` (32 chars), so only a derived id leaves the machine.
+std::string hashId(const std::string& text) {
+    // Self-contained SHA-256: no OpenSSL dependency on any platform.
+    static const uint32_t k[64] = {
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
+
+    std::vector<uint8_t> message(text.begin(), text.end());
+    const uint64_t bitLength = static_cast<uint64_t>(message.size()) * 8;
+    message.push_back(0x80);
+    while (message.size() % 64 != 56) message.push_back(0);
+    for (int i = 7; i >= 0; --i) message.push_back(static_cast<uint8_t>(bitLength >> (i * 8)));
+
+    uint32_t h[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+                     0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
+    auto rotr = [](uint32_t x, int n) { return (x >> n) | (x << (32 - n)); };
+
+    for (size_t chunk = 0; chunk < message.size(); chunk += 64) {
+        uint32_t w[64];
+        for (int i = 0; i < 16; ++i) {
+            const uint8_t* p = &message[chunk + i * 4];
+            w[i] = (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) |
+                   (uint32_t(p[2]) << 8) | uint32_t(p[3]);
+        }
+        for (int i = 16; i < 64; ++i) {
+            const uint32_t s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >> 3);
+            const uint32_t s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >> 10);
+            w[i] = w[i - 16] + s0 + w[i - 7] + s1;
+        }
+
+        uint32_t a = h[0], b = h[1], c = h[2], d = h[3];
+        uint32_t e = h[4], f = h[5], g = h[6], hh = h[7];
+        for (int i = 0; i < 64; ++i) {
+            const uint32_t s1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
+            const uint32_t ch = (e & f) ^ (~e & g);
+            const uint32_t t1 = hh + s1 + ch + k[i] + w[i];
+            const uint32_t s0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
+            const uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
+            const uint32_t t2 = s0 + maj;
+            hh = g; g = f; f = e; e = d + t1;
+            d = c; c = b; b = a; a = t1 + t2;
+        }
+        h[0] += a; h[1] += b; h[2] += c; h[3] += d;
+        h[4] += e; h[5] += f; h[6] += g; h[7] += hh;
+    }
+
+    static const char hex[] = "0123456789abcdef";
+    std::string out;
+    for (uint32_t word : h) {
+        for (int shift = 28; shift >= 0; shift -= 4) out += hex[(word >> shift) & 0x0f];
+    }
+    return out;
+}
+
+std::string readMachineIdFile(const std::string& path) {
+    std::ifstream in(path);
+    std::string id;
+    if (!(in >> id)) return std::string();
+    // 32 hex chars expected; anything else means a corrupt cache.
+    if (MACHINE_ID_LENGTH != id.size()) return std::string();
+    for (char c : id) {
+        if (!std::isxdigit(static_cast<unsigned char>(c))) return std::string();
+    }
+    return id;
+}
+
+void writeMachineIdFile(const std::string& path, const std::string& id) {
+    std::ofstream out(path, std::ios::trunc);
+    if (out) out << id << '\n';
+}
+
+std::string resolveMachineId() {
+    // 1. Cache next to the client: stable even when the OS id is unavailable,
+    //    and cheap to read.
+    std::error_code ec;
+    const std::filesystem::path dir = std::filesystem::exists("assets", ec)
+                                    ? std::filesystem::path("assets")
+                                    : std::filesystem::current_path(ec);
+    const std::string cachePath = (dir / "machine_id").string();
+
+    const std::string cached = readMachineIdFile(cachePath);
+    if (!cached.empty()) return cached;
+
+    // 2. Derive from the OS id (shared by every process on this PC).
+    std::string id;
+    const std::string osId = machineIdFromOS();
+    if (!osId.empty()) {
+        id = hashId(osId).substr(0, MACHINE_ID_LENGTH);
+    } else {
+        // 3. No OS id: random once per install.
+        std::random_device rd;
+        std::mt19937_64 rng((static_cast<uint64_t>(rd()) << 32) ^ rd() ^
+                            static_cast<uint64_t>(std::chrono::system_clock::now()
+                                .time_since_epoch().count()));
+        std::ostringstream text;
+        for (int i = 0; i < 4; ++i) text << std::hex << std::setw(8) << std::setfill('0')
+                                         << static_cast<uint32_t>(rng());
+        id = text.str();
+        std::cout << "No OS machine id found - using a random one (" << id << ")" << std::endl;
+    }
+
+    writeMachineIdFile(cachePath, id);
+    return id;
+}
 
 // ========== NETWORK CLIENT ==========
 
 NetworkClient::NetworkClient() : socketFd(SOCKET_INVALID), connected(false), connecting(false), clientId(0), sequence(0) {
     memset(&serverAddr, 0, sizeof(serverAddr));
+    serverAddr.sin_family = AF_INET;   // families make the address "unset"
+    machineId_ = resolveMachineId();   // shared by every instance on this PC
 }
 
 NetworkClient::~NetworkClient() {
     disconnect();
+}
+
+bool NetworkClient::resolveTarget(const std::string& address, uint16_t port) {
+    memset(&serverAddr, 0, sizeof(serverAddr));
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_port   = htons(port);
+    if (inet_pton(AF_INET, address.c_str(), &serverAddr.sin_addr) != 1) {
+        lastError = "Invalid server address: " + address;
+        std::cerr << lastError << std::endl;
+        return false;
+    }
+    serverAddressText = address;
+    remotePort        = port;
+    return true;
 }
 
 bool NetworkClient::connect(const std::string& serverAddress, uint16_t port) {
@@ -24,15 +221,43 @@ bool NetworkClient::connect(const std::string& serverAddress, uint16_t port) {
     if (!wsaInitialized) {
         WSADATA wsaData;
         if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-            std::cerr << "Failed to initialize Winsock" << std::endl;
+            lastError = "Failed to initialize Winsock";
+            std::cerr << lastError << std::endl;
             return false;
         }
         wsaInitialized = true;
     }
 #endif
+
+    // A client owns exactly one session. Asking for the server we are already
+    // talking to (even while the handshake is still in flight) must not open a
+    // second session: the server would register a new player for every click.
+    if ((connected || connecting) && socketFd != SOCKET_INVALID) {
+        const bool sameAddress = serverAddressText == serverAddress && remotePort == port;
+        if (!sameAddress) {
+            lastError = "Already connected to " + serverAddressText + ":" +
+                        std::to_string(remotePort) + " - disconnect first";
+            std::cerr << lastError << std::endl;
+            return false;
+        }
+        // Same target: this is a handshake retry, not a new connection.
+        lastError.clear();
+        return sendConnectPacket();
+    }
+
+    // A fresh session always starts from scratch: an earlier (failed) target
+    // must not inherit its port/address, or the handshake goes elsewhere.
+    memset(&serverAddr, 0, sizeof(serverAddr));
+    serverAddr.sin_family = AF_INET;
+    lastError.clear();
+    if (!resolveTarget(serverAddress, port)) {
+        return false;
+    }
+
     socketFd = socket(AF_INET, SOCK_DGRAM, 0);
     if (socketFd == SOCKET_INVALID) {
-        std::cerr << "Failed to create socket" << std::endl;
+        lastError = "Failed to create socket";
+        std::cerr << lastError << std::endl;
         return false;
     }
     
@@ -45,42 +270,62 @@ bool NetworkClient::connect(const std::string& serverAddress, uint16_t port) {
     fcntl(socketFd, F_SETFL, flags | O_NONBLOCK);
 #endif
 
-    serverAddr.sin_family = AF_INET;
-    serverAddr.sin_port = htons(port);
-    int ok = inet_pton(AF_INET, serverAddress.c_str(), &serverAddr.sin_addr);
-    if (ok != 1) {
-        std::cerr << "Invalid server IP address: " << serverAddress << std::endl;
-        CLOSE_SOCKET(socketFd);
-        socketFd = SOCKET_INVALID;
-        return false;
-    }
-    
-    // Send connect packet
-    PacketHeader header;
-    header.magic = PACKET_MAGIC;
-    header.type = PACKET_CONNECT;
-    header.sequence = sequence++;
-    header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
-    header.clientId = 0;
-    
-    if (!sendPacket(&header, sizeof(header))) {
-        std::cerr << "Failed to send connect packet" << std::endl;
-        CLOSE_SOCKET(socketFd);
-        socketFd = SOCKET_INVALID;
-        return false;
-    }
-    
-    std::cout << "Connecting to server at " << serverAddress << ":" << port << "..." << std::endl;
-    
-    // Wait for connect ack (non-blocking, handled in update)
-    connecting = true;
+    clientId  = 0;
     connected = false;
+    connecting = true;
+    handshakeStart = nowSeconds();
+    return sendConnectPacket();
+}
+
+bool NetworkClient::sendConnectPacket() {
+    if (socketFd == SOCKET_INVALID) return false;
+
+    // Send connect packet. A retry carries the id the server handed out in a
+    // first ACK that we missed, so the server answers the same player instead
+    // of registering a duplicate. The machine id lets the server apply its
+    // "players per machine" limit (several instances on one PC share it).
+    ConnectPacket packet{};
+    packet.header.magic = PACKET_MAGIC;
+    packet.header.type = PACKET_CONNECT;
+    packet.header.sequence = sequence++;
+    packet.header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    packet.header.clientId = clientId;
+    if (!machineId_.empty()) {
+        std::strncpy(packet.machineId, machineId_.c_str(), MACHINE_ID_LENGTH - 1);
+    }
+    
+    if (!sendPacket(&packet, sizeof(packet))) {
+        lastError = "Failed to send connect packet";
+        std::cerr << lastError << std::endl;
+        closeSocket();
+        return false;
+    }
+
+    // Transmission time, after the (cheap, but not instant) send.
+    lastHandshakeSend = nowSeconds();
+    
+    std::cout << "Connecting to server at " << serverAddressText << ":" << remotePort << "..." << std::endl;
     return true;
 }
 
+void NetworkClient::closeSocket() {
+    if (socketFd != SOCKET_INVALID) {
+        CLOSE_SOCKET(socketFd);
+        socketFd = SOCKET_INVALID;
+    }
+    connected  = false;
+    connecting = false;
+    clientId   = 0;
+}
+
+double NetworkClient::secondsSinceLastReceive() const {
+    if (lastReceive <= 0.0) return 0.0;
+    return nowSeconds() - lastReceive;
+}
+
 void NetworkClient::disconnect() {
-    if ((connected || connecting) && socketFd >= 0) {
+    if ((connected || connecting) && socketFd != SOCKET_INVALID) {
         PacketHeader header;
         header.magic = PACKET_MAGIC;
         header.type = PACKET_DISCONNECT;
@@ -92,13 +337,7 @@ void NetworkClient::disconnect() {
         sendPacket(&header, sizeof(header));
     }
     
-    if (socketFd != SOCKET_INVALID) {
-        CLOSE_SOCKET(socketFd);
-        socketFd = SOCKET_INVALID;
-    }
-    connected = false;
-    connecting = false;
-    clientId = 0;
+    closeSocket();
 }
 
 void NetworkClient::sendPlayerInput(float moveX, float moveZ, float yaw, float pitch,
@@ -147,6 +386,24 @@ void NetworkClient::sendMapChange(const std::string& mapName) {
 
 void NetworkClient::update() {
     if ((!connected && !connecting) || socketFd == SOCKET_INVALID) return;
+
+    // Retransmit an unanswered handshake: UDP may drop the CONNECT, and the
+    // player would otherwise sit on "CONNECTING..." until the menu is reopened.
+    // The timeout is measured from the start of the attempt, not from the last
+    // retransmission (which moves the clock forward every retry).
+    if (connecting) {
+        const double now = nowSeconds();
+        if (now - handshakeStart >= kHandshakeTimeout) {
+            lastError = "No answer from " + serverAddressText + ":" +
+                        std::to_string(remotePort);
+            std::cerr << lastError << std::endl;
+            closeSocket();
+            return;
+        }
+        if (now - lastHandshakeSend >= kHandshakeRetryInterval) {
+            sendConnectPacket();
+        }
+    }
     
     char buffer[MAX_PACKET_SIZE];
     size_t received;
@@ -157,41 +414,72 @@ void NetworkClient::update() {
         
         PacketHeader* header = (PacketHeader*)buffer;
         if (header->magic != PACKET_MAGIC) continue;
+        lastReceive = nowSeconds();
         
         switch (header->type) {
             case PACKET_CONNECT_ACK:
+                if (header->clientId == 0) {
+                    // Old-style refusal without a reason (pre-REJECT servers).
+                    lastError = "Server rejected the connection";
+                    std::cerr << lastError << std::endl;
+                    closeSocket();
+                    break;
+                }
+                if (!connected) {
+                    std::cout << "Connected to server! Client ID: " << header->clientId << std::endl;
+                }
                 clientId = header->clientId;
                 connecting = false;
                 connected = true;
-                std::cout << "Connected to server! Client ID: " << clientId << std::endl;
+                lastReceive = nowSeconds();
+                rejectReason_ = 0;
+                lastError.clear();
                 break;
+
+            case PACKET_CONNECT_REJECT: {
+                // The server says why: show it on the connect screen.
+                const ConnectRejectPacket* reject = (const ConnectRejectPacket*)buffer;
+                rejectReason_ = (received >= sizeof(ConnectRejectPacket)) ? reject->reason : 0;
+                const int limit = (received >= sizeof(ConnectRejectPacket)) ? reject->limit : 0;
+                if (rejectReason_ == REJECT_MACHINE_LIMIT) {
+                    lastError = "Server limit: " + std::to_string(limit) +
+                                " player(s) per machine already connected";
+                } else if (rejectReason_ == REJECT_SERVER_FULL) {
+                    lastError = "Server is full";
+                } else {
+                    lastError = "Server rejected the connection";
+                }
+                std::cerr << lastError << std::endl;
+                closeSocket();
+                break;
+            }
                 
             case PACKET_PLAYER_STATE:
-                if (received >= sizeof(PlayerStatePacket) && onPlayerState) {
+                if (connected && received >= sizeof(PlayerStatePacket) && onPlayerState) {
                     onPlayerState(*(PlayerStatePacket*)buffer);
                 }
                 break;
                 
             case PACKET_PLAYER_JOIN:
-                if (received >= sizeof(PlayerJoinPacket) && onPlayerJoin) {
+                if (connected && received >= sizeof(PlayerJoinPacket) && onPlayerJoin) {
                     onPlayerJoin(*(PlayerJoinPacket*)buffer);
                 }
                 break;
                 
             case PACKET_PLAYER_LEAVE:
-                if (onPlayerLeave) {
+                if (connected && onPlayerLeave) {
                     onPlayerLeave(header->clientId);
                 }
                 break;
                 
             case PACKET_PROJECTILE_SPAWN:
-                if (received >= sizeof(ProjectileSpawnPacket) && onProjectileSpawn) {
+                if (connected && received >= sizeof(ProjectileSpawnPacket) && onProjectileSpawn) {
                     onProjectileSpawn(*(ProjectileSpawnPacket*)buffer);
                 }
                 break;
 
             case PACKET_MAP_PLAYER_COUNT:
-                if (received >= sizeof(MapPlayerCountPacket) && onMapPlayerCount) {
+                if (connected && received >= sizeof(MapPlayerCountPacket) && onMapPlayerCount) {
                     onMapPlayerCount(*(MapPlayerCountPacket*)buffer);
                 }
                 break;
@@ -325,6 +613,7 @@ bool NetworkServer::createSocket(uint16_t port) {
 
 void NetworkServer::update(float deltaTime) {
     if (!running || socketFd == SOCKET_INVALID) return;
+    if (deltaTime > 0.0f) lastDeltaTime = deltaTime;
 
     char buffer[MAX_PACKET_SIZE];
     sockaddr_in from;
@@ -344,9 +633,24 @@ void NetworkServer::update(float deltaTime) {
         processPacket(buffer, bytes, from);
     }
     
-    // Check for timed out players
-    // TODO: Implement player timeout checking
-    // In production, track last packet time per player
+    // Drop clients that went silent: a client that crashed or closed the game
+    // must not keep a slot forever (and the game does not send PINGs yet).
+    removeTimedOutPlayers();
+}
+
+void NetworkServer::removeTimedOutPlayers() {
+    std::vector<uint32_t> timedOut;
+    for (auto& pair : players) {
+        pair.second.lastPacketTime += lastDeltaTime;
+        if (pair.second.lastPacketTime >= timeoutSeconds) {
+            timedOut.push_back(pair.first);
+        }
+    }
+    for (uint32_t id : timedOut) {
+        std::cout << "Player " << id << " timed out (no packet for "
+                  << timeoutSeconds << "s)" << std::endl;
+        removePlayer(id);
+    }
 }
 
 void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_in& from) {
@@ -354,6 +658,14 @@ void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_
     
     PacketHeader* header = (PacketHeader*)data;
     if (header->magic != PACKET_MAGIC) return;
+
+    // Any packet from a known player is proof the client is still alive.
+    if (header->clientId != 0) {
+        auto known = players.find(header->clientId);
+        if (known != players.end()) {
+            known->second.lastPacketTime = 0.0f;
+        }
+    }
     
     switch (header->type) {
         case PACKET_DISCOVER: {
@@ -373,19 +685,77 @@ void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_
         }
 
         case PACKET_CONNECT: {
+            // Machine id of the client (empty for older clients / none found).
+            char machineId[MACHINE_ID_LENGTH] = {};
+            if (size >= sizeof(ConnectPacket)) {
+                const ConnectPacket* request = (const ConnectPacket*)data;
+                for (size_t i = 0; i < MACHINE_ID_LENGTH; ++i) {
+                    const char c = request->machineId[i];
+                    if (c == '\0') break;
+                    machineId[i] = c;
+                }
+            }
+
+            // One client, one player. A client that retries its handshake
+            // (or re-sends CONNECT because it missed our ACK) already carries
+            // its id: answer the existing player instead of registering a new
+            // one. This is what kept a single client from showing up as
+            // "Player 1..9 connected" after a few clicks.
+            ServerPlayer* existing = nullptr;
+            if (header->clientId != 0) {
+                existing = getPlayer(header->clientId);
+            }
+            if (!existing) {
+                existing = findPlayerByAddress(from);
+            }
+            if (existing) {
+                // Same client coming back for an ACK (retry / lost ACK):
+                // re-acknowledge, update its address, register nothing.
+                existing->lastPacketTime = 0.0f;
+                if (machineId[0] != '\0') {
+                    std::strncpy(existing->machineId, machineId, MACHINE_ID_LENGTH - 1);
+                }
+                if (!(existing->address.sin_addr.s_addr == from.sin_addr.s_addr &&
+                      existing->address.sin_port == from.sin_port)) {
+                    // Address changed (NAT rebind): keep the session, the old
+                    // endpoint is unreachable anyway.
+                    std::cout << "Player " << existing->id << " address updated to "
+                              << inet_ntoa(from.sin_addr) << std::endl;
+                    existing->address = from;
+                }
+
+                PacketHeader reAck;
+                reAck.magic = PACKET_MAGIC;
+                reAck.type = PACKET_CONNECT_ACK;
+                reAck.sequence = 0;
+                reAck.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count();
+                reAck.clientId = existing->id;
+                sendPacket(&reAck, sizeof(reAck), from);
+                break;
+            }
+
             // Check if server is full
             if (players.size() >= static_cast<size_t>(maxPlayers)) {
                 std::cout << "Connection rejected: Server is full (" << players.size() << "/" << maxPlayers << ")" << std::endl;
-                // Send a rejection packet (reuse CONNECT_ACK with clientId = 0 to indicate rejection)
-                PacketHeader reject;
-                reject.magic = PACKET_MAGIC;
-                reject.type = PACKET_CONNECT_ACK;
-                reject.sequence = 0;
-                reject.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now().time_since_epoch()).count();
-                reject.clientId = 0; // 0 indicates rejection
-                sendPacket(&reject, sizeof(reject), from);
+                sendReject(from, REJECT_SERVER_FULL,
+                           static_cast<uint8_t>(std::min(maxPlayers, 255)));
                 break;
+            }
+
+            // Check the per-machine limit (e.g. "2 instances per PC").
+            // -1 = unlimited; 0 = nobody may join.
+            if (maxPlayersPerMachine >= 0) {
+                const int fromMachine = getPlayerCountForMachine(from, machineId);
+                if (fromMachine >= maxPlayersPerMachine) {
+                    std::cout << "Connection rejected: machine limit reached ("
+                              << fromMachine << "/" << maxPlayersPerMachine << ") for "
+                              << inet_ntoa(from.sin_addr)
+                              << (machineId[0] ? "" : " (no machine id)") << std::endl;
+                    sendReject(from, REJECT_MACHINE_LIMIT,
+                               static_cast<uint8_t>(std::min(maxPlayersPerMachine, 255)));
+                    break;
+                }
             }
 
             // New player connecting
@@ -401,7 +771,10 @@ void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_
             player.isDead = false;
             player.active = true;
             player.lastInputSequence = 0;
+            player.lastPacketTime = 0.0f;
             player.shootCooldown = 0.0f;
+            std::strncpy(player.machineId, machineId, MACHINE_ID_LENGTH - 1);
+            player.machineId[MACHINE_ID_LENGTH - 1] = '\0';
             strcpy(player.mapName, "simple.map"); // Default map
             
             // Send connect ack
@@ -603,6 +976,40 @@ void NetworkServer::broadcastPacket(const void* data, size_t size, uint32_t excl
             sendPacket(data, size, pair.second.address);
         }
     }
+}
+
+void NetworkServer::sendReject(const sockaddr_in& to, uint8_t reason, uint8_t limit) {
+    ConnectRejectPacket reject{};
+    reject.header.magic = PACKET_MAGIC;
+    reject.header.type = PACKET_CONNECT_REJECT;
+    reject.header.sequence = 0;
+    reject.header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    reject.header.clientId = 0;
+    reject.reason = reason;
+    reject.limit = limit;
+    sendPacket(&reject, sizeof(reject), to);
+}
+
+bool NetworkServer::sameMachine(const ServerPlayer& player, const sockaddr_in& addr,
+                                const char* machineId) {
+    // Both sides know the machine id: same PC = same id AND same address
+    // (different NATs may reuse ids, so the address must match too).
+    if (machineId && machineId[0] != '\0' && player.machineId[0] != '\0') {
+        return std::strncmp(player.machineId, machineId, MACHINE_ID_LENGTH) == 0 &&
+               player.address.sin_addr.s_addr == addr.sin_addr.s_addr;
+    }
+    // Unknown id on either side: fall back to one machine per IPv4 address.
+    return player.address.sin_addr.s_addr == addr.sin_addr.s_addr;
+}
+
+int NetworkServer::getPlayerCountForMachine(const sockaddr_in& addr, const char* machineId) const {
+    int count = 0;
+    for (const auto& pair : players) {
+        if (!pair.second.active) continue;
+        if (sameMachine(pair.second, addr, machineId)) ++count;
+    }
+    return count;
 }
 
 void NetworkServer::broadcastToMap(const std::string& mapName, const void* data, size_t size, uint32_t excludeId) {

@@ -157,6 +157,16 @@ public:
 
     int debugMenuSelection() const { return activeMenuViewConst().stack.selection(); }
     bool debugMainMenuReady() const { return mainMenu_.stack.current() != nullptr; }
+    /// Client id of the live session (0 when not connected).
+    uint32_t debugClientId() const {
+        return networkClient ? networkClient->getClientId() : 0;
+    }
+    /// Set the address the connect screen will use (network tests).
+    void serverAddressForTest(const std::string& address, uint16_t port) {
+        serverAddress = address;
+        serverPort = port;
+        refreshServerRows();
+    }
     int debugShootButton() const { return keyBindings.shootButton; }
     int debugShootKey() const { return keyBindings.shootKey; }
     /// Re-resolve bindings from the current settings (framework tests).
@@ -165,6 +175,9 @@ public:
 
     /// Scripted run: play `frames` frames of the current state ("game:N").
     void debugRunFrames(int frames);
+    /// One frame of the current state with input routing but without drawing
+    /// (network tests drive the connect screen with it).
+    void debugPumpFrame();
     int debugState() const { return (int)gameState; }
     /// Open a menu screen by name ("main", "settings", "maps", "server").
     void debugOpenMenu(const std::string& name);
@@ -217,6 +230,17 @@ public:
 
     /// True while a connection attempt is in progress.
     bool isConnectingToServer() const;
+
+    /// Pump the network session (handshake, packets, loss detection) in any
+    /// state, including the connect screen. Called once per frame.
+    void updateNetwork();
+
+    /// Set when connecting fails or a live session is lost; shown on the
+    /// connect screen until the next attempt. Cleared by connectToServer().
+    const std::string& getServerConnectError() const { return serverConnectError_; }
+    /// Address/port of the current (or last attempted) session.
+    std::string getServerAddress() const;
+    uint16_t getServerPort() const;
     
     /**
      * @brief Enable/disable multiplayer mode
@@ -592,6 +616,15 @@ private:
     /// Network multiplayer
     NetworkClient* networkClient;
     bool multiplayerMode;
+
+    /// Connect-screen feedback: why the last attempt failed / session dropped.
+    std::string serverConnectError_;
+    /// Drop a live session that receives nothing for this long (seconds).
+    static constexpr float kServerTimeoutSeconds = 5.0f;
+    /// Report a lost server from the last network pump.
+    void connectionLossDetected();
+    /// Address/port of the current (or last attempted) session.
+    bool hasServerSession() const;
 
     /// Background map loading + CPU task pool (sized from the hardware).
     MapLoader mapLoader_;
