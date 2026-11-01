@@ -77,6 +77,9 @@ int main() {
 
     if (const char* script = std::getenv("CUBE_MENU_TEST")) {
         runMenuTest(game, script);
+        // The Game lives until main() returns, i.e. until after glfwTerminate()
+        // has run; shut the sound device down before that so its mixing
+        // thread is joined while everything it touches still exists.
         game.cleanup();
         return 0;
     }

@@ -32,6 +32,7 @@
 #include "../systems/input.hpp"
 #include "../systems/enemy.hpp"
 #include "../network/network.hpp"
+#include "../engine/audio_manager.hpp"
 
 /**
  * @brief Main game class managing the application lifecycle
@@ -175,6 +176,10 @@ public:
 
     /// Scripted run: play `frames` frames of the current state ("game:N").
     void debugRunFrames(int frames);
+    /// Audio smoke test: fire the held weapon and step a few frames.
+    void debugShootAndStepForTest();
+    /// Number of sound effects currently playing (audio smoke test).
+    int debugPlayingSoundCount() const;
     /// One frame of the current state with input routing but without drawing
     /// (network tests drive the connect screen with it).
     void debugPumpFrame();
@@ -261,6 +266,21 @@ public:
     int getActiveProjectiles() const { return activeProjectiles; }
     const Camera& getCamera() const { return camera; }
 
+    // ── Sound (used by the weapon classes and the menus) ─────────────────
+    /// Play a sound effect at a world position (attenuated + panned from the
+    /// camera). A no-op while the audio device is unavailable.
+    void playSoundEffect(const std::string& name, const glm::vec3& position,
+                         float volume = 1.0f, float pitch = 1.0f);
+    /// Play an interface sound (2D, no distance falloff).
+    void playUiSound(const std::string& name);
+    /// Fire sound of the player's own weapon, with a slight random pitch so
+    /// repeated shots never sound identical.
+    void playGunshot(const std::string& name, float volume = 1.0f);
+    /// Trigger click when a weapon with no ammo is fired.
+    void playDryFire();
+    /// Switch the music track (main menu vs. in-game); called per frame.
+    void updateMusicForState();
+
     /// Game mode type
     enum GameMode {
         DEATHMATCH,
@@ -274,6 +294,21 @@ private:
 
     /// Shared map-start logic for the map selection menu (ENTER / click).
     void startSelectedMap(const std::string& mapFile);
+
+    // ── Audio ────────────────────────────────────────────────────────────
+    /// Load assets/audio, open the device + apply the volume settings.
+    void initAudio();
+    /// Push the listener (camera) into the mixer; once per frame.
+    void updateAudio(float deltaTime);
+    /// Footstep sounds while walking, landing after a fall or a jump.
+    void updateFootsteps(float deltaTime);
+    /// Decide whether the player's head is under water (muffles footsteps).
+    void updateUnderwater();
+
+    /// The sound engine (3D positional audio, music, volumes).
+    AudioManager audio;
+    /// Per-sound volume multipliers applied after loading (see initAudio).
+    void applyAudioMix();
 
     /// Current game map
     Map* currentMap;
@@ -612,6 +647,16 @@ private:
     
     /// Screen damage effect
     float damageEffectTime; // Time remaining for damage screen effect
+
+    // Footstep state (see updateFootsteps)
+    float footstepTimer = 0.0f;      ///< time since the last step
+    int   footstepIndex = 0;         ///< cycles footstep_1..4
+    bool  wasOnGround = true;        ///< ground contact on the previous frame
+    float fallTime = 0.0f;           ///< seconds spent falling (landing volume)
+    float footstepPitch = 1.0f;      ///< slows down when wading in water
+    bool  underwater = false;        ///< camera under the water surface
+    float gunshotPitch = 1.0f;       ///< random pitch per shot (not identical)
+    std::string activeMusic_;        ///< music track requested last ("" none)
     
     /// Network multiplayer
     NetworkClient* networkClient;

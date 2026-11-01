@@ -325,11 +325,11 @@ std::vector<SettingDef> makeGameSettingDefs(GameSettings& s) {
            &GameSettings::performance);
 
     addInt("master_volume", "MASTER VOLUME", "AUDIO",
-           "Overall volume (next launch)", ValueType::Volume, &GameSettings::masterVolume);
+           "Overall volume", ValueType::Volume, &GameSettings::masterVolume);
     addInt("music_volume", "MUSIC VOLUME", "AUDIO",
-           "Music volume (next launch)", ValueType::Volume, &GameSettings::musicVolume);
+           "Music volume", ValueType::Volume, &GameSettings::musicVolume);
     addInt("effects_volume", "EFFECTS VOLUME", "AUDIO",
-           "Sound-effect volume (next launch)", ValueType::Volume, &GameSettings::effectsVolume);
+           "Sound-effect volume", ValueType::Volume, &GameSettings::effectsVolume);
 
     addKey("bind_forward", "MOVE FORWARD", "MOVEMENT",
            "Walk forward", &GameSettings::bindForward);

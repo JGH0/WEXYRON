@@ -5,3 +5,6 @@ settings.cfg
 # Per-install data (generated): machine id used for the per-machine player
 # limit. Regenerated from the OS id on every machine, never shared.
 assets/machine_id
+
+# CMake build tree
+build-cmake/

@@ -22,9 +22,13 @@ Pistol::Pistol(bool infiniteAmmo)
 }
 
 void Pistol::shoot(Game* game) {
-    if (!canShoot()) return;
+    if (!canShoot()) { game->playDryFire(); return; }
     
     if (game->createProjectile(game->getCamera().Position, game->getCamera().Front * 60.0f, 2.0f, 0, 0)) {
+        // Fired from the player's own position: 3D audio pans/attenuates it
+        // like any other sound. Slight random pitch keeps shots from sounding
+        // identical.
+        game->playGunshot("pistol_fire", 1.0f);
         if (!infiniteAmmo) {
             ammo--;
         }
@@ -39,7 +43,7 @@ PumpShotgun::PumpShotgun(bool infiniteAmmo)
 }
 
 void PumpShotgun::shoot(Game* game) {
-    if (!canShoot()) return;
+    if (!canShoot()) { game->playDryFire(); return; }
 
     // Shoot 5 projectiles in a spread pattern
     int pelletsShot = 0;
@@ -57,6 +61,7 @@ void PumpShotgun::shoot(Game* game) {
     }
 
     if (pelletsShot > 0) {
+        game->playGunshot("shotgun_fire", 0.9f);
         if (!infiniteAmmo) {
             ammo--;
         }
@@ -76,6 +81,7 @@ void Grenade::shoot(Game* game) {
     if (!canShoot()) return;
     
     if (game->createProjectile(game->getCamera().Position, game->getCamera().Front * 30.0f, 5.0f, 0, 1)) {
+        game->playSoundEffect("grenade_throw", game->getCamera().Position);
         if (!infiniteAmmo) {
             ammo--;
         }
@@ -93,6 +99,7 @@ void Flashbang::shoot(Game* game) {
     if (!canShoot()) return;
     
     if (game->createProjectile(game->getCamera().Position, game->getCamera().Front * 25.0f, 4.0f, 0, 2)) {
+        game->playSoundEffect("flashbang_throw", game->getCamera().Position);
         if (!infiniteAmmo) {
             ammo--;
         }

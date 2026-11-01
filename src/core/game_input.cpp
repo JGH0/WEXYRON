@@ -198,6 +198,22 @@ void Game::processMenuInput() {
         glfwSetCursor(window, nullptr);
     }
 
+    // Menu feedback: a click on a row, and a soft blip when the highlighted
+    // row changes (keyboard or mouse), so navigating the menus is audible.
+    static int lastMenuRow = -1;
+    static int lastHoverRow = -1;
+    const int selected = view.stack.selection();
+    const int hoverRow = menu::hitTest(view, mouse.x, mouse.y);
+    if (mouseClicked && !capturing) {
+        if (selected != lastMenuRow || selected >= 0) playUiSound("ui_select");
+    } else if (hoverRow != lastHoverRow && hoverRow >= 0) {
+        playUiSound("ui_hover");
+    } else if (selected != lastMenuRow && selected >= 0 && !mouseClicked) {
+        playUiSound("ui_hover");
+    }
+    lastMenuRow = selected;
+    lastHoverRow = hoverRow;
+
     if (gameState == SERVER_CONNECT) {
         processServerConnectTextInput();
         // The list, status and typed values change outside the framework, so

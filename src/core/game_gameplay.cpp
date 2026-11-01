@@ -195,6 +195,7 @@ void Game::handleJump() {
         playerVelocity.y = 4.0f; // Jump velocity
         isJumping = true;
         jumpCooldown = 0.5f; // 0.5 second cooldown
+        playSoundEffect("jump", playerPos + glm::vec3(0.0f, -1.4f, 0.0f));
         std::cout << "Jump triggered! Player y: " << playerPos.y << std::endl;
     }
 }
@@ -553,6 +554,7 @@ void Game::updateProjectiles(float deltaTime) {
 
                 if (isPistolBullet || isShotgun) {
                     // Pistol/shotgun bullets: simple damage, no bounce, no explosion
+                    playSoundEffect("bullet_impact", projectiles[i].position, 0.6f);
                     createBulletHole(projectiles[i].position, glm::vec3(0.0f, 1.0f, 0.0f)); // Default normal up
                     projectiles[i].active = false;
                     activeProjectiles--;
@@ -585,6 +587,9 @@ void Game::updateProjectiles(float deltaTime) {
 
 void Game::createSimpleExplosion(glm::vec3 position) {
     std::cout << "BOOM! Grenade exploded at: (" << position.x << ", " << position.y << ", " << position.z << ")" << std::endl;
+
+    // 3D boom at the blast position (attenuated/panned from the camera).
+    playSoundEffect("explosion", position);
     
     // Create big red explosion cube that will expand and fade
     // Find an inactive explosion slot
@@ -638,10 +643,12 @@ void Game::createSimpleExplosion(glm::vec3 position) {
         playerHealth -= 50.0f * damageMultiplier; // 50 max damage for grenade
         damageEffectTime = 1.5f; // Longer screen effect
         std::cout << "Player hit by explosion! Health: " << playerHealth << "/" << playerMaxHealth << std::endl;
+        playSoundEffect("player_damage", playerPos + glm::vec3(0.0f, 1.6f, 0.0f), 0.9f);
         
         if (playerHealth <= 0.0f && !isDead) {
             playerHealth = 0.0f;
             isDead = true;
+            playSoundEffect("player_death", playerPos + glm::vec3(0.0f, 1.6f, 0.0f));
             
             if (bombDefusalMode) {
                 spectatorMode = true;
@@ -656,6 +663,8 @@ void Game::createSimpleExplosion(glm::vec3 position) {
 
 void Game::createFlashbangEffect(glm::vec3 position) {
     std::cout << "FLASH! Flashbang detonated at: (" << position.x << ", " << position.y << ", " << position.z << ")" << std::endl;
+
+    playSoundEffect("flashbang_explode", position);
 
     // Calculate distance from player to flashbang
     float playerDistance = glm::length(position - playerPos);
@@ -993,6 +1002,7 @@ bool Game::checkProjectileEnemyCollision(Projectile& projectile) {
             if (distance < 0.5f) { // Hit radius of 0.5 units
                 // Damage the enemy
                 enemies[i].health -= 25.0f; // 25 damage per hit
+                playSoundEffect("hit_flesh", projectile.position, 0.8f);
                 std::cout << "Enemy hit! Health: " << enemies[i].health << std::endl;
                 
                 if (enemies[i].health <= 0.0f) {
@@ -1025,10 +1035,12 @@ void Game::checkEnemyPlayerCollision(float deltaTime) {
                 playerDamageCooldown = 1.0f; // 1 second cooldown
                 damageEffectTime = 0.5f; // 0.5 second screen effect
                 std::cout << "Player hit! Health: " << playerHealth << "/" << playerMaxHealth << std::endl;
+                playSoundEffect("player_damage", playerPos + glm::vec3(0.0f, 1.6f, 0.0f), 0.7f);
                 
                 if (playerHealth <= 0.0f && !isDead) {
                     playerHealth = 0.0f;
                     isDead = true;
+                    playSoundEffect("player_death", playerPos + glm::vec3(0.0f, 1.6f, 0.0f));
                     
                     if (bombDefusalMode) {
                         spectatorMode = true;
@@ -1108,9 +1120,11 @@ void Game::damagePlayer(float damage) {
     playerDamageCooldown = 1.0f; // 1 second immunity
     
     std::cout << "Player hit! Health: " << playerHealth << "/" << playerMaxHealth << std::endl;
+    playSoundEffect("player_damage", playerPos + glm::vec3(0.0f, 1.6f, 0.0f), 0.9f);
     
     if (playerHealth <= 0.0f) {
         isDead = true;
+        playSoundEffect("player_death", playerPos + glm::vec3(0.0f, 1.6f, 0.0f));
         
         if (bombDefusalMode) {
             spectatorMode = true;
@@ -1147,11 +1161,20 @@ void Game::updateBomb(float deltaTime) {
     
     // Update bomb timer if planted
     if (bomb.planted && !bomb.defused) {
+        const float before = bomb.plantTime;
         bomb.plantTime += deltaTime;
+
+        // Countdown beeps: once per second, twice as fast in the final 5 s.
+        const float remaining = bomb.explodeTime - bomb.plantTime;
+        const float beepInterval = remaining <= 5.0f ? 0.5f : 1.0f;
+        if (std::floor(before / beepInterval) != std::floor(bomb.plantTime / beepInterval)) {
+            playSoundEffect("bomb_beep", bomb.position, remaining <= 5.0f ? 1.0f : 0.7f);
+        }
         
         // Check if bomb exploded
         if (bomb.plantTime >= bomb.explodeTime) {
             std::cout << "BOMB EXPLODED!" << std::endl;
+            playSoundEffect("bomb_explode", bomb.position);
             bomb.active = false;
             bomb.planted = false; // Prevent re-triggering
             endRound(bomb.plantingTeam); // Planting team wins
@@ -1174,6 +1197,7 @@ void Game::updateBomb(float deltaTime) {
                 bomb.plantTime = 0.0f;
                 bomb.plantingTeam = playerTeam;
                 bomb.defused = false;
+                playSoundEffect("bomb_plant", bomb.position);
                 std::cout << "BOMB PLANTED by Team " << playerTeam << "!" << std::endl;
             }
         }
@@ -1190,6 +1214,7 @@ void Game::updateBomb(float deltaTime) {
             if (bomb.planted && !bomb.defused) {
                 bomb.defused = true;
                 bomb.active = false;
+                playSoundEffect("bomb_defuse", bomb.position);
                 std::cout << "BOMB DEFUSED!" << std::endl;
                 endRound(1 - bomb.plantingTeam); // Defusing team wins
             }
@@ -1210,6 +1235,7 @@ void Game::startPlanting() {
     if (siteIndex >= 0) {
         isPlanting = true;
         plantProgress = 0.0f;
+        playSoundEffect("bomb_plant", playerPos);
         std::cout << "Started planting bomb..." << std::endl;
     }
 }
@@ -1226,6 +1252,7 @@ void Game::startDefusing() {
     if (isNearBomb()) {
         isDefusing = true;
         defuseProgress = 0.0f;
+        playSoundEffect("bomb_defuse", playerPos);
         std::cout << "Started defusing bomb..." << std::endl;
     }
 }
@@ -1255,6 +1282,7 @@ void Game::endRound(int winner) {
     
     roundActive = false;
     roundEndTimer = 4.0f; // 4 second delay before next round
+    playUiSound("round_end");
     
     if (winner == 0) {
         std::cout << "ROUND OVER: Team A (Red) wins!" << std::endl;
@@ -1351,7 +1379,8 @@ void Game::startRound() {
     
     // Reset players
     resetGame();
-    
+
+    playUiSound("round_start");
     std::cout << "NEW ROUND STARTED! Attacking Team: " << (attackingTeam == 0 ? "Team A (Red)" : "Team B (Blue)") << std::endl;
 }
 

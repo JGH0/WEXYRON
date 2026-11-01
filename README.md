@@ -252,3 +252,43 @@ OpenGl-Game/
 - **Windows Setup**: See `WINDOWS_SETUP.md` for detailed Windows installation and troubleshooting
 - **Multiplayer Setup**: See `MULTIPLAYER_GUIDE.md` for detailed multiplayer instructions
 - **VS Code Configuration**: Use the provided `.vscode/` configurations for Windows development
+
+## Audio
+
+Sound is file-based: everything lives in `assets/audio/` and is loaded at
+startup (no system audio library to install; the small `miniaudio` engine is
+vendored in `third_party/miniaudio`).
+
+```
+assets/audio/effects/*.wav   pistol_fire, shotgun_fire, explosion, footsteps, ...
+assets/audio/music/*.wav     menu, game (looping)
+```
+
+- 3D positional audio: every effect is attenuated and panned from the camera.
+- Menu music in the menus, match music while playing, with cross-fades.
+- `MASTER VOLUME`, `MUSIC VOLUME` and `EFFECTS VOLUME` in Settings > Audio apply
+  immediately (they are also saved in `assets/settings.cfg`).
+- No sound device (e.g. a headless machine) is not an error: the game runs
+  silently and picks up a device that appears later.
+
+The shipped WAV files are synthesized by `tools/generate_sounds.py` (Python 3 +
+numpy/scipy), so they can be regenerated or tweaked:
+
+```
+python3 tools/generate_sounds.py           # writes assets/audio/**
+python3 tools/generate_sounds.py --check   # verify the files exist
+```
+
+To use your own recordings, replace the files (`.wav`, `.ogg`, `.flac` or
+`.mp3` are accepted) keeping the file names, or drop new ones in
+`assets/audio/effects/` and play them with `playSoundEffect("name", position)`.
+
+### Tests
+
+```
+make && ./build/bin/audio_test        # mixer / decoding / volumes (no device needed)
+xvfb-run -a ./build/bin/audio_smoke   # end-to-end: start a match, fire, check sounds
+```
+
+`audio_test` also opens the real device when one exists; on CI without sound it
+still checks decoding and the volume buses.

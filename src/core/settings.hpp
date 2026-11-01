@@ -97,9 +97,9 @@ struct GameSettings {
     int  performance = PERF_BALANCED;
 
     // Audio ------------------------------------------------------------------
-    int masterVolume = 100;        ///< 0..100 (applies on next launch)
-    int musicVolume = 70;          ///< 0..100 (stored only)
-    int effectsVolume = 90;        ///< 0..100 (stored only)
+    int masterVolume = 100;        ///< 0..100, applied live
+    int musicVolume = 70;          ///< 0..100, applied live
+    int effectsVolume = 90;        ///< 0..100, applied live
 
     // Controls ---------------------------------------------------------------
     int bindForward = 87;          ///< GLFW_KEY_W

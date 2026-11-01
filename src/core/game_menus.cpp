@@ -140,7 +140,13 @@ void Game::openMainMenu() {
 void Game::openSettings() {
     // One stack: SETTINGS (values). CONTROLS is pushed on top when chosen, and
     // ESC returns to SETTINGS with the CONTROLS row still selected.
-    menu::Page page = menu::buildSettingsPage(settingDefs_, [this]() { saveSettings(); });
+    menu::Page page = menu::buildSettingsPage(settingDefs_, [this]() {
+        // Volume/gameplay change from the menu: apply it and play a feedback
+        // blip so the new volume can be heard immediately.
+        applySettings();
+        saveSettings();
+        playUiSound("ui_select");
+    });
     page.add(menu::separator("INPUT"));
     page.add(menu::action("CONTROLS", [this]() {
         menu::Page controls("CONTROLS", "KEYBOARD AND MOUSE BINDINGS");
@@ -262,6 +268,7 @@ void Game::startSelectedMap(const std::string& mapFile) {
     menuJustEntered = true;
     gameInProgress_ = true;
     gameState = PLAYING;
+    playUiSound("round_start");
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 }
 
@@ -303,6 +310,11 @@ void Game::applySettings() {
         if (grenade)   grenade->setInfiniteAmmo(infiniteAmmoMode);
         if (flashbang) flashbang->setInfiniteAmmo(infiniteAmmoMode);
     }
+
+    // Audio: volumes apply live (the menu previews them through the mixer).
+    audio.setMasterVolume(gameSettings_.masterVolume / 100.0f);
+    audio.setSFXVolume(gameSettings_.effectsVolume / 100.0f);
+    audio.setMusicVolume(gameSettings_.musicVolume / 100.0f);
 
     keyBindings.forward  = gameSettings_.bindForward;
     keyBindings.backward = gameSettings_.bindBackward;
@@ -558,6 +570,15 @@ void Game::debugRunFrames(int frames) {
         render();
     }
 }
+
+void Game::debugShootAndStepForTest() {
+    // Fire whatever weapon is held, then let the mixer and the projectile
+    // simulation run for a few frames (audio smoke test).
+    shoot();
+    for (int i = 0; i < 20; ++i) update(1.0f / 60.0f);
+}
+
+int Game::debugPlayingSoundCount() const { return audio.getPlayingSourceCount(); }
 
 void Game::debugShowPage(menu::Page page) {
     openMenuView(settingsMenu_, std::move(page));

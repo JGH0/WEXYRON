@@ -230,6 +230,9 @@ Game::Game(int width, int height)
         exit(-1);
     }
 
+    // Sound engine: open the device and load assets/audio (never fatal).
+    initAudio();
+
     std::cout << "Game constructor complete." << std::endl;
 }
 
@@ -237,6 +240,9 @@ Game::Game(int width, int height)
 // Destructor
 // ---------------------------------------------------------------------------
 Game::~Game() {
+    // Stop the audio device before the GLFW window goes away (the mixer runs
+    // on its own thread; joining it here keeps shutdown deterministic).
+    audio.shutdown();
     if (handCursor) glfwDestroyCursor(handCursor);
     disconnectFromServer();
     if (discoverySocketFd != SOCKET_INVALID) {
@@ -573,6 +579,13 @@ void Game::resetGame() {
     // Effects
     flashEffectTime = 0.0f;
     isFlashed       = false;
+
+    // Audio: fresh footstep state (no phantom landing on spawn) and the
+    // magazine being loaded before the round starts.
+    wasOnGround  = true;
+    footstepTimer = 0.0f;
+    fallTime     = 0.0f;
+    playUiSound("reload");
 
     // Re-spawn initial enemies
     spawnEnemy(glm::vec3( 5.0f, -1.0f,  5.0f));

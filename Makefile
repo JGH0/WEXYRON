@@ -20,15 +20,16 @@ TARGET = $(BIN_DIR)/game
 SERVER_TARGET = $(BIN_DIR)/server
 
 # Source files
-CORE_SOURCES = $(CORE_DIR)/game.cpp $(CORE_DIR)/game_input.cpp $(CORE_DIR)/game_loop.cpp $(CORE_DIR)/game_gameplay.cpp $(CORE_DIR)/game_hud.cpp $(CORE_DIR)/game_menus.cpp $(CORE_DIR)/game_server.cpp $(CORE_DIR)/game_server_menu.cpp $(CORE_DIR)/game_editor.cpp $(CORE_DIR)/settings.cpp $(CORE_DIR)/renderer.cpp $(CORE_DIR)/camera.cpp $(CORE_DIR)/map.cpp $(CORE_DIR)/map_loader.cpp $(CORE_DIR)/shader.cpp $(CORE_DIR)/texture.cpp
+CORE_SOURCES = $(CORE_DIR)/game.cpp $(CORE_DIR)/game_input.cpp $(CORE_DIR)/game_loop.cpp $(CORE_DIR)/game_gameplay.cpp $(CORE_DIR)/game_hud.cpp $(CORE_DIR)/game_menus.cpp $(CORE_DIR)/game_server.cpp $(CORE_DIR)/game_server_menu.cpp $(CORE_DIR)/game_audio.cpp $(CORE_DIR)/game_editor.cpp $(CORE_DIR)/settings.cpp $(CORE_DIR)/renderer.cpp $(CORE_DIR)/camera.cpp $(CORE_DIR)/map.cpp $(CORE_DIR)/map_loader.cpp $(CORE_DIR)/shader.cpp $(CORE_DIR)/texture.cpp
 SYSTEMS_SOURCES = $(SYSTEMS_DIR)/input.cpp $(SYSTEMS_DIR)/weapon.cpp $(SYSTEMS_DIR)/physics.cpp $(SYSTEMS_DIR)/enemy.cpp $(SYSTEMS_DIR)/projectile.cpp $(SYSTEMS_DIR)/player.cpp $(SYSTEMS_DIR)/game_state.cpp
 NETWORK_SOURCES = $(NETWORK_DIR)/network.cpp $(NETWORK_DIR)/server_config.cpp
 UI_SOURCES = $(UI_DIR)/menu_core.cpp $(UI_DIR)/menu_draw.cpp $(UI_DIR)/menu_input.cpp $(UI_DIR)/menu_pages.cpp
-ENGINE_SOURCES =
+ENGINE_SOURCES = $(ENGINE_DIR)/audio_manager.cpp
+MINIAUDIO_SOURCES = third_party/miniaudio/miniaudio.c
 MAIN_SOURCES = $(SRC_DIR)/main.cpp
 SERVER_SOURCES = server_main.cpp $(NETWORK_SOURCES)
 GLAD_SOURCES = glad.c
-ALL_SOURCES = $(CORE_SOURCES) $(SYSTEMS_SOURCES) $(NETWORK_SOURCES) $(UI_SOURCES) $(ENGINE_SOURCES) $(MAIN_SOURCES) $(GLAD_SOURCES)
+ALL_SOURCES = $(CORE_SOURCES) $(SYSTEMS_SOURCES) $(NETWORK_SOURCES) $(UI_SOURCES) $(ENGINE_SOURCES) $(MINIAUDIO_SOURCES) $(MAIN_SOURCES) $(GLAD_SOURCES)
 
 # Object files
 CORE_OBJECTS = $(addprefix $(BUILD_DIR)/core/, $(notdir $(CORE_SOURCES:.cpp=.o)))
@@ -39,7 +40,8 @@ ENGINE_OBJECTS = $(addprefix $(BUILD_DIR)/engine/, $(notdir $(ENGINE_SOURCES:.cp
 MAIN_OBJECT = $(BUILD_DIR)/main.o
 SERVER_MAIN_OBJECT = $(BUILD_DIR)/server_main.o
 GLAD_OBJECT = $(BUILD_DIR)/glad.o
-ALL_OBJECTS = $(CORE_OBJECTS) $(SYSTEMS_OBJECTS) $(NETWORK_OBJECTS) $(UI_OBJECTS) $(ENGINE_OBJECTS) $(MAIN_OBJECT) $(GLAD_OBJECT)
+MINIAUDIO_OBJECT = $(BUILD_DIR)/third_party/miniaudio.o
+ALL_OBJECTS = $(CORE_OBJECTS) $(SYSTEMS_OBJECTS) $(NETWORK_OBJECTS) $(UI_OBJECTS) $(ENGINE_OBJECTS) $(MAIN_OBJECT) $(GLAD_OBJECT) $(MINIAUDIO_OBJECT)
 SERVER_OBJECTS = $(SERVER_MAIN_OBJECT) $(NETWORK_OBJECTS)
 
 all: $(TARGET) $(SERVER_TARGET)
@@ -90,6 +92,11 @@ $(BUILD_DIR)/main.o: $(SRC_DIR)/main.cpp | $(BUILD_DIR)
 $(BUILD_DIR)/server_main.o: server_main.cpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
 
+# miniaudio implementation (third_party/miniaudio). Its header is large and
+# stable, so it is compiled once into its own object.
+$(MINIAUDIO_OBJECT): $(MINIAUDIO_SOURCES) | $(BUILD_DIR)/third_party
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
 # GLAD object file (C, no header deps to track)
 $(GLAD_OBJECT): $(GLAD_SOURCES) | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
@@ -115,6 +122,9 @@ $(BUILD_DIR)/engine:
 
 $(BUILD_DIR)/game:
 	mkdir -p $(BUILD_DIR)/game
+
+$(BUILD_DIR)/third_party:
+	mkdir -p $(BUILD_DIR)/third_party
 
 $(BIN_DIR):
 	mkdir -p $(BIN_DIR)

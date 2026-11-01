@@ -44,6 +44,7 @@ set(CORE_SOURCES
     src/core/game_menus.cpp
     src/core/game_server.cpp
     src/core/game_server_menu.cpp
+    src/core/game_audio.cpp
     src/core/game_editor.cpp
     src/core/settings.cpp
     src/core/renderer.cpp
@@ -76,7 +77,11 @@ set(UI_SOURCES
     src/ui/menu_pages.cpp
 )
 
+# Engine systems. audio_manager.cpp + the vendored miniaudio implementation
+# (third_party/miniaudio) are the sound engine; nothing else is in here yet.
 set(ENGINE_SOURCES
+    src/engine/audio_manager.cpp
+    third_party/miniaudio/miniaudio.c
 )
 
 set(MAIN_SOURCES
@@ -132,8 +137,10 @@ set_target_properties(game server
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
 
-# Copy assets to build directory
+# Copy assets to build directory. The trailing slash keeps run.sh's
+# assets/ -> build/assets symlink intact (without it, cmake replaces the link
+# with a real directory, and later re-runs fail with "assets already exists").
 add_custom_command(TARGET game POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-    ${CMAKE_SOURCE_DIR}/assets $<TARGET_FILE_DIR:game>/assets
+    ${CMAKE_SOURCE_DIR}/assets/ $<TARGET_FILE_DIR:game>/assets/
 )

@@ -18,9 +18,16 @@ void Game::update(float deltaTime) {
     // dropped server is noticed from the menus too.
     updateNetwork();
 
+    // Audio first: the listener follows the camera from last frame, then the
+    // gameplay below may start sounds that are mixed this frame.
+    updateAudio(deltaTime);
+
     if (gameState == PLAYING) {
         // Update player physics (always run, client controls own movement in multiplayer)
         updatePlayerPhysics(deltaTime);
+
+        // Footsteps / landing (needs the velocity physics just produced)
+        updateFootsteps(deltaTime);
 
         // Send player input to server
         if (networkClient && networkClient->isConnected()) {
@@ -290,6 +297,7 @@ void Game::render() {
 
 void Game::cleanup() {
     // currentMap is cleaned up in ~Game(); avoid double-delete here.
+    audio.shutdown();
 }
 
 bool Game::shouldClose() const {
