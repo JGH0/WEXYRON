@@ -23,6 +23,16 @@
 #include <cctype>
 #if defined(_WIN32)
 #include <cstdio>
+#include <cstring>
+#include <string>
+#include <vector>
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
 #endif
 
 // ---------------------------------------------------------------------------
@@ -40,6 +50,102 @@ void waitForEnterOnFailure() {
     (void)std::getchar();
 #endif
 }
+
+// Try to create the window. Hardware drivers want a 3.3 core context; some
+// older/virtual drivers only offer a compatibility profile, which still runs
+// the GLSL 330 shaders, so fall back to that once.
+GLFWwindow* createGameWindow(int width, int height) {
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    GLFWwindow* win = glfwCreateWindow(width, height, "Cube CS Lite", nullptr, nullptr);
+    if (!win) {
+        std::cerr << "Core profile window failed, retrying with a "
+                     "compatibility profile..." << std::endl;
+        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_ANY_PROFILE);
+        win = glfwCreateWindow(width, height, "Cube CS Lite", nullptr, nullptr);
+    }
+    return win;
+}
+
+#if defined(_WIN32)
+// Software-rendering fallback.
+//
+// The release ships Mesa's opengl32.dll renamed to opengl32_sw.dll. A DLL
+// next to the exe would be loaded *instead of* the system one on every
+// machine, so Mesa is only used as a fallback: when WGL cannot create any
+// context (no GPU driver — virtual machines with qxl/basic display adapters),
+// the game copies it to opengl32.dll and restarts itself with a marker
+// variable set. Re-exec is needed because Windows has already mapped the
+// system opengl32.dll into the current process by then.
+//
+// "auto" (the default) = GPU when available, Mesa otherwise.
+// CUBE_RENDERER=gpu     = never use Mesa (fail like before)
+// CUBE_RENDERER=software = always use Mesa (useful for slower GPUs)
+extern "C" __declspec(dllimport) unsigned long __stdcall GetEnvironmentVariableA(
+    const char* name, char* buffer, unsigned long size);
+extern "C" __declspec(dllimport) unsigned long __stdcall GetModuleFileNameA(
+    void* module, char* filename, unsigned long size);
+extern "C" __declspec(dllimport) int __stdcall CopyFileA(
+    const char* existing, const char* replacement, int failIfExists);
+extern "C" __declspec(dllimport) int __stdcall SetEnvironmentVariableA(
+    const char* name, const char* value);
+extern "C" __declspec(dllimport) int __stdcall GetCurrentProcessId();
+extern "C" __declspec(dllimport) void __stdcall ExitProcess(unsigned int code);
+
+constexpr const char* kMesaActiveVar = "CUBE_SOFTWARE_GL";
+constexpr const char* kRendererVar = "CUBE_RENDERER";
+
+std::string exeDirectory() {
+    char path[MAX_PATH];
+    const unsigned long len = GetModuleFileNameA(nullptr, path, MAX_PATH);
+    std::filesystem::path exe(std::string(path, len));
+    return exe.parent_path().string();
+}
+
+// Copy Mesa into place if it is not there yet. Returns false when it cannot be
+// installed (already active, disabled, or not shipped).
+bool enableMesaFallback(const std::string& dir) {
+    char active[8] = {0};
+    if (GetEnvironmentVariableA(kMesaActiveVar, active, sizeof(active)) > 0) return false;
+
+    char mode[16] = {0};
+    if (GetEnvironmentVariableA(kRendererVar, mode, sizeof(mode)) > 0 && std::strcmp(mode, "gpu") == 0) {
+        return false;
+    }
+
+    const auto software = std::filesystem::path(dir) / "opengl32_sw.dll";
+    const auto target = std::filesystem::path(dir) / "opengl32.dll";
+    if (!std::filesystem::exists(software)) return false;
+    if (!CopyFileA(software.string().c_str(), target.string().c_str(), 0)) return false;
+    return true;
+}
+
+[[noreturn]] void relaunchWithMesa(const std::string& dir) {
+    std::cerr << "No hardware OpenGL available; restarting with the bundled "
+                 "software renderer (Mesa). This is slower but works without a "
+                 "GPU driver."
+              << std::endl;
+
+    SetEnvironmentVariableA(kMesaActiveVar, "1");
+    // Re-run this executable in a new process, then exit. The new process
+    // resolves opengl32.dll to the Mesa copy next to the exe.
+    std::string cmd = "\"" + (std::filesystem::path(dir) / "game.exe").string() + "\"";
+    std::vector<char> mutableCmd(cmd.begin(), cmd.end());
+    mutableCmd.push_back('\0');
+    STARTUPINFOA si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    if (CreateProcessA(nullptr, mutableCmd.data(), nullptr, nullptr, FALSE, 0, nullptr, dir.c_str(), &si, &pi)) {
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        ExitProcess(0);
+    }
+    std::cerr << "Could not restart with the software renderer." << std::endl;
+    waitForEnterOnFailure();
+    ExitProcess(1);
+}
+#endif
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -242,19 +348,17 @@ Game::Game(int width, int height)
     // Ask the driver to prefer the dedicated GPU on hybrid laptops.
     glfwWindowHint(GLFW_COCOA_GRAPHICS_SWITCHING, GLFW_TRUE);
 
-    window = glfwCreateWindow(width, height, "Cube CS Lite", nullptr, nullptr);
+    window = createGameWindow(width, height);
+    if (!window) {
 #ifdef _WIN32
-    if (!window) {
-        // Remote desktop sessions, basic display drivers and some old Intel/
-        // Microsoft drivers only expose a compatibility profile. GLSL 330
-        // still compiles there, so a 3.3 compatibility context is enough.
-        std::cerr << "Core profile window failed, retrying with a "
-                     "compatibility profile..." << std::endl;
-        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_ANY_PROFILE);
-        window = glfwCreateWindow(width, height, "Cube CS Lite", nullptr, nullptr);
-    }
+        // No OpenGL from the GPU driver at all (typical for a VM with a
+        // qxl/basic adapter). Switch to the bundled Mesa renderer and restart.
+        const std::string dir = exeDirectory();
+        if (enableMesaFallback(dir)) {
+            glfwTerminate();
+            relaunchWithMesa(dir);
+        }
 #endif
-    if (!window) {
         std::cerr << "Failed to create GLFW window" << std::endl;
         glfwTerminate();
         waitForEnterOnFailure();

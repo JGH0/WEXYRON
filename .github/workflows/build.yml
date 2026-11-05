@@ -128,6 +128,8 @@ jobs:
           # The artifact version: the tag name (e.g. v1.2.0) or ref for branches.
           VERSION: ${{ github.ref_name }}
           MINGW_DLL_DIR: ${{ github.workspace }}/.mingw-dlls
+          MESA_DIR: ${{ github.workspace }}/.mingw-deps/mesa
+          MESA_URL: https://github.com/pal1000/mesa-dist-win/releases/download/26.2.6/mesa3d-26.2.6-release-mingw.7z
         run: |
           set -e
           # Runtime DLLs: libstdc++/libgcc in the GCC lib dir, libwinpthread in
@@ -136,6 +138,18 @@ jobs:
           cp "$GCC_LIB"/*.dll "$MINGW_DLL_DIR"/
           cp "/usr/${MINGW}/lib/libwinpthread-1.dll" "$MINGW_DLL_DIR"/
           cp "/usr/${MINGW}/bin/glfw3.dll" "$MINGW_DLL_DIR"/
+
+          # Mesa (llvmpipe) software OpenGL, shipped as a fallback for machines
+          # without a 3D driver (VMs with qxl/basic display adapters).
+          sudo apt-get install -y --no-install-recommends p7zip-full
+          curl -fsSL -o /tmp/mesa.7z "$MESA_URL"
+          rm -rf "$MESA_DIR"
+          mkdir -p "$MESA_DIR"
+          # 7z keeps the x64/ prefix, so extract into $MESA_DIR and point
+          # MESA_DIR at the x64 subdirectory.
+          7z x -y -o"$MESA_DIR" /tmp/mesa.7z x64/opengl32.dll x64/libgallium_wgl.dll x64/libdlclose-skip.dll > /dev/null
+          echo "MESA_DIR=$MESA_DIR/x64" >> "$GITHUB_ENV"
+
           tools/package.sh exe "$GAME_WINDOWS" --no-build
 
       - uses: actions/upload-artifact@v4

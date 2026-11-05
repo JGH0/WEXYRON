@@ -20,6 +20,9 @@
 #                          "git describe".
 #   APPIMAGE_TOOL          path to the AppImage runtime/tool (default appimagetool)
 #   LINUXDEPLOY            path to linuxdeploy (default linuxdeploy-x86_64.AppImage)
+#   MESA_DIR               directory with 64-bit Mesa DLLs (opengl32.dll, ...) to
+#                          ship as a software-rendering fallback in the exe zip
+#   MINGW_DLL_DIR          directory with the MinGW runtime + glfw3 DLLs
 #   CC/CXX                 cross compiler for the Windows build, e.g.
 #                          x86_64-w64-mingw32-g++ (only used by the exe target
 #                          when it has to build).
@@ -128,6 +131,25 @@ EOF
         done
         if [ ! -f "$STAGE/libstdc++-6.dll" ] || [ ! -f "$STAGE/glfw3.dll" ]; then
             echo "warning: expected MinGW/GLFW DLLs not found in $MINGW_DLL_DIR" >&2
+        fi
+
+        # Mesa software renderer, used as a fallback when the machine has no
+        # hardware OpenGL (e.g. VMs with qxl/basic display adapters). Only the
+        # OpenGL parts are shipped, and opengl32.dll is renamed to
+        # opengl32_sw.dll so it is NOT loaded automatically: the game copies it
+        # to opengl32.dll and restarts itself if WGL fails. Hardware machines
+        # never touch it.
+        if [ -n "${MESA_DIR:-}" ] && [ -d "$MESA_DIR" ]; then
+            for f in opengl32.dll libgallium_wgl.dll libdlclose-skip.dll; do
+                cp "$MESA_DIR/$f" "$STAGE/" 2>/dev/null || true
+            done
+            if [ -f "$STAGE/opengl32.dll" ]; then
+                mv -f "$STAGE/opengl32.dll" "$STAGE/opengl32_sw.dll"
+            else
+                echo "warning: MESA_DIR has no opengl32.dll; shipping without the software renderer" >&2
+            fi
+        else
+            echo "note: MESA_DIR not set, building without the software renderer" >&2
         fi
 
         stage_assets "$STAGE/assets"
