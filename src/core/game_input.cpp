@@ -326,16 +326,13 @@ void Game::processGameInput(float deltaTime) {
         playerVelocity.z = 0.0f;
     }
     
-    // Jump input: a fresh press only (holding the key does not auto-jump).
-    if (debugKeyDownForTest(keyBindings.jump)) {
-        if (!inp.jumpHeld) {
-            inp.jumpHeld = true;
-            handleJump();
-            inputProcessed = true;
-        }
-    } else {
-        inp.jumpHeld = false;
-        if (gameState == PLAYING) isJumping = false;   // this jump key press is over
+    // Jump input: holding the key keeps jumping. handleJump() only starts a jump
+    // from the ground, so the press jumps at once and a held key jumps again the
+    // moment the feet touch the floor (bunny-hop), never mid-air.
+    inp.jumpHeld = debugKeyDownForTest(keyBindings.jump);
+    if (inp.jumpHeld) {
+        if (isOnGround()) handleJump();   // no point above the floor
+        inputProcessed = true;
     }
     
     // Shoot input: mouse button by default, rebindable in Settings > Controls

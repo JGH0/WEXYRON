@@ -38,7 +38,6 @@ Game::Game(int width, int height)
       playerPos(glm::vec3(0.0f, 2.0f, 0.0f)),
       playerVelocity(glm::vec3(0.0f, 0.0f, 0.0f)),
       isJumping(false),
-      jumpCooldown(0.0f),
       score(0),
       lastFrame(0.0f),
       firstMouse(true),

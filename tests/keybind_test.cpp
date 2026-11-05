@@ -87,22 +87,37 @@ int main() {
     std::printf("jump key: ground %.2f peak %.2f\n", groundY, peak);
     CHECK(peak > groundY + 0.5f);
 
-    // Holding the key (never released) must not start a second jump.
-    float peak2 = groundY;
-    int extraJumps = 0;
+    // Holding the key (never released) keeps jumping: every landing starts the
+    // next jump, and the body never gains height mid-air (no double jump).
+    float peak2 = game.debugFeetY();
+    int jumpsAfterLanding = 0;
     bool hadLanded = false;
+    bool roseMidAir = false;
     for (int i = 0; i < 200; ++i) {
+        const float before = game.debugFeetY();
+        const float vyBefore = game.debugVelocityY();
         game.debugStepWithKeysForTest(kDt, {jump});          // held down
         const float y = game.debugFeetY();
-        if (hadLanded && y > groundY + 0.3f) ++extraJumps;   // rose again
+        const float vy = game.debugVelocityY();
+        // On the floor a landing resets vy to 0; mid-air only gravity acts, so
+        // the body never rises up there. Landing is below the jump height.
+        const bool landed = y <= groundY + 0.02f;
+        if (!landed && vy > vyBefore + 0.5f && before > groundY + 0.5f) roseMidAir = true;
+        if (hadLanded && vy > 0.0f) ++jumpsAfterLanding;      // left the floor again
         if (y <= groundY + 0.02f) hadLanded = true;
         peak2 = std::max(peak2, y);
     }
-    std::printf("jump key held: extra jumps after landing = %d (peak %.2f)\n", extraJumps, peak2);
-    CHECK(extraJumps == 0);
+    std::printf("jump key held: jumps after landing = %d (peak %.2f)\n", jumpsAfterLanding, peak2);
+    CHECK(jumpsAfterLanding >= 1);        // holding the key auto-jumps on landing
+    CHECK(!roseMidAir);
+    // The single jump peaked at 0.78: a held jump never goes higher (a mid-air
+    // jump would stack a second jump height on top).
+    CHECK(peak2 <= groundY + (peak - groundY) + 0.05f);
 
     // Releasing and pressing again does jump (the key works, not a one-off).
-    game.debugStepWithKeysForTest(kDt, {});
+    // Let the held-jump run land first, then step a few frames without the
+    // key so the body is standing still.
+    for (int i = 0; i < 120; ++i) game.debugStepWithKeysForTest(kDt, {});
     const float beforeHop = game.debugFeetY();
     float peak3 = beforeHop;
     for (int i = 0; i < 10; ++i) {

@@ -231,6 +231,8 @@ public:
     void debugStepWithKeysForTest(float dt, const std::vector<int>& keys);
     /// Player feet Y (key test: did the key press jump?).
     float debugFeetY() const { return playerPos.y; }
+    /// Vertical speed (key test: was the key held jump a real take-off?).
+    float debugVelocityY() const { return playerVelocity.y; }
     /// Teleport for physics tests: place the feet and set the vertical speed.
     void debugSetFeetForTest(const glm::vec3& feet) { playerPos = feet; }
     void debugSetVerticalVelocityForTest(float vy) { playerVelocity.y = vy; }
@@ -393,8 +395,6 @@ private:
     glm::vec3 playerVelocity;
     /// Is player currently jumping
     bool isJumping;
-    /// Jump cooldown
-    float jumpCooldown;
     /// Current score
     int score;
     /// Last frame time for delta time calculation
@@ -490,8 +490,7 @@ private:
         bool rPressed         = false;
         bool digitPressed[10];
 
-        /// Jump key edge: a jump starts on a fresh press, so holding the key
-        /// does not bunny-hop after landing.
+        /// Jump key held: holding it keeps jumping on every landing.
         bool jumpHeld         = false;
 
         // Editor specific

@@ -344,11 +344,6 @@ void Game::updatePlayerPhysics(float deltaTime) {
         return;
     }
     
-    // Update jump cooldown
-    if (jumpCooldown > 0.0f) {
-        jumpCooldown -= deltaTime;
-    }
-    
     // ── Ground state ────────────────────────────────────────────────────────
     // isOnGround() is decided from where the body is *before* the gravity step,
     // so the jump pressed this frame can still act (the input runs before the
@@ -404,15 +399,14 @@ bool Game::isOnGround() const {
 }
 
 void Game::handleJump() {
-    // A jump only starts from the ground: standing on a surface, not falling,
-    // not still rising from the previous jump, and the jump key was released
-    // since then (held keys do not auto-bunny-hop).
+    // A jump only starts from the ground: standing on a surface, and not still
+    // rising from the previous jump. isJumping guards the air; the ground check
+    // is what lets a held jump key jump again on every landing.
     if (!isOnGround()) return;
-    if (isJumping || jumpCooldown > 0.0f) return;
+    if (isJumping) return;
 
     playerVelocity.y = kJumpSpeed;
     isJumping = true;
-    jumpCooldown = 0.5f; // 0.5 second cooldown
     playSoundEffect("jump", playerPos, 0.8f);
     std::cout << "Jump triggered! Player y: " << playerPos.y << std::endl;
 }
