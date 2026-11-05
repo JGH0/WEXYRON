@@ -7,33 +7,244 @@
 #include <cmath>
 #include <limits>
 #include <GLFW/glfw3.h>
+#include <array>
 
-void Game::updatePlayerPhysics(float deltaTime) {
-    // AUTOMATIC UNSTUCK: Check if player is inside a block and move them out
-    if (currentMap && currentMap->checkCollision(playerPos, 0.15f)) {
-        int unstuckCounter = 0;
-        while (currentMap->checkCollision(playerPos, 0.15f) && unstuckCounter < 50) {
-            playerPos.y += 0.2f; // Move up gradually
-            unstuckCounter++;
+// ---------------------------------------------------------------------------
+// Player body: one box shared by rendering and hit detection. Positions are
+// feet positions, so a body standing at `feet` spans from the ground up to
+// bodyHeight and the camera sits eyeHeight above it.
+// ---------------------------------------------------------------------------
+
+void Game::bodyBox(const glm::vec3& feet, glm::vec3& boxMin, glm::vec3& boxMax) {
+    const float half = bodyWidth * 0.5f;
+    boxMin = glm::vec3(feet.x - half, feet.y, feet.z - half);
+    boxMax = glm::vec3(feet.x + half, feet.y + bodyHeight, feet.z + half);
+}
+
+float Game::distanceToBody(const glm::vec3& point, const glm::vec3& feet) {
+    glm::vec3 boxMin, boxMax;
+    bodyBox(feet, boxMin, boxMax);
+    // Distance from the point to an axis-aligned box (0 when inside it).
+    const glm::vec3 d = glm::max(glm::max(boxMin - point, point - boxMax), glm::vec3(0.0f));
+    return glm::length(d);
+}
+
+bool Game::pointHitsBody(const glm::vec3& point, const glm::vec3& feet, float slack) {
+    return distanceToBody(point, feet) <= slack;
+}
+
+// ---------------------------------------------------------------------------
+// Player body occupancy
+//
+// Map::checkCollision(point, r) inflates a box around the point. A player
+// standing with its feet on a floor has its feet point exactly on (or a few
+// millimetres inside) that surface, so asking "does the feet point collide"
+// says yes for every standing player. Occupancy is therefore tested on a
+// horizontal slice of the body instead: a slice is blocked when a box
+// contains the slice's centre in X/Z and covers its height range. A surface at
+// the feet is below the slice, so standing on it does not count as a block.
+// ---------------------------------------------------------------------------
+
+bool Game::sliceBlocked(const glm::vec3& feet, float height, float radius, bool minHeightInclusive) const {
+    if (!currentMap) return false;
+    const glm::vec3 centre = feet + glm::vec3(0.0f, height, 0.0f);
+
+    for (const MapBlock& block : currentMap->getBlocks()) {
+        if (!block.solid) continue;
+
+        // Horizontal test in the block's frame (rotation-aware). tilt is how
+        // far the block reaches downwards below its centre line ...
+        glm::mat4 invRotation = glm::mat4(1.0f);
+        invRotation = glm::rotate(invRotation, glm::radians(-block.pitch), glm::vec3(1.0f, 0.0f, 0.0f));
+        invRotation = glm::rotate(invRotation, glm::radians(-block.rotation), glm::vec3(0.0f, 1.0f, 0.0f));
+        const glm::vec3 local = glm::vec3(invRotation * glm::vec4(centre - block.position, 1.0f)) + block.position;
+
+        const glm::vec3 blockMin = block.position - block.scale * 0.5f;
+        const glm::vec3 blockMax = block.position + block.scale * 0.5f;
+        if (local.x + radius < blockMin.x || local.x - radius > blockMax.x) continue;
+        if (local.z + radius < blockMin.z || local.z - radius > blockMax.z) continue;
+
+        // Vertical test in world space. For a rotated block use its highest
+        // and lowest world point, or a tilted lid would not block headroom.
+        const float tilt = std::abs(glm::vec3(invRotation * glm::vec4(0.0f, block.scale.y * 0.5f, 0.0f, 0.0f)).y);
+        const float top = block.position.y + tilt;
+        const float bottom = block.position.y - tilt;
+        const bool coversBeside = minHeightInclusive ? centre.y >= bottom : centre.y > bottom;
+        if (coversBeside && top > centre.y) return true;
+    }
+    return false;
+}
+
+bool Game::bodyBlockedAt(const glm::vec3& feet) const {
+    // A hair narrower than the body so walking along a wall is not "inside".
+    const float radius = bodyWidth * 0.5f - 0.05f;
+    // The lowest slice (just above the feet) treats a surface whose top is
+    // exactly at the feet as a floor, not as a wall: a body standing on a
+    // platform is not buried in it. Higher slices use the strict test, so a
+    // wall with its surface at the feet stays solid.
+    if (sliceBlocked(feet, 0.02f, radius, /*minHeightInclusive=*/false)) return true;
+    for (float h : {0.45f, 0.9f, 1.35f, bodyHeight - 0.02f}) {
+        if (sliceBlocked(feet, h, radius, /*minHeightInclusive=*/true)) return true;
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------
+// Safe placement: spawn points and "get me out of geometry" both end here, so
+// a body never starts inside a block. The spot is searched near the requested
+// point (up onto the surface first, then around it), and always rests on a
+// floor rather than floating.
+// ---------------------------------------------------------------------------
+
+bool Game::placeAtSafePosition(glm::vec3& feet, float searchRadius) const {
+    if (!currentMap) return false;
+
+    const float half = bodyWidth * 0.5f;   // body collision half-extent
+
+    // A body is usable when it is not inside geometry and not buried under a
+    // surface it overlaps (i.e. its feet are below the top of a block it
+    // stands in - the slab above such a surface would catch it next frame).
+    auto usable = [&](const glm::vec3& p) {
+        float floorTop;
+        if (currentMap->getFloorBelow(p, half, 1.5f, floorTop) && floorTop > p.y + 0.02f) {
+            return false;
         }
-        if (unstuckCounter > 0) {
-            std::cout << "UNSTUCK: Moved player up by " << (unstuckCounter * 0.2f) << " units" << std::endl;
-            playerVelocity = glm::vec3(0.0f, 0.0f, 0.0f); // Reset velocity
+        return !bodyBlockedAt(p);
+    };
+
+    // Ordered candidates around the requested point:
+    //   1. the requested spot itself (resting on the floor below it),
+    //   2. up a few steps (out of a raised block or a pit),
+    //   3. rings around it (overlapping a block side or a corner),
+    //   4. the same rings lifted by one step (on top of a cover block).
+    std::vector<glm::vec3> candidates;
+    candidates.push_back(feet);
+    for (float lift : {0.6f, 1.2f, 2.0f}) {
+        candidates.push_back(feet + glm::vec3(0.0f, lift, 0.0f));
+    }
+    for (int ring = 1; ring <= 3; ++ring) {
+        const float r = searchRadius * static_cast<float>(ring) / 3.0f;
+        for (int i = 0; i < 8; ++i) {
+            const float a = static_cast<float>(i) * glm::pi<float>() * 0.25f;
+            const glm::vec3 off(std::cos(a) * r, 0.0f, std::sin(a) * r);
+            candidates.push_back(feet + off);
+            candidates.push_back(feet + off + glm::vec3(0.0f, 1.2f, 0.0f));
         }
     }
-    
-    // Check for death by falling
-    if (playerPos.y < -20.0f && !isDead) {
-        isDead = true;
-        playerHealth = 0.0f;
-        
-        if (bombDefusalMode) {
-            spectatorMode = true;
-            std::cout << "Player died! Entering spectator mode." << std::endl;
-        } else {
-            gameState = DEAD;
+
+    for (glm::vec3 p : candidates) {
+        // Resting on the floor below the candidate.
+        glm::vec3 rested = p;
+        if (currentMap->getFloorBelow(p, half, 100.0f, rested.y) && usable(rested)) {
+            feet = rested;
+            return true;
         }
+        // Not restable: a body already standing in a room keeps its height.
+        if (usable(p)) {
+            feet = p;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool Game::getRemotePlayerFeet(uint32_t id, glm::vec3& feet) const {
+    for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
+        if (remotePlayers[i].active && remotePlayers[i].id == id) {
+            feet = remotePlayers[i].position;   // network packets carry feet
+            return true;
+        }
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------
+// Damage without a projectile (blast, contact). Same rules everywhere: no
+// damage while already dead, death is resolved once, and the server is told
+// so it can respawn the victim.
+// ---------------------------------------------------------------------------
+
+void Game::applyPlayerDamage(float damage) {
+    if (isDead || damage <= 0.0f) return;
+
+    playerHealth -= damage;
+    damageEffectTime = std::max(damageEffectTime, 1.0f);
+    playSoundEffect("player_damage", playerPos + glm::vec3(0.0f, eyeHeight, 0.0f), 0.9f);
+
+    std::cout << "Player hit! Health: " << playerHealth << "/" << playerMaxHealth << std::endl;
+
+    if (playerHealth <= 0.0f) {
+        playerHealth = 0.0f;
+        dieLocally();
+    }
+}
+
+void Game::dieLocally() {
+    if (isDead) return;
+    isDead = true;
+    playerVelocity = glm::vec3(0.0f);
+    playSoundEffect("player_death", playerPos + glm::vec3(0.0f, eyeHeight, 0.0f));
+
+    if (bombDefusalMode) {
+        spectatorMode = true;
+        std::cout << "Player died! Entering spectator mode." << std::endl;
+    } else {
+        gameState = DEAD;
+    }
+
+    // The server keeps the authoritative health: it sees health 0 and puts us
+    // back at a spawn point (and broadcasts the respawned state to everyone).
+    if (networkClient && networkClient->isConnected()) {
+        const glm::vec3 eye = playerPos + glm::vec3(0.0f, eyeHeight, 0.0f);
+        networkClient->sendPlayerInput(0.0f, 0.0f, camera.Yaw, camera.Pitch, false, false,
+                                       static_cast<uint8_t>(currentWeapon),
+                                       eye.x, eye.y, eye.z);
+    }
+    std::cout << "Player defeated!" << std::endl;
+}
+
+void Game::respawnLocally() {
+    resetGame();
+    // resetGame() also rebuilds the practice bots; they have no place in a
+    // networked match (other players are the opponents there).
+    if (networkClient && networkClient->isConnected()) {
+        clearBots();
+        // Our own state packets are ignored (we control ourselves), but the
+        // inputs that follow carry the new spawn position to the server.
+        std::cout << "Respawned" << std::endl;
+    }
+}
+
+void Game::clearBots() {
+    for (int i = 0; i < MAX_ENEMIES; i++) {
+        enemies[i].active = false;
+        enemies[i].alive  = false;
+    }
+    activeEnemies = 0;
+}
+
+void Game::updatePlayerPhysics(float deltaTime) {
+    // AUTOMATIC UNSTUCK: if the body is inside a solid block (spawned in
+    // geometry, or pushed into it), move it out to a safe spot. Only a body
+    // that is really overlapping geometry triggers this - standing on a
+    // floor does not (see bodyBlockedAt).
+    if (!isDead && bodyBlockedAt(playerPos)) {
+        const glm::vec3 before = playerPos;
+        if (placeAtSafePosition(playerPos)) {
+            std::cout << "UNSTUCK: moved from (" << before.x << ", " << before.y << ", "
+                      << before.z << ") to (" << playerPos.x << ", " << playerPos.y << ", "
+                      << playerPos.z << ")" << std::endl;
+        }
+        playerVelocity = glm::vec3(0.0f, 0.0f, 0.0f);
+        playerDamageCooldown = std::max(playerDamageCooldown, 0.25f);
+    }
+    
+    // Check for death by falling. A dead player is not falling again: the
+    // respawn code (or the death screen) owns the body until it comes back.
+    if (playerPos.y < -20.0f && !isDead) {
+        playerHealth = 0.0f;
         std::cout << "Player fell out of the world and died!" << std::endl;
+        dieLocally();
         return;
     }
     
@@ -42,6 +253,13 @@ void Game::updatePlayerPhysics(float deltaTime) {
         jumpCooldown -= deltaTime;
     }
     
+    // ── Ground state ────────────────────────────────────────────────────────
+    // onGround is decided from where the body is *before* the gravity step, so
+    // the jump pressed this frame can still act (the input runs before the
+    // physics). It is set below again from the position after the move, which
+    // is what the next frame starts from.
+    const bool wasOnGround = isOnGround();
+
     // Apply gravity
     playerVelocity.y -= 9.8f * deltaTime;
     
@@ -50,117 +268,64 @@ void Game::updatePlayerPhysics(float deltaTime) {
     
     // Store original position
     glm::vec3 originalPos = playerPos;
+    (void)originalPos;   // kept for readability of the movement below
     
-    // Check collision at new position
-    bool collision = false;
+    // ── Movement ────────────────────────────────────────────────────────────
+    // The player is an upright body with its feet at playerPos, moved one axis
+    // at a time. A spot is free when the body does not overlap geometry
+    // (bodyBlockedAt), so standing on a floor or next to a wall is fine.
+    bool onGround = wasOnGround;
     if (currentMap) {
-        collision = currentMap->checkCollision(newPos, 0.2f); // Smaller collision radius for accurate hit detection
+        glm::vec3 moved = playerPos;
+
+        // Horizontal: X, then Z, each allowed only where the body fits.
+        glm::vec3 tryX = moved;
+        tryX.x = newPos.x;
+        if (!bodyBlockedAt(tryX)) moved.x = newPos.x;
+        else playerVelocity.x = 0.0f;
+
+        glm::vec3 tryZ = moved;
+        tryZ.z = newPos.z;
+        if (!bodyBlockedAt(tryZ)) moved.z = newPos.z;
+        else playerVelocity.z = 0.0f;
+
+        // Vertical. Rising stops at a ceiling; falling is a swept test from
+        // the feet to where they would land, so the feet come to rest exactly
+        // on the floor instead of sinking into it and being snapped up later
+        // (which looked like a teleport at the end of the fall).
+        if (playerVelocity.y > 0.0f) {
+            glm::vec3 tryY = moved;
+            tryY.y = newPos.y;
+            if (!bodyBlockedAt(tryY)) {
+                moved.y = newPos.y;
+                onGround = false;
+            } else {
+                playerVelocity.y = 0.0f;                 // hit the ceiling
+            }
+        } else if (landedOnFloor(moved, newPos.y, moved.y)) {
+            // Landed on the floor this frame: rest on it and end the fall.
+            playerVelocity.y = 0.0f;
+            isJumping = false;
+            onGround = true;
+        } else {
+            onGround = false;
+        }
+
+        // A body never leaves the playable volume (the map's outer walls are
+        // solid; this is the backstop for maps without them).
+        const glm::vec3 half = currentMap->getDimensions() * 0.5f;
+        const float bound = 1.0f;
+        moved.x = glm::clamp(moved.x, -half.x + bound, half.x - bound);
+        moved.z = glm::clamp(moved.z, -half.z + bound, half.z - bound);
+        moved.y = std::max(moved.y, -30.0f);
+
+        playerPos = moved;
+
+        // Standing after this frame: the feet rest on a surface (at most a
+        // small step below them) and the body is not falling.
+        onGround = playerVelocity.y <= 0.0f && !bodyBlockedAt(playerPos) && isSupportedAt(playerPos);
     }
 
-    if (collision) {
-        // Try X axis movement only
-        glm::vec3 testPosX = originalPos;
-        testPosX.x = newPos.x;
-        bool xCollision = currentMap->checkCollision(testPosX, 0.2f);
-
-        // Try Z axis movement only
-        glm::vec3 testPosZ = originalPos;
-        testPosZ.z = newPos.z;
-        bool zCollision = currentMap->checkCollision(testPosZ, 0.2f);
-
-        // Apply horizontal movement first (walls should stop horizontal movement)
-        if (!xCollision) {
-            playerPos.x = newPos.x;
-        } else {
-            playerVelocity.x = 0.0f;
-        }
-
-        if (!zCollision) {
-            playerPos.z = newPos.z;
-        } else {
-            playerVelocity.z = 0.0f;
-        }
-
-        // Get ground information at the new horizontal position for slope handling
-        float groundHeight;
-        glm::vec3 groundNormal;
-        bool foundGround = currentMap->getGroundAt(playerPos, 0.2f, groundHeight, groundNormal);
-
-        // If on a slope, adjust Y position to follow the slope when walking
-        if (foundGround && (playerVelocity.x != 0.0f || playerVelocity.z != 0.0f)) {
-            float slopeStrength = 1.0f - groundNormal.y;
-            if (slopeStrength > 0.0f) {
-                // Calculate target Y based on ground height at current position
-                float targetY = groundHeight + 1.6f;
-                if (targetY > playerPos.y && targetY - playerPos.y < 0.5f) {
-                    // Allow walking up the slope
-                    playerPos.y = targetY;
-                    playerVelocity.y = 0.0f;
-                }
-            }
-        }
-
-        // Now check Y axis movement only if horizontal movement was successful
-        // This prevents getting pushed up when hitting walls
-        glm::vec3 testPosY = playerPos; // Use updated position after horizontal movement
-        testPosY.y = newPos.y;
-        bool yCollision = currentMap->checkCollision(testPosY, 0.2f);
-
-        if (!yCollision) {
-            playerPos.y = newPos.y;
-        } else {
-            // Check if we're hitting a floor (moving down and blocked)
-            if (playerVelocity.y < 0.0f) {
-                playerVelocity.y = 0.0f;
-                isJumping = false;
-
-                // If on a slope, add some velocity to slide down
-                if (foundGround && groundNormal.y < 0.95f) {
-                    float slopeStrength = 1.0f - groundNormal.y;
-                    playerVelocity.x -= groundNormal.x * slopeStrength * 5.0f;
-                    playerVelocity.z -= groundNormal.z * slopeStrength * 5.0f;
-                }
-            } else if (playerVelocity.y > 0.0f) {
-                // Hitting ceiling
-                playerVelocity.y = 0.0f;
-            }
-        }
-    } else {
-        // No collision - allow full movement (falling through air)
-        playerPos = newPos;
-    }
-    
-    // Ground detection - check if we're standing on a solid block
-    bool onGround = false;
-    if (currentMap) {
-        // Check if standing on a block - use the new getGroundAt function for rotated blocks
-        float groundHeight;
-        glm::vec3 groundNormal;
-        bool foundGround = currentMap->getGroundAt(playerPos, 0.2f, groundHeight, groundNormal);
-
-        if (foundGround) {
-            // Check if player is close enough to the ground
-            float heightAboveGround = playerPos.y - groundHeight;
-            if (heightAboveGround < 1.7f && heightAboveGround > 0.0f) {
-                onGround = true;
-
-                // Snap to ground height if falling
-                if (playerVelocity.y <= 0.0f) {
-                    playerPos.y = groundHeight + 1.6f; // Eye level when on ground
-                    playerVelocity.y = 0.0f;
-                    isJumping = false;
-
-                    // Adjust velocity based on ground normal (for walking on slopes)
-                    float slopeFactor = 1.0f - groundNormal.y;
-                    if (slopeFactor > 0.0f) {
-                        // Add a small upward force based on slope
-                        playerVelocity.y += slopeFactor * 2.0f;
-                    }
-                }
-            }
-        }
-    }
-    
     // Debug output
     static int frameCount = 0;
     if (frameCount++ % 120 == 0) {
@@ -169,35 +334,98 @@ void Game::updatePlayerPhysics(float deltaTime) {
                   << ") - " << (onGround ? "ON GROUND" : "IN AIR/FALLING") << std::endl;
     }
     
-    // Update camera
-    camera.Position = glm::vec3(playerPos.x, playerPos.y + 1.6f, playerPos.z);
+    // Update camera (playerPos is at the feet: the eye sits eyeHeight above).
+    // The camera follows the body exactly. (A smoothed X/Z lag made the map
+    // look doubled: the world is drawn once mid-frame with this position and
+    // once at the end, so any lag between the two shifted the two copies.)
+    camera.Position = glm::vec3(playerPos.x, playerPos.y + eyeHeight, playerPos.z);
     camera.updateCameraVectors();
 }
 
-void Game::handleJump() {
-    // Use the new getGroundAt function for rotated blocks
-    bool onGround = false;
+// ---------------------------------------------------------------------------
+// Ground and landing
+// ---------------------------------------------------------------------------
 
-    if (currentMap) {
-        float groundHeight;
-        glm::vec3 groundNormal;
-        bool foundGround = currentMap->getGroundAt(playerPos, 0.2f, groundHeight, groundNormal);
+bool Game::isSupportedAt(const glm::vec3& feet) const {
+    if (!currentMap) return false;
+    // The floor may be up to one small step below the feet, or a few
+    // millimetres above them (float error after a snap). Looking 2 cm above
+    // the feet covers that, so a feet position that is exactly on a surface
+    // is always supported - independent of any previous frame.
+    float groundHeight = feet.y;
+    if (!currentMap->getFloorBelow(feet + glm::vec3(0.0f, 0.02f, 0.0f),
+                                   bodyWidth * 0.5f - 0.05f, kGroundSnap + 0.02f, groundHeight)) {
+        return false;
+    }
+    return feet.y - groundHeight <= kGroundSnap + 0.02f;
+}
 
-        if (foundGround) {
-            float heightAboveGround = playerPos.y - groundHeight;
-            if (heightAboveGround < 1.7f && heightAboveGround > 0.0f) {
-                onGround = true;
+bool Game::isOnGround() const {
+    return !isDead && currentMap != nullptr && playerVelocity.y <= 0.0f &&
+           !bodyBlockedAt(playerPos) && isSupportedAt(playerPos);
+}
+
+bool Game::landedOnFloor(glm::vec3& feet, float targetY, float& restingY) const {
+    // The feet sweep downwards from `feet.y` to `targetY` this frame; the
+    // highest surface in that range (plus a small look-ahead for the next
+    // frame's step) is where they come to rest. Landing exactly on it keeps
+    // the motion continuous, however fast the fall.
+    if (!currentMap) {
+        feet.y = targetY;
+        restingY = targetY;
+        return false;
+    }
+
+    // A surface that lies between the feet and the target: a fall ends on the
+    // first one it reaches (this also catches tiny per-frame steps, where the
+    // target is still fractionally above the floor).
+    float groundHeight;
+    if (currentMap->getFloorBelow(feet, bodyWidth * 0.5f - 0.05f,
+                                  feet.y - targetY + 0.02f, groundHeight)) {
+        feet.y = groundHeight;                       // rest on the surface
+        restingY = groundHeight;
+        return true;
+    }
+
+    // No floor between here and the target: keep falling, unless the body
+    // would enter geometry (a wall corner, or a lip the body is too tall to
+    // pass under). Then step up just enough to clear it: a sweep from here to
+    // the target, landing on the first height where the body fits.
+    glm::vec3 tried = feet;
+    tried.y = targetY;
+    if (bodyBlockedAt(tried)) {
+        const float from = feet.y;
+        const float to = targetY;
+        for (float y = from; y >= to - 1e-4f; y -= 0.01f) {
+            glm::vec3 spot = feet;
+            spot.y = y;
+            if (!bodyBlockedAt(spot)) {
+                feet.y = y;
+                restingY = y;
+                return true;
             }
         }
+        // Nowhere fits (a body thicker than the gap): stay where it was.
+        restingY = feet.y;
+        return true;
     }
+    feet.y = targetY;
+    restingY = targetY;
+    return false;
+}
 
-    if (onGround && !isJumping && jumpCooldown <= 0.0f) {
-        playerVelocity.y = 4.0f; // Jump velocity
-        isJumping = true;
-        jumpCooldown = 0.5f; // 0.5 second cooldown
-        playSoundEffect("jump", playerPos + glm::vec3(0.0f, -1.4f, 0.0f));
-        std::cout << "Jump triggered! Player y: " << playerPos.y << std::endl;
-    }
+void Game::handleJump() {
+    // A jump only starts from the ground: standing on a surface, not falling,
+    // not still rising from the previous jump, and the jump key was released
+    // since then (held keys do not auto-bunny-hop).
+    if (!isOnGround()) return;
+    if (isJumping || jumpCooldown > 0.0f) return;
+
+    playerVelocity.y = kJumpSpeed;
+    isJumping = true;
+    jumpCooldown = 0.5f; // 0.5 second cooldown
+    playSoundEffect("jump", playerPos, 0.8f);
+    std::cout << "Jump triggered! Player y: " << playerPos.y << std::endl;
 }
 
 bool Game::createProjectile(const glm::vec3& position, const glm::vec3& velocity, float lifetime, uint32_t owner, int type) {
@@ -275,6 +503,7 @@ void Game::shootPistol() {
     }
     
     createProjectile(camera.Position, camera.Front * 120.0f, 3.0f, 0, 0); // owner=0, type=0 (pistol) for local player
+    lastLocalShot_ = std::chrono::steady_clock::now();
     if (!infiniteAmmoMode) {
         pistolAmmo--;
     }
@@ -311,6 +540,7 @@ void Game::shootShotgun() {
     if (!infiniteAmmoMode) {
         shotgunAmmo--;
     }
+    lastLocalShot_ = std::chrono::steady_clock::now();
     shotgunCooldown = 0.8f; // 0.8 second cooldown (pump action)
     std::cout << "Shotgun blast! Pellets: " << pelletsShot << " Ammo: " << (infiniteAmmoMode ? "∞" : std::to_string(shotgunAmmo)) << std::endl;
 }
@@ -328,6 +558,7 @@ void Game::throwGrenade() {
     }
     
     createProjectile(camera.Position, camera.Front * 30.0f, 5.0f, 0, 1); // owner=0, type=1 (grenade) for local player
+    lastLocalShot_ = std::chrono::steady_clock::now();
     if (!infiniteAmmoMode) {
         grenadeCount--;
     }
@@ -348,6 +579,7 @@ void Game::throwFlashbang() {
     }
     
     createProjectile(camera.Position, camera.Front * 25.0f, 4.0f, 0, 2); // owner=0, type=2 (flashbang) for local player
+    lastLocalShot_ = std::chrono::steady_clock::now();
     if (!infiniteAmmoMode) {
         flashbangCount--;
     }
@@ -380,7 +612,7 @@ void Game::updateProjectiles(float deltaTime) {
                 projectiles[i].active = false;
 
                 if (isGrenade) {
-                    createSimpleExplosion(atPos);
+                    createSimpleExplosion(atPos, &projectiles[i]);
                 } else if (isFlashbang) {
                     createFlashbangEffect(atPos);
                 } else {
@@ -512,17 +744,45 @@ void Game::updateProjectiles(float deltaTime) {
             }
 
             // Check collision with enemies first
-            if (checkProjectileEnemyCollision(projectiles[i]) && projectiles[i].active) {
+            bool hitTarget = checkProjectileEnemyCollision(projectiles[i]);
+            if (networkClient && networkClient->isConnected() && projectiles[i].owner == 0) {
+                // Our own shot: the server relays remote players' positions,
+                // the hit itself is resolved here (see checkProjectileRemoteCollision).
+                hitTarget = checkProjectileRemoteCollision(projectiles[i]) || hitTarget;
+            }
+            if (hitTarget && projectiles[i].active) {
+                // A throwable that hits a body detonates right there (the
+                // server only relays blasts that hit the map).
+                const bool localThrow =
+                    (projectiles[i].type == 1 || projectiles[i].type == 2) && projectiles[i].owner == 0;
+                if (localThrow) {
+                    projectiles[i].detonated = true;
+                    projectiles[i].active = false;
+                    activeProjectiles--;
+                    if (projectiles[i].type == 1) {
+                        createSimpleExplosion(projectiles[i].position, &projectiles[i]);
+                        checkExplosionRemoteCollision(projectiles[i].position, 3.0f, 75.0f);
+                    } else {
+                        createFlashbangEffect(projectiles[i].position);
+                    }
+                    std::cout << "Throwable hit a player! Active: " << activeProjectiles << std::endl;
+                    continue;
+                }
+
                 // Create simple explosion for grenades
                 bool isGrenade = projectiles[i].type == 1;
                 bool isFlashbang = projectiles[i].type == 2;
 
+                // Every projectile reports itself as the blast source: blasts
+                // from other players' relays never damage us from here (see
+                // createSimpleExplosion). Local shots reach this branch only
+                // against a bot (a remote player hit was handled above).
                 if (isGrenade) {
                     if (!projectiles[i].detonated) {
                         projectiles[i].detonated = true;
                         projectiles[i].active = false;
                         activeProjectiles--;
-                        createSimpleExplosion(projectiles[i].position);
+                        createSimpleExplosion(projectiles[i].position, &projectiles[i]);
                     }
                 }
                 // Create flashbang effect for flashbangs when they expire
@@ -566,7 +826,7 @@ void Game::updateProjectiles(float deltaTime) {
                         projectiles[i].detonated = true;
                         projectiles[i].active = false;
                         activeProjectiles--;
-                        createSimpleExplosion(projectiles[i].position);
+                        createSimpleExplosion(projectiles[i].position, &projectiles[i]);
                     }
                     std::cout << "Grenade exploded on wall! Active: " << activeProjectiles << std::endl;
                 }
@@ -585,8 +845,18 @@ void Game::updateProjectiles(float deltaTime) {
     }
 }
 
-void Game::createSimpleExplosion(glm::vec3 position) {
+void Game::createSimpleExplosion(glm::vec3 position, const Projectile* source) {
     std::cout << "BOOM! Grenade exploded at: (" << position.x << ", " << position.y << ", " << position.z << ")" << std::endl;
+
+    // Grenades are thrown from eye level, so the impact point has the height
+    // of the throw vector, not of the victim. A blast only counts as "on the
+    // body" when it is within the body's height range AND horizontally close to
+    // it; otherwise the real distance (used below) decides the damage.
+    glm::vec3 boxMin, boxMax;
+    bodyBox(playerPos, boxMin, boxMax);
+    const bool insideBodyHeight = position.y >= boxMin.y && position.y <= boxMax.y;
+    const glm::vec2 horizontal = glm::vec2(position.x, position.z) - glm::vec2(playerPos.x, playerPos.z);
+    const bool detonatedOnBody = insideBodyHeight && glm::length(horizontal) <= bodyWidth * 0.5f + 0.25f;
 
     // 3D boom at the blast position (attenuated/panned from the camera).
     playSoundEffect("explosion", position);
@@ -613,17 +883,17 @@ void Game::createSimpleExplosion(glm::vec3 position) {
     renderer.drawCube(model, glm::vec3(1.0f, 0.0f, 0.0f)); // RED color for explosion
     
     // Damage nearby enemies
-    float explosionRadius = 3.0f; // 3 unit explosion radius
-    float explosionDamage = 75.0f; // 75 damage
+    const float explosionRadius = explosionRadius_;
+    const float explosionDamage = 75.0f;
     
     for (int j = 0; j < MAX_ENEMIES; j++) {
         if (enemies[j].active && enemies[j].alive) {
-            glm::vec3 enemyPos(enemies[j].x, enemies[j].y, enemies[j].z);
-            float distance = glm::length(position - enemyPos);
+            glm::vec3 enemyFeet(enemies[j].x, enemies[j].y, enemies[j].z);
+            float distance = distanceToBody(position, enemyFeet);
             if (distance < explosionRadius) {
                 // Damage enemy based on distance
                 float damageMultiplier = 1.0f - (distance / explosionRadius);
-                enemies[j].health -= explosionDamage * damageMultiplier;
+                enemies[j].health -= explosionDamage * 0.75f * damageMultiplier;
                 std::cout << "Enemy hit by explosion! Health: " << enemies[j].health << std::endl;
                 
                 if (enemies[j].health <= 0.0f) {
@@ -636,28 +906,19 @@ void Game::createSimpleExplosion(glm::vec3 position) {
         }
     }
     
-    // Damage player if too close
-    float playerDistance = glm::length(position - playerPos);
-    if (playerDistance < explosionRadius && !isDead) {
-        float damageMultiplier = 1.0f - (playerDistance / explosionRadius);
-        playerHealth -= 50.0f * damageMultiplier; // 50 max damage for grenade
-        damageEffectTime = 1.5f; // Longer screen effect
-        std::cout << "Player hit by explosion! Health: " << playerHealth << "/" << playerMaxHealth << std::endl;
-        playSoundEffect("player_damage", playerPos + glm::vec3(0.0f, 1.6f, 0.0f), 0.9f);
-        
-        if (playerHealth <= 0.0f && !isDead) {
-            playerHealth = 0.0f;
-            isDead = true;
-            playSoundEffect("player_death", playerPos + glm::vec3(0.0f, 1.6f, 0.0f));
-            
-            if (bombDefusalMode) {
-                spectatorMode = true;
-                std::cout << "Player died! Entering spectator mode." << std::endl;
-            } else {
-                gameState = DEAD;
-            }
-            std::cout << "Player defeated by explosion!" << std::endl;
-        }
+    // Explosions relayed from another player (source != our own grenade) are
+    // handled by updateRemotePlayerDeath / checkProjectilePlayerCollision.
+    if (networkClient && networkClient->isConnected() && (!source || source->owner != 0)) {
+        return;
+    }
+
+    // Damage the local player if too close. A grenade that detonated on a
+    // body hits that body directly, whichever end of it the blast is at.
+    const float playerDistance = detonatedOnBody ? 0.0f : distanceToBody(position, playerPos);
+    if (playerDistance < explosionRadius) {
+        const float damageMultiplier = 1.0f - (playerDistance / explosionRadius);
+        applyPlayerDamage(explosionDamage_ * damageMultiplier);
+        damageEffectTime = std::max(damageEffectTime, 1.5f); // Longer screen effect
     }
 }
 
@@ -996,10 +1257,9 @@ void Game::spawnEnemy(const glm::vec3& position) {
 bool Game::checkProjectileEnemyCollision(Projectile& projectile) {
     for (int i = 0; i < MAX_ENEMIES; i++) {
         if (enemies[i].active && enemies[i].alive) {
-            // Check distance between projectile and enemy
-            glm::vec3 enemyPos(enemies[i].x, enemies[i].y, enemies[i].z);
-            float distance = glm::length(projectile.position - enemyPos);
-            if (distance < 0.5f) { // Hit radius of 0.5 units
+            // Enemies stand with their feet on their spawn position.
+            glm::vec3 enemyFeet(enemies[i].x, enemies[i].y, enemies[i].z);
+            if (pointHitsBody(projectile.position, enemyFeet, bodyHitSlack)) {
                 // Damage the enemy
                 enemies[i].health -= 25.0f; // 25 damage per hit
                 playSoundEffect("hit_flesh", projectile.position, 0.8f);
@@ -1077,36 +1337,43 @@ void Game::updateEnemies(float deltaTime) {
 }
 
 void Game::checkProjectilePlayerCollision() {
-    if (playerDamageCooldown > 0.0f) {
-        return; // Player has damage immunity
-    }
-    
+    // Damage immunity (set by damagePlayer) means a hit was just taken. The
+    // hit projectiles are still removed below, so no shot is wasted.
+    const bool immune = playerDamageCooldown > 0.0f;
+
     for (int i = 0; i < MAX_PROJECTILES; i++) {
         if (!projectiles[i].active) continue;
         
         // Only check projectiles from other players (owner != 0 means remote player)
         if (projectiles[i].owner == 0) continue; // Skip own projectiles
         
-        // Check collision with local player
-        float distance = glm::length(projectiles[i].position - playerPos);
-        if (distance < 0.5f) { // Hit radius of 0.5 units
-            float damage = 0.0f;
-            float velocity = glm::length(projectiles[i].velocity);
-            if (velocity > 100.0f) {
-                damage = 25.0f; // Pistol bullet (velocity ~120)
-            } else if (velocity > 40.0f && velocity < 60.0f) {
-                damage = 10.0f; // Shotgun pellet (velocity ~50)
-            } else {
-                // Grenade/flashbang explosion damage (velocity ~25-30)
-                createSimpleExplosion(projectiles[i].position);
-                damage = 50.0f; // Explosion damage
-            }
-            
-            damagePlayer(damage);
-            projectiles[i].active = false;
-            activeProjectiles--;
-            break;
+        // Hit detection against the local player's body (feet position, with
+        // eye-level shots: the projectile IS the line of sight).
+        const bool bodyHit = pointHitsBody(projectiles[i].position, playerPos, bodyHitSlack);
+
+        if (projectiles[i].type == 1 || projectiles[i].type == 2) {
+            // Relay of the thrower's blast. It stayed active in flight (the
+            // thrower removed its own copy), so the same projectile can no
+            // longer deal a second "hit" below: both victims are resolved by
+            // the blast itself.
+            playerDamageCooldown = std::max(playerDamageCooldown, pvpDuplicateHitWindow);
+            continue;
         }
+
+        if (!bodyHit || immune) continue;
+        // A bullet stops on the first body it reaches.
+        float damage = 0.0f;
+        switch (projectiles[i].type) {
+            case 3:  damage = 10.0f; break;   // shotgun pellet
+            case 0:  damage = 25.0f; break;   // pistol
+            default: damage = 20.0f; break;   // anything else
+        }
+
+        damagePlayer(damage);   // sets damageEffectTime + damagePlayer immunity
+        playSoundEffect("hit_flesh", projectiles[i].position, 0.8f);
+
+        projectiles[i].active = false;
+        activeProjectiles--;
     }
 }
 
@@ -1120,19 +1387,10 @@ void Game::damagePlayer(float damage) {
     playerDamageCooldown = 1.0f; // 1 second immunity
     
     std::cout << "Player hit! Health: " << playerHealth << "/" << playerMaxHealth << std::endl;
-    playSoundEffect("player_damage", playerPos + glm::vec3(0.0f, 1.6f, 0.0f), 0.9f);
+    playSoundEffect("player_damage", playerPos + glm::vec3(0.0f, eyeHeight, 0.0f), 0.9f);
     
     if (playerHealth <= 0.0f) {
-        isDead = true;
-        playSoundEffect("player_death", playerPos + glm::vec3(0.0f, 1.6f, 0.0f));
-        
-        if (bombDefusalMode) {
-            spectatorMode = true;
-            std::cout << "Player died! Entering spectator mode." << std::endl;
-        } else {
-            gameState = DEAD;
-        }
-        std::cout << "Player defeated!" << std::endl;
+        dieLocally();
     }
 }
 
@@ -1141,17 +1399,193 @@ void Game::checkPlayerPlayerCollision() {
         return; // Player has damage immunity
     }
     
-    // Check collision with remote players
+    // Contact damage is a rate: 15 damage per second of touching, instead of
+    // 15 instant damage (which meant one hit per second while standing still).
     for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
-        if (!remotePlayers[i].active) continue;
+        if (!remotePlayers[i].active || remotePlayers[i].isDead) continue;
         
-        glm::vec3 remotePlayerPos = remotePlayers[i].position;
-        float distance = glm::length(playerPos - remotePlayerPos);
-        
-        if (distance < 1.0f) { // Collision radius of 1 unit
-            // Apply collision damage (melee damage)
-            damagePlayer(15.0f); // 15 damage for player collision
+        const float distance = distanceToBody(playerPos + glm::vec3(0.0f, bodyCenterHeight, 0.0f),
+                                               remotePlayers[i].position);
+        if (distance < 0.5f) {
+            // Measured over time: next frame drains the accumulated budget,
+            // so a 60 fps game does not take 60 hits at the same spot.
+            static float contactBudget = 0.0f;
+            contactBudget += playerCollisionDps * (1.0f / 60.0f);
+            if (contactBudget >= 1.0f) {
+                const float step = std::floor(contactBudget);
+                contactBudget -= step;
+                damagePlayer(step);
+            }
+            break;
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Remote players: our own shots against them, relayed blasts on them, and
+// their death state.
+//
+// The client that shot knows exactly where its shot went, so its own hits are
+// authoritative and sent to the server (PACKET_PLAYER_DAMAGE). Everything is
+// checked against the same body box the remote player is drawn with, so a hit
+// no longer depends on a floating point far above or below the model.
+// ---------------------------------------------------------------------------
+
+bool Game::checkProjectileRemoteCollision(Projectile& projectile) {
+    for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
+        RemotePlayer& remote = remotePlayers[i];
+        if (!remote.active || remote.isDead) continue;
+        if (remote.id == networkClient->getClientId()) continue;   // never shoot ourselves
+
+        // Remote positions travel as feet positions (eye = feet + eyeHeight).
+        // Hit detection uses the very box the remote player is drawn with.
+        if (!pointHitsBody(projectile.position, remote.position, bodyHitSlack)) continue;
+
+        if (projectile.type == 1) {
+            // A granade can be relayed by the server: don't double-apply if
+            // the packet is already on its way to the victim.
+            const auto sinceShot = std::chrono::steady_clock::now() - lastLocalShot_;
+            if (std::chrono::duration<float>(sinceShot).count() < pvpShotTravelTime) continue;
+        }
+
+        if (projectile.type == 1 || projectile.type == 2) {
+            // Our grenade/flashbang hit a body: the server relays the blast
+            // only when it hits the wall, so detonating on a body happens
+            // here. The relayed copy (owner != 0) is stopped on the victim.
+            return true;
+        }
+
+        // Bullets: the shot stops at the first remote player it reaches.
+        RemotePlayer* nearest = &remote;
+        float nearestDistance = glm::length(remote.position - projectile.position);
+        int nearestIndex = i;
+        for (int j = i + 1; j < MAX_REMOTE_PLAYERS; j++) {
+            RemotePlayer& other = remotePlayers[j];
+            if (!other.active || other.isDead) continue;
+            if (!pointHitsBody(projectile.position, other.position, bodyHitSlack)) continue;
+            const float d = glm::length(other.position - projectile.position);
+            if (d < nearestDistance) { nearest = &other; nearestDistance = d; nearestIndex = j; }
+        }
+
+        float damage = 0.0f;
+        switch (projectile.type) {
+            case 0:  damage = 25.0f; break;   // pistol
+            case 3:  damage = 10.0f; break;   // shotgun pellet
+            default: damage = 20.0f; break;
+        }
+
+        // A shotgun blast hits one target with several pellets per frame: the
+        // pellets are separate damage, not a duplicate hit.
+        networkClient->sendPlayerDamage(nearest->id,
+                                        static_cast<uint16_t>(damage),
+                                        static_cast<uint8_t>(projectile.type));
+        PvpRemote& book = pvpRemotes_[nearestIndex];
+        book.lastHitTime = static_cast<float>(glfwGetTime());
+        book.health = std::max(0.0f, book.health - damage);
+        book.damageSent += static_cast<int>(damage);
+        book.pending = true;
+        book.sentAt  = std::chrono::steady_clock::now();
+
+        playSoundEffect("hit_flesh", projectile.position, 0.8f);
+        std::cout << "Hit remote player " << nearest->id << " for " << damage << std::endl;
+
+        projectile.active = false;
+        activeProjectiles--;
+        return true;
+    }
+
+    return false;
+}
+
+void Game::checkExplosionRemoteCollision(const glm::vec3& position, float radius, float damage) {
+    if (!networkClient || !networkClient->isConnected()) return;
+
+    for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
+        RemotePlayer& remote = remotePlayers[i];
+        if (!remote.active || remote.isDead) continue;
+        if (remote.id == networkClient->getClientId()) continue;
+
+        // Blasts are measured to the body box (feet position, any height
+        // within the body), so a grenade at the enemy's feet always connects.
+        float distance = distanceToBody(position, remote.position);
+        if (distance >= radius) continue;
+
+        const float amount = damage * (1.0f - distance / radius);
+        networkClient->sendPlayerDamage(remote.id, static_cast<uint16_t>(amount), 1);
+        PvpRemote& book = pvpRemotes_[i];
+        book.health = std::max(0.0f, book.health - amount);
+        book.damageSent += static_cast<int>(amount);
+        book.pending = true;
+        book.sentAt  = std::chrono::steady_clock::now();
+        std::cout << "Blast hit remote player " << remote.id << " for " << amount << std::endl;
+    }
+}
+
+void Game::updateRemotePlayerDeath(float deltaTime) {
+    if (!networkClient || !networkClient->isConnected()) return;
+
+    for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
+        RemotePlayer& remote = remotePlayers[i];
+        if (!remote.active) continue;
+
+        // Death and respawn are authoritative on the server: the body is just
+        // hidden while isDead, and comes back with the respawn packet.
+
+        PvpRemote& book = pvpRemotes_[i];
+        if (!book.pending) continue;
+
+        const float since = std::chrono::duration<float>(
+            std::chrono::steady_clock::now() - book.sentAt).count();
+
+        if (remote.isDead) {
+            // The server has killed this player: everything we claimed is
+            // settled.
+            book = PvpRemote{};
+            continue;
+        }
+
+        // No authoritative state after the hit: the packet (or its relay)
+        // was lost. Re-send the damage we reported, so hits are not silently
+        // dropped.
+        if (since > pvpReportReconcileWindow) {
+            const int missing = std::min(book.damageSent, 100);
+            if (missing > 0) {
+                std::cout << "Re-sending " << missing << " damage for player "
+                          << remote.id << std::endl;
+                networkClient->sendPlayerDamage(remote.id, static_cast<uint16_t>(missing), 0);
+            }
+            book.pending = false;
+        }
+    }
+}
+
+void Game::renderRemotePlayers() {
+    for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
+        RemotePlayer& remote = remotePlayers[i];
+        if (!remote.active || remote.isDead) continue;
+
+        // Smooth out the network rate: converge on the latest position.
+        if (glm::length(remote.renderPosition - glm::vec3(0.0f)) < 0.001f) {
+            remote.renderPosition = remote.position;
+        } else {
+            const float interpolationFactor = 0.2f;
+            remote.renderPosition += (remote.position - remote.renderPosition) * interpolationFactor;
+        }
+
+        // The body is drawn with the same box the hits are checked against,
+        // centred on the box (feet position + half the body height).
+        glm::vec3 boxMin, boxMax;
+        bodyBox(remote.renderPosition, boxMin, boxMax);
+        const glm::vec3 centre = (boxMin + boxMax) * 0.5f;
+        const glm::vec3 size   = boxMax - boxMin;
+
+        glm::mat4 model = glm::mat4(1.0f);
+        model = glm::translate(model, centre);
+        model = glm::scale(model, size);
+        const glm::vec3 color = (remote.id % 2 == 0)
+                              ? glm::vec3(1.0f, 0.15f, 0.15f)
+                              : glm::vec3(0.15f, 0.9f, 0.2f);
+        renderer.drawCube(model, color);
     }
 }
 
@@ -1340,18 +1774,9 @@ void Game::endRound(int winner) {
         float distToBomb = glm::length(playerPos - bomb.position);
         if (distToBomb < 12.0f) {
             float damage = (12.0f - distToBomb) / 12.0f * 100.0f;
-            if (damage > 0.0f) {
-                damagePlayer(damage);
-                if (playerHealth <= 0.0f) {
-                    playerHealth = 0.0f;
-                    isDead = true;
-                    if (bombDefusalMode) {
-                        spectatorMode = true;
-                    } else {
-                        gameState = DEAD;
-                    }
-                }
-            }
+            // damagePlayer() already resolves death; don't force it twice
+            // (that used to skip the server notification / spectator setup).
+            damagePlayer(damage);
         }
     }
 }

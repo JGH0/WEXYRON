@@ -11,6 +11,7 @@
 #include "../core/settings.hpp"
 #include <algorithm>
 #include <cstdlib>
+#include <memory>
 
 namespace menu {
 
@@ -130,6 +131,39 @@ Page buildVideoGroupPage(const std::vector<settings::SettingDef>& defs,
 void appendBindingRows(Page& page, const std::vector<settings::SettingDef>& defs,
                        const std::function<void()>& onChanged,
                        const std::string& groupFilter) {
+    // `defs` may be a copy owned by the caller (gameSettingDefs() returns
+    // one) and the page lives on after this function returns, so the callbacks
+    // capture neither: they use the caller's `onChanged`, the registry's live
+    // defs (stable addresses) and their own row index.
+    std::shared_ptr<std::vector<size_t>> rows = std::make_shared<std::vector<size_t>>();
+    std::shared_ptr<std::vector<size_t>> keys = std::make_shared<std::vector<size_t>>();
+
+    auto applyBinding = [onChanged, rows, keys](size_t row, size_t index, int code) {
+        const std::vector<settings::SettingDef>& live = settings::gameSettingDefs();
+
+        // One action per key (or mouse button): a key belongs to the most
+        // recent binding, so binding G to JUMP frees G from GRENADE (before,
+        // both fired and G only threw a grenade - "cannot jump").
+        if (code >= 0) {
+            for (size_t k = 0; k < keys->size(); ++k) {
+                const size_t other = (*keys)[k];
+                if (other == index) continue;
+                const settings::SettingDef& def = live[other];
+                if (def.value->type != settings::ValueType::Key) continue;
+                if (def.value->i != code) continue;
+
+                // Show it on that row first, then change the value.
+                if ((*rows)[k] == row) continue;   // never the row being bound
+                settings::setKeyValue(*def.value, -1);
+                settings::applySettingDef(other);
+            }
+        }
+
+        settings::setKeyValue(*live[index].value, code);
+        settings::applySettingDef(index);
+        if (onChanged) onChanged();
+    };
+
     std::string group;
     for (const settings::SettingDef& def : defs) {
         if (def.value->type != settings::ValueType::Key) continue;
@@ -139,12 +173,11 @@ void appendBindingRows(Page& page, const std::vector<settings::SettingDef>& defs
             page.add(separator(group));
         }
         const size_t index = static_cast<size_t>(&def - defs.data());
+        const size_t row = page.rows.size();
+        keys->push_back(index);
+        rows->push_back(row);
         page.add(keybind(def.label, def.value->i,
-                         [index, onChanged](int code) {
-                             settings::setKeyValue(*settings::gameSettingDefs()[index].value, code);
-                             settings::applySettingDef(index);
-                             if (onChanged) onChanged();
-                         },
+                         [row, index, applyBinding](int code) { applyBinding(row, index, code); },
                          def.help));
     }
 }

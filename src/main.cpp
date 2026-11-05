@@ -43,6 +43,10 @@ static void runMenuTest(Game& game, const char* script) {
         } else if (step.rfind("game:", 0) == 0) {
             // Run the real frame path (update + render) for N frames.
             game.debugRunFrames(std::atoi(step.c_str() + 5));
+        } else if (step.rfind("map:", 0) == 0) {
+            // Start a real single-player match on this map (screenshot aid).
+            game.debugStartMapForTest(step.substr(4));
+            game.debugRunFrames(30);
         } else if (step == "dump") {
             game.debugMenuDump();
         } else if (step == "shot") {

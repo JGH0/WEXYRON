@@ -507,37 +507,75 @@ void Game::resetGame() {
 
     // Spawn at map spawn point
     if (currentMap) {
+        // Every map spawn is checked for clearance: spawn points are authored
+        // at arbitrary x/z (often the map centre), and maps without spawns
+        // fall back to the middle platform (simple.map). A body placed inside
+        // a block is what caused the constant "UNSTUCK" climbing.
+        float yaw = camera.Yaw, pitch = camera.Pitch;
+        auto trySpawn = [&](const glm::vec3& candidate) {
+            glm::vec3 feet = candidate;
+            if (!placeAtSafePosition(feet)) return false;
+            playerPos = feet;
+            return true;
+        };
+
+        bool placed = false;
         if (currentGameMode == TEAM_VS_TEAM || currentGameMode == BOMB_DEFUSAL) {
             TeamSpawn spawn = currentMap->getRandomTeamSpawn(playerTeam);
-            playerPos    = spawn.position;
-            camera.Yaw   = spawn.yaw;
-            camera.Pitch = spawn.pitch;
+            yaw = spawn.yaw; pitch = spawn.pitch;
+            placed = trySpawn(spawn.position);
         } else {
             SpawnPoint spawn = currentMap->getRandomSpawnPoint();
-            playerPos    = spawn.position;
-            camera.Yaw   = spawn.yaw;
-            camera.Pitch = spawn.pitch;
+            yaw = spawn.yaw; pitch = spawn.pitch;
+            placed = trySpawn(spawn.position);
         }
-        // Fall back if spawn point is at origin
-        if (playerPos == glm::vec3(0.0f)) {
-            playerPos    = glm::vec3(0.0f, 2.0f, 0.0f);
-            camera.Yaw   = 0.0f;
-            camera.Pitch = 0.0f;
+
+        // No usable spawn point: pick any authored one that has room.
+        for (const SpawnPoint& spawn : currentMap->getSpawnPoints()) {
+            if (placed) break;
+            placed = trySpawn(spawn.position);
         }
-        // Unstuck from geometry
-        int safety = 0;
-        while (currentMap->checkCollision(playerPos, 0.3f) && safety < 100) {
-            playerPos.y += 1.0f;
-            ++safety;
+
+        // Deterministic fallback (maps without spawns, or as a last resort):
+        // search rings around the map centre, low spots first. A centre-only
+        // spot high up (a rooftop) is kept as a last resort.
+        if (!placed) {
+            glm::vec3 best(0.0f);
+            bool found = false;
+            bool foundAway = false;
+            for (float d = 0.0f; d <= 6.0f && !foundAway; d += 1.0f) {
+                for (float y = 1.0f; y <= 9.0f && !foundAway; y += 1.0f) {
+                    for (int i = 0; i < 8 && !foundAway; ++i) {
+                        const float a = d == 0.0f ? 0.0f : static_cast<float>(i) * glm::pi<float>() * 0.25f;
+                        glm::vec3 feet(std::cos(a) * d, y, std::sin(a) * d);
+                        if (!placeAtSafePosition(feet)) continue;
+                        if (!found) { best = feet; found = true; }
+                        if (d > 0.0f || feet.y <= 2.5f) {
+                            best = feet;
+                            foundAway = true;
+                        }
+                    }
+                }
+            }
+            if (found) {
+                playerPos = best;
+                placed = true;
+            }
         }
+        camera.Yaw = yaw;
+        camera.Pitch = pitch;
     } else {
         playerPos    = glm::vec3(0.0f, 2.0f, 0.0f);
         camera.Yaw   = 0.0f;
         camera.Pitch = 0.0f;
     }
 
+    std::cout << "Spawned at (" << playerPos.x << ", " << playerPos.y << ", " << playerPos.z << ")"
+              << (bodyBlockedAt(playerPos) ? " - BLOCKED" : " - clear")
+              << std::endl;
+
     playerVelocity = glm::vec3(0.0f);
-    camera.Position = glm::vec3(playerPos.x, playerPos.y + 1.6f, playerPos.z);
+    camera.Position = glm::vec3(playerPos.x, playerPos.y + eyeHeight, playerPos.z);
     camera.updateCameraVectors();
 
     // Projectiles
@@ -587,10 +625,19 @@ void Game::resetGame() {
     fallTime     = 0.0f;
     playUiSound("reload");
 
-    // Re-spawn initial enemies
-    spawnEnemy(glm::vec3( 5.0f, -1.0f,  5.0f));
-    spawnEnemy(glm::vec3(-5.0f, -1.0f,  5.0f));
-    spawnEnemy(glm::vec3( 5.0f, -1.0f, -5.0f));
+    // Re-spawn initial enemies (practice targets: single player only)
+    if (!multiplayerMode) {
+        spawnEnemy(glm::vec3( 5.0f, -1.0f,  5.0f));
+        spawnEnemy(glm::vec3(-5.0f, -1.0f,  5.0f));
+        spawnEnemy(glm::vec3( 5.0f, -1.0f, -5.0f));
+    } else {
+        clearBots();
+    }
+
+    // Remote PVP bookkeeping: a new life starts from a clean slate.
+    for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
+        pvpRemotes_[i] = PvpRemote{};
+    }
 
     gameState = PLAYING;
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);

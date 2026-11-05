@@ -149,8 +149,9 @@ void Game::openSettings() {
     });
     page.add(menu::separator("INPUT"));
     page.add(menu::action("CONTROLS", [this]() {
-        menu::Page controls("CONTROLS", "KEYBOARD AND MOUSE BINDINGS");
-        appendBindingRows(controls);
+        // Built fresh on every open: bindings may have changed since the
+        // settings page was created.
+        menu::Page controls = menu::buildControlsPage(settingDefs_, [this]() { saveSettings(); });
         controls.add(menu::separator("ACTIONS"));
         controls.add(menu::action("RESET BINDINGS", [this]() { resetBindingsToDefaults(); },
                                   "Restore the default key bindings"));
@@ -569,6 +570,81 @@ void Game::debugRunFrames(int frames) {
         update(1.0f / 60.0f);
         render();
     }
+}
+
+// ── Spawn / movement tests ───────────────────────────────────────────────────
+// These call the same code the player does (installMap -> resetGame ->
+// updatePlayerPhysics); only the input source is scripted.
+
+bool Game::debugStartMapForTest(const std::string& mapFile) {
+    currentGameMode = DEATHMATCH;
+    std::unique_ptr<Map> map = std::make_unique<Map>("assets/maps/" + mapFile);
+    installMap(std::move(map));      // handles bomb sites + GPU state
+    menuJustEntered = true;
+    gameInProgress_ = true;
+    gameState = PLAYING;
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    return currentMap != nullptr;
+}
+
+void Game::debugStepForTest(int frames, float dt) {
+    // No keys and no mouse are pressed while the test runs.
+    for (int i = 0; i < frames; ++i) {
+        update(dt);
+    }
+}
+
+void Game::debugStepWithInputForTest(int frames, float dt, float forward, float strafe) {
+    // Same convention as processGameInput: horizontal velocity is set from
+    // the keys each frame, then the real physics (and everything else) runs.
+    for (int i = 0; i < frames; ++i) {
+        const float yaw = glm::radians(camera.Yaw);
+        const glm::vec2 fwd(std::cos(yaw), std::sin(yaw));        // same as the keys
+        const glm::vec2 side(std::cos(yaw + glm::radians(90.0f)), std::sin(yaw + glm::radians(90.0f)));
+        glm::vec2 move = fwd * forward + side * strafe;
+        if (glm::length(move) > 1e-4f) {
+            move = glm::normalize(move) * 5.0f;   // moveSpeed from processGameInput
+            playerVelocity.x = move.x;
+            playerVelocity.z = move.y;
+        } else {
+            playerVelocity.x = 0.0f;
+            playerVelocity.z = 0.0f;
+        }
+        update(dt);   // updateNetwork, physics, gameplay, network send
+    }
+}
+
+void Game::debugExplodeForTest(const glm::vec3& at) {
+    createSimpleExplosion(at);
+}
+
+bool Game::debugKeyDownForTest(int key) const {
+    if (!debugKeysHeldForTest.empty()) {
+        for (int held : debugKeysHeldForTest) if (held == key) return true;
+        return false;
+    }
+    return window && glfwGetKey(window, key) == GLFW_PRESS;
+}
+
+void Game::debugStepWithKeysForTest(float dt, const std::vector<int>& keys) {
+    // Same call as the game loop makes; the key reports in debugKeyDownForTest
+    // stand in for the keyboard.
+    debugKeysHeldForTest = keys;
+    processInput(dt);
+    update(dt);
+    debugKeysHeldForTest.clear();
+}
+
+void Game::debugPlayerState(glm::vec3& feet, glm::vec3& velocity, bool& onGround) const {
+    feet = playerPos;
+    velocity = playerVelocity;
+    // Standing still, vertical velocity 0 and a surface right under the feet.
+    onGround = std::abs(playerVelocity.y) < 0.5f && playerPos.y > -20.0f;
+}
+
+bool Game::debugPlayerStuck() const {
+    // The very condition the automatic unstuck uses.
+    return bodyBlockedAt(playerPos);
 }
 
 void Game::debugShootAndStepForTest() {

@@ -284,8 +284,9 @@ bool Map::getGroundAt(const glm::vec3& position, float radius, float& groundHeig
         if (localPos.x + radius > blockMin.x && localPos.x - radius < blockMax.x &&
             localPos.z + radius > blockMin.z && localPos.z - radius < blockMax.z) {
 
-            // Check if player is above the block
-            if (localPos.y > blockMin.y) {
+            // Check if player is above the block. Strict: a surface whose top
+            // is exactly at the feet must not count as being "below" us.
+            if (localPos.y > blockMax.y + 0.001f) {
                 // Calculate ground height in local space (top of block)
                 float localGroundHeight = blockMax.y;
 
@@ -312,6 +313,46 @@ bool Map::getGroundAt(const glm::vec3& position, float radius, float& groundHeig
     }
 
     return foundGround;
+}
+
+bool Map::getFloorBelow(const glm::vec3& position, float radius, float maxDrop,
+                        float& groundHeight) const {
+    float best = -1000000.0f;
+    const float epsilon = 0.01f;   // surfaces this far above the feet still count
+
+    for (const auto& block : blocks) {
+        if (!block.solid) continue;
+
+        glm::mat4 invRotation = glm::mat4(1.0f);
+        invRotation = glm::rotate(invRotation, glm::radians(-block.pitch), glm::vec3(1.0f, 0.0f, 0.0f));
+        invRotation = glm::rotate(invRotation, glm::radians(-block.rotation), glm::vec3(0.0f, 1.0f, 0.0f));
+
+        const glm::vec3 localPos = glm::vec3(invRotation * glm::vec4(position - block.position, 1.0f)) + block.position;
+        const glm::vec3 blockMin = block.position - block.scale * 0.5f;
+        const glm::vec3 blockMax = block.position + block.scale * 0.5f;
+
+        // Horizontal overlap. The body reaches past the edge by its radius;
+        // the epsilon keeps support at a feet point exactly on an edge (walking
+        // to the very rim of a platform must not make the floor vanish).
+        const float eps = 0.01f;
+        if (localPos.x + radius <= blockMin.x - eps || localPos.x - radius >= blockMax.x + eps) continue;
+        if (localPos.z + radius <= blockMin.z - eps || localPos.z - radius >= blockMax.z + eps) continue;
+
+        // Only a surface we are on or above can hold us: its top must not be
+        // above the feet (that block is a ceiling, not the floor).
+        const float top = blockMax.y;
+        if (top > position.y + epsilon) continue;
+        if (position.y - top > maxDrop) continue;
+
+        if (top > best) best = top;
+    }
+
+    if (best <= -999999.0f) {
+        groundHeight = position.y;   // no floor below: caller keeps its height
+        return false;
+    }
+    groundHeight = best;
+    return true;
 }
 
 glm::vec3 Map::getDimensions() const {

@@ -12,6 +12,8 @@
 #include <fstream>
 #include <sstream>
 #include <algorithm>
+#include <map>
+#include <cmath>
 #include "../src/network/network.hpp"
 #include "../src/network/server_config.hpp"
 
@@ -194,7 +196,18 @@ int main(int argc, char* argv[]) {
     if (timeout > 0.0f) server.setTimeoutSeconds(timeout);
     
     // Set up callbacks
+    // The server has no map geometry, so it never invents spawn positions:
+    // the client (which knows the map) spawns, and its first input tells the
+    // server where that is.
     server.onPlayerConnect = [&server](uint32_t id) {
+        if (ServerPlayer* player = server.getPlayer(id)) {
+            for (ServerPlayer* other : server.getPlayers()) {
+                if (other->id != id) {
+                    player->position = other->position;
+                    break;
+                }
+            }
+        }
         std::cout << "[Server] Player " << id << " connected (" << server.getCurrentPlayerCount() << "/" << server.getMaxPlayers() << ")" << std::endl;
     };
 
@@ -206,12 +219,25 @@ int main(int argc, char* argv[]) {
         // Process player input on server (authoritative)
         ServerPlayer* player = server.getPlayer(id);
         if (!player) return;
+
+        // A dead player is frozen at the death spot until the respawn: their
+        // inputs must not move them (the client is on the death screen) or
+        // resurrect them before the respawn delay ends.
+        if (player->isDead) return;
         
         // Update player state based on input
-        // Use client position from input packet (client-authoritative movement)
-        player->position.x = input.posX;
-        player->position.y = input.posY;
-        player->position.z = input.posZ;
+        // Use client position from input packet (client-authoritative movement).
+        // The client reports its position AT EYE LEVEL (camera height); the
+        // server keeps feet positions (spawns and broadcasts use them), or it
+        // would spawn projectiles 1.6 units above every victim's head.
+        constexpr float kEyeHeight = 1.6f;
+        float feetY = input.posY - kEyeHeight;
+        // Stay inside the playable volume (a stray packet must not send a
+        // player under the map, where it can never be hit again).
+        feetY = std::min(18.0f, std::max(-10.0f, feetY));
+        player->position.x = std::min(48.0f, std::max(-48.0f, input.posX));
+        player->position.y = feetY;
+        player->position.z = std::min(48.0f, std::max(-48.0f, input.posZ));
         player->yaw = input.yaw;
         player->pitch = input.pitch;
         
@@ -227,11 +253,10 @@ int main(int argc, char* argv[]) {
         
         // Apply gravity
         player->velocity.y -= 9.8f * 0.016f;
-        player->position.y += player->velocity.y * 0.016f;
         
-        // Ground collision
-        if (player->position.y < 2.0f) {
-            player->position.y = 2.0f;
+        // Ground collision (feet on the floor)
+        if (player->position.y < 0.0f) {
+            player->position.y = 0.0f;
             player->velocity.y = 0.0f;
         }
         
@@ -247,8 +272,12 @@ int main(int argc, char* argv[]) {
                 cos(pitchRad) * sin(yawRad)
             );
             
-            // Use client position from input packet for projectile spawning
-            glm::vec3 clientPos(input.posX, input.posY, input.posZ);
+            // Weapon-specific projectile spawning. The packet's position is an
+            // eye position, the player record holds feet: projectiles should
+            // start around chest height, not 1.6 units above the head.
+            glm::vec3 clientPos(player->position.x,
+                                player->position.y + 1.2f,
+                                player->position.z);
             
             // Weapon-specific projectile spawning
             switch (input.weaponId) {
@@ -328,9 +357,49 @@ int main(int argc, char* argv[]) {
         std::cerr << "Failed to start server!" << std::endl;
         return 1;
     }
-    
+
+    // ── PVP damage ───────────────────────────────────────────────────────────
+    // Hits are resolved by the shooter against the victim's body box, so they
+    // arrive already validated. The server applies them (clamped, so a bad
+    // packet cannot deal more than a hit worth), faces the victim towards the
+    // shooter and broadcasts the result.
+    server.onPlayerDamage = [&server](uint32_t shooterId, const PlayerDamagePacket& hit) {
+        ServerPlayer* victim = server.getPlayer(hit.header.clientId);
+        if (!victim || victim->isDead) return;
+
+        float damage = static_cast<float>(hit.damage);
+        // A single shot never costs more than a full arsenal's worth;
+        // grenade / flashbang blasts stay lethal but are not stacked.
+        damage = hit.weaponId >= 1 ? std::min(damage, 75.0f) : std::min(damage, 100.0f);
+
+        victim->health -= damage;
+        victim->velocity = glm::vec3(0.0f);
+        if (victim->health < 0.0f) victim->health = 0.0f;
+        if (victim->health <= 0.0f) victim->isDead = true;
+
+        // Face the shooter: the victim's camera yaw follows `yaw` on its
+        // client, so this is the "you were hit from there" turn.
+        if (const ServerPlayer* shooter = server.getPlayer(shooterId)) {
+            const float dx = shooter->position.x - victim->position.x;
+            const float dz = shooter->position.z - victim->position.z;
+            if (dx * dx + dz * dz > 0.0001f) {
+                victim->yaw = glm::degrees(std::atan2(dz, dx));
+            }
+        }
+
+        std::cout << "[Server] Player " << victim->id << " hit by player "
+                  << shooterId << " for " << damage
+                  << " (health " << victim->health << ")"
+                  << (victim->isDead ? " - DEAD" : "") << std::endl;
+
+        server.broadcastPlayerStateToMap(
+            victim->id, victim->mapName, victim->position, victim->velocity,
+            victim->yaw, victim->pitch, victim->health, victim->isDead);
+    };
+
     // Main server loop
     auto lastTime = std::chrono::steady_clock::now();
+    std::map<uint32_t, std::chrono::steady_clock::time_point> deadSince;
     
     while (server.isRunning()) {
         auto now = std::chrono::steady_clock::now();
@@ -345,6 +414,35 @@ int main(int argc, char* argv[]) {
         }
         
         server.update(deltaTime);
+
+        // Respawn dead players after a short delay. This is time-based and
+        // independent of further hits: a dead client keeps streaming inputs
+        // (camera/keys), but nothing guarantees another damage packet.
+        for (ServerPlayer* player : server.getPlayers()) {
+            if (!player->isDead) {
+                deadSince.erase(player->id);
+                continue;
+            }
+            const auto it = deadSince.find(player->id);
+            if (it == deadSince.end()) {
+                deadSince[player->id] = now;
+                continue;   // let the death state reach the victim first
+            }
+            if (std::chrono::duration<float>(now - it->second).count() < 2.0f) continue;
+
+            // The client spawns on its map (clear of geometry) and moves from
+            // there; the server keeps the death state and lets the client pick
+            // the next spawn point.
+            player->velocity = glm::vec3(0.0f);
+            player->health = 100.0f;
+            player->isDead = false;
+            deadSince.erase(player->id);
+
+            std::cout << "[Server] Player " << player->id << " respawned" << std::endl;
+            server.broadcastPlayerStateToMap(
+                player->id, player->mapName, player->position, player->velocity,
+                player->yaw, player->pitch, player->health, player->isDead);
+        }
         
         // Small sleep to prevent 100% CPU usage
         usleep(1000); // 1ms

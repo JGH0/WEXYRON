@@ -57,7 +57,8 @@ enum PacketType : uint8_t {
     PACKET_DISCOVER_RESPONSE = 14,
     PACKET_MAP_CHANGE = 15,        // Client requesting map change
     PACKET_MAP_PLAYER_COUNT = 16,  // Server sending player counts per map
-    PACKET_CONNECT_REJECT = 17     // Server refusing a connection (reason follows)
+    PACKET_CONNECT_REJECT = 17,    // Server refusing a connection (reason follows)
+    PACKET_PLAYER_DAMAGE = 18      // Client reporting a hit on another player
 };
 
 /// Why a connection attempt was refused (PACKET_CONNECT_REJECT.reason).
@@ -115,6 +116,15 @@ struct PlayerStatePacket {
     float yaw, pitch;
     float health;
     bool isDead;
+};
+
+/// A hit one client scored on another player (client -> server -> victim and
+/// back to the shooter as an authoritative PlayerState). The shooter checked
+/// the collision against the victim's body, so the server applies it as-is.
+struct PlayerDamagePacket {
+    PacketHeader header;       ///< clientId = victim, sent by the shooter
+    uint16_t damage;
+    uint8_t  weaponId;         ///< projectile type that hit (0 bullet, 1 grenade, ...)
 };
 
 // New player joined
@@ -229,6 +239,12 @@ public:
     // Send map change request to server
     void sendMapChange(const std::string& mapName);
 
+    // Send a keepalive PING (update() does this on its own every second)
+    void sendPing();
+
+    // Report a hit on player `victimId` (resolved against its body below)
+    void sendPlayerDamage(uint32_t victimId, uint16_t damage, uint8_t weaponId);
+
 private:
     socket_t socketFd;
     sockaddr_in serverAddr;
@@ -252,6 +268,11 @@ private:
     /// Give up on an unanswered handshake after this long (seconds), so the
     /// screen can report "no answer" instead of staying on CONNECTING forever.
     static constexpr double kHandshakeTimeout = 8.0;
+    /// Interval between keepalive PINGs while connected (seconds). They prove
+    /// to the server that an idle client is still alive, and its PONG proves
+    /// the other way round (see secondsSinceLastReceive).
+    static constexpr double kKeepaliveInterval = 1.0;
+    double lastPingSend = 0.0;     ///< time of the last keepalive PING
 
     /// Resolve `address` into serverAddr; false when it is not a valid IPv4.
     bool resolveTarget(const std::string& address, uint16_t port);
@@ -341,6 +362,9 @@ public:
 
     // Callbacks
     std::function<void(uint32_t, const PlayerInputPacket&)> onPlayerInput;
+    /// Client-reported hit (shooter id, packet). Apply it to the victim found
+    /// in packet.header.clientId.
+    std::function<void(uint32_t, const PlayerDamagePacket&)> onPlayerDamage;
     std::function<void(uint32_t)> onPlayerConnect;
     std::function<void(uint32_t)> onPlayerDisconnect;
     

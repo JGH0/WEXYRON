@@ -366,6 +366,38 @@ void NetworkClient::sendPlayerInput(float moveX, float moveZ, float yaw, float p
     sendPacket(&packet, sizeof(packet));
 }
 
+void NetworkClient::sendPing() {
+    if (!connected) return;
+
+    PacketHeader ping;
+    ping.magic = PACKET_MAGIC;
+    ping.type = PACKET_PING;
+    ping.sequence = sequence++;
+    ping.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    ping.clientId = clientId;
+
+    // Even a failed send updates the clock: the next attempt comes next tick.
+    sendPacket(&ping, sizeof(ping));
+    lastPingSend = nowSeconds();
+}
+
+void NetworkClient::sendPlayerDamage(uint32_t victimId, uint16_t damage, uint8_t weaponId) {
+    if (!connected || victimId == 0) return;
+
+    PlayerDamagePacket packet;
+    packet.header.magic = PACKET_MAGIC;
+    packet.header.type = PACKET_PLAYER_DAMAGE;
+    packet.header.sequence = sequence++;
+    packet.header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    packet.header.clientId = victimId;      // who was hit
+    packet.damage = damage;
+    packet.weaponId = weaponId;
+
+    sendPacket(&packet, sizeof(packet));
+}
+
 void NetworkClient::sendMapChange(const std::string& mapName) {
     if (!connected) return;
 
@@ -403,6 +435,12 @@ void NetworkClient::update() {
         if (now - lastHandshakeSend >= kHandshakeRetryInterval) {
             sendConnectPacket();
         }
+    } else if (nowSeconds() - lastPingSend >= kKeepaliveInterval) {
+        // Keepalive: a client sitting in a menu sends nothing else, so the
+        // server would drop it as timed out. The PONG (below) also keeps our
+        // own server-liveness timer (secondsSinceLastReceive) happy, since a
+        // lone player on a map receives no broadcasts at all.
+        sendPing();
     }
     
     char buffer[MAX_PACKET_SIZE];
@@ -432,6 +470,8 @@ void NetworkClient::update() {
                 connecting = false;
                 connected = true;
                 lastReceive = nowSeconds();
+                // First keepalive one interval from now (sendPing sets the clock).
+                lastPingSend = lastReceive - kKeepaliveInterval;
                 rejectReason_ = 0;
                 lastError.clear();
                 break;
@@ -835,7 +875,39 @@ void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_
             }
             break;
         }
+
+        case PACKET_PLAYER_DAMAGE: {
+            // The shooter resolved the hit against the victim's body (the same
+            // box everyone is drawn with); the server only validates it and
+            // relays the outcome to both sides.
+            if (size < sizeof(PlayerDamagePacket)) return;
+            const PlayerDamagePacket* hit = (const PlayerDamagePacket*)data;
+            if (hit->header.clientId == 0 || hit->header.clientId == 0xFFFFFFFFu) return;
+
+            auto victim = players.find(hit->header.clientId);
+            if (victim == players.end() || !victim->second.active) break;
+
+            if (onPlayerDamage) {
+                onPlayerDamage(header->clientId, *hit);
+            }
+            break;
+        }
         
+        case PACKET_PING: {
+            // Keepalive (or latency probe): answer so the client knows the
+            // session is alive. lastReceive is refreshed on any packet, and
+            // the game disconnects when nothing arrives for 5 seconds.
+            PacketHeader pong;
+            pong.magic = PACKET_MAGIC;
+            pong.type = PACKET_PONG;
+            pong.sequence = 0;
+            pong.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            pong.clientId = header->clientId;
+            sendPacket(&pong, sizeof(pong), from);
+            break;
+        }
+
         case PACKET_PONG: {
             // Update player ping/latency if needed
             break;

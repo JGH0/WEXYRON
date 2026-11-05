@@ -211,6 +211,23 @@ public:
      * @return true if ground found
      */
     bool getGroundAt(const glm::vec3& position, float radius, float& groundHeight, glm::vec3& groundNormal) const;
+
+    /**
+     * @brief Highest surface under the feet at `position` (0 is returned when
+     *        nothing lies below within `maxDrop`)
+     *
+     * Unlike getGroundAt(), only blocks whose top is at or below the feet
+     * count, so a body inside a platform does not consider itself standing
+     * on top of it.
+     *
+     * @param position Feet position
+     * @param radius Horizontal extent of the body
+     * @param maxDrop How far below the feet ground is still considered
+     * @param groundHeight Output: ground height (position.y when none found)
+     * @return true if ground was found
+     */
+    bool getFloorBelow(const glm::vec3& position, float radius, float maxDrop,
+                       float& groundHeight) const;
     
     /**
      * @brief Get map dimensions

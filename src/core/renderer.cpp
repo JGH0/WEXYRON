@@ -356,6 +356,7 @@ void Renderer::buildWorld(Map* map) {
 
 void Renderer::beginFrame() {
     // The per-frame world batch and the UI list are rebuilt from scratch.
+    worldDrawsThisFrame_ = 0;
     batches_[WORLD_ALPHA].needsUpload = true;
     uiItems_.clear();
     glClearColor(0.1f, 0.2f, 0.3f, 1.0f);
@@ -602,6 +603,10 @@ void Renderer::uploadBatch(BatchId id) {
 void Renderer::drawBatch(BatchId id) {
     Batch& batch = batches_[id];
     if (batch.instances.empty()) return;
+    if (id == WORLD_OPAQUE) {
+        ++worldDrawsThisFrame_;
+        mapInstancesLastFrame_ = batch.instances.size();
+    }
     glBindVertexArray(batch.vao);
     glDrawArraysInstanced(GL_TRIANGLES, 0, kQuadVertexCount,
                           static_cast<GLsizei>(batch.instances.size()));
@@ -737,33 +742,6 @@ void Renderer::endFrame() {
     glDisable(GL_BLEND);
     glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
     glUseProgram(0);
-}
-
-void Renderer::renderWorld() {
-    // Map geometry is persistent in WORLD_OPAQUE. Callers queue dynamic world
-    // objects (enemies, projectiles) right after this, so only the static batch
-    // is flushed here; endFrame() draws the rest.
-    if (!shader_ || batches_[WORLD_OPAQUE].instances.empty()) return;
-
-    const glm::mat4 worldVP = worldProjection_ * worldView_;
-    glBindBuffer(GL_UNIFORM_BUFFER, frameUBO_);
-    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(glm::mat4), glm::value_ptr(worldVP));
-    glBindBuffer(GL_UNIFORM_BUFFER, 0);
-
-    shader_->use();
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D_ARRAY, textureArray_);
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, fontTexture_);
-    glActiveTexture(GL_TEXTURE0);
-    shader_->setInt("uTextures", 0);
-    shader_->setInt("uFont", 1);
-
-    uploadBatch(WORLD_OPAQUE);
-    applyBlendState(BlendMode::Opaque);
-    drawBatch(WORLD_OPAQUE);
-    glDepthMask(GL_TRUE);
-    glEnable(GL_DEPTH_TEST);
 }
 
 // ---------------------------------------------------------------------------

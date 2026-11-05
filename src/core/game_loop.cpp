@@ -120,6 +120,7 @@ void Game::update(float deltaTime) {
     if (isConnectedToServer()) {
         checkProjectilePlayerCollision();
         checkPlayerPlayerCollision();
+        updateRemotePlayerDeath(deltaTime);
     }
 }
 
@@ -166,11 +167,12 @@ void Game::render() {
                                                 (float)fbW / (float)fbH, 0.1f, 100.0f);
         renderer.setCamera(view, projection);
 
-        // Static map geometry lives in a persistent GPU buffer; this is one
-        // instanced draw call, not one per block.
-        if (currentMap) {
-            renderer.renderWorld();
-        }
+        // Map geometry is persistent in the WORLD_OPAQUE batch and is drawn
+        // once by endFrame(). Do not draw the map here as well: the frame is
+        // still open, so a second draw (with another camera position) showed
+        // the world twice ("two worlds" / doubled seams).
+        // Bomb sites, enemies, projectiles are queued right below; the draw
+        // itself happens once in endFrame().
 
         // Render bomb sites and bomb
         renderBombSites();
@@ -212,29 +214,7 @@ void Game::render() {
 
         // Render remote players (multiplayer)
         if (multiplayerMode) {
-            for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
-                if (remotePlayers[i].active && !remotePlayers[i].isDead) {
-                    const float interpolationFactor = 0.2f;
-                    glm::vec3 targetPos  = remotePlayers[i].position;
-                    glm::vec3 currentPos = remotePlayers[i].renderPosition;
-
-                    if (remotePlayers[i].renderPosition.x == 0 &&
-                        remotePlayers[i].renderPosition.y == 0 &&
-                        remotePlayers[i].renderPosition.z == 0) {
-                        remotePlayers[i].renderPosition = targetPos;
-                    } else {
-                        remotePlayers[i].renderPosition += (targetPos - currentPos) * interpolationFactor;
-                    }
-
-                    glm::mat4 model = glm::mat4(1.0f);
-                    model = glm::translate(model, remotePlayers[i].renderPosition);
-                    model = glm::scale(model, glm::vec3(0.6f, 1.6f, 0.6f));
-                    glm::vec3 color = (remotePlayers[i].id % 2 == 0)
-                                    ? glm::vec3(1.0f, 0.0f, 0.0f)
-                                    : glm::vec3(0.0f, 1.0f, 0.0f);
-                    renderer.drawCube(model, color);
-                }
-            }
+            renderRemotePlayers();
         }
 
         // Render crosshair

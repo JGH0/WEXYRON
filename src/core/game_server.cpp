@@ -48,9 +48,28 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
         // Only sync health/death state for local player (client controls own movement)
         if (networkClient && packet.playerId == networkClient->getClientId()) {
             // Don't override local position/velocity - client controls own movement
-            // Only sync health and death state from server
-            playerHealth = packet.health;
-            isDead = packet.isDead;
+            // Only sync health and death state from server.
+            //
+            // The server is authoritative on death: when it reports health 0 /
+            // isDead the player dies where they stand (after a hit), and the
+            // respawned state it sends a few seconds later brings them back.
+            if (packet.isDead || packet.health <= 0.0f) {
+                if (playerHealth > 0.0f) playerHealth = 0.0f;
+                if (!isDead) dieLocally();
+            } else if (isDead) {
+                // The server put us back on our feet (respawn).
+                respawnLocally();
+            } else {
+                // Alive and well. Health shown is the server's health minus
+                // shots we reported that it has not forwarded back yet.
+                int pending = 0;
+                for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
+                    if (!remotePlayers[i].active || !pvpRemotes_[i].pending) continue;
+                    pending += pvpRemotes_[i].damageSent;
+                }
+                pending = std::min(pending, 99);
+                playerHealth = std::max(0.0f, packet.health - static_cast<float>(pending));
+            }
             return;
         }
 
@@ -58,6 +77,10 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
         if (packet.playerId != networkClient->getClientId()) {
             for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
                 if (!remotePlayers[i].active || remotePlayers[i].id == packet.playerId) {
+                    // A (re)appearing player starts its bookkeeping clean.
+                    if (!remotePlayers[i].active || remotePlayers[i].id != packet.playerId) {
+                        pvpRemotes_[i] = PvpRemote{};
+                    }
                     remotePlayers[i].id       = packet.playerId;
                     remotePlayers[i].position = glm::vec3(packet.posX, packet.posY, packet.posZ);
                     remotePlayers[i].velocity = glm::vec3(packet.velX, packet.velY, packet.velZ);
@@ -66,6 +89,9 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
                     remotePlayers[i].health   = packet.health;
                     remotePlayers[i].isDead   = packet.isDead;
                     remotePlayers[i].active   = true;
+                    // The server confirmed health got through: no need to
+                    // re-send the damage we reported for this player.
+                    pvpRemotes_[i].damageSent = 0;
                     break;
                 }
             }

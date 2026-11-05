@@ -131,10 +131,26 @@ void Game::processInput(float deltaTime) {
         }
         processEditorInput();
     } else if (gameState == DEAD) {
-        if (glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS ||
-            glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS ||
-            glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
-            resetGame();
+        if (!isConnectedToServer()) {
+            // Single player: ENTER/SPACE/click restarts the run as before.
+            if (glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS ||
+                glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS ||
+                glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
+                resetGame();
+            }
+        } else {
+            // Multiplayer: respawn in place, on a key/click edge (holding the
+            // button that got you killed must not instantly respawn you).
+            const bool enter = glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS;
+            const bool space = glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
+            const bool click = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+            static bool respawnHeld = false;
+            if ((enter || space || click) && !respawnHeld) {
+                respawnHeld = true;
+                respawnLocally();
+            } else if (!enter && !space && !click) {
+                respawnHeld = false;
+            }
         }
     }
 
@@ -259,7 +275,7 @@ void Game::processGameInput(float deltaTime) {
     if (glfwGetKey(window, GLFW_KEY_U) == GLFW_PRESS) {
         playerPos = glm::vec3(0.0f, 2.0f, 0.0f); // Reset to center well above floor
         playerVelocity = glm::vec3(0.0f, 0.0f, 0.0f); // Stop all movement
-        camera.Position = glm::vec3(0.0f, 3.6f, 0.0f); // Reset camera
+        camera.Position = glm::vec3(0.0f, playerPos.y + eyeHeight, 0.0f); // Reset camera
         inputProcessed = true;
     }
     
@@ -310,10 +326,16 @@ void Game::processGameInput(float deltaTime) {
         playerVelocity.z = 0.0f;
     }
     
-    // Jump input
-    if (glfwGetKey(window, keyBindings.jump) == GLFW_PRESS) {
-        handleJump();
-        inputProcessed = true;
+    // Jump input: a fresh press only (holding the key does not auto-jump).
+    if (debugKeyDownForTest(keyBindings.jump)) {
+        if (!inp.jumpHeld) {
+            inp.jumpHeld = true;
+            handleJump();
+            inputProcessed = true;
+        }
+    } else {
+        inp.jumpHeld = false;
+        if (gameState == PLAYING) isJumping = false;   // this jump key press is over
     }
     
     // Shoot input: mouse button by default, rebindable in Settings > Controls

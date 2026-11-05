@@ -98,9 +98,6 @@ public:
 
     // ── Convenience wrappers used by the game code ───────────────────────────
 
-    /// Draw a full frame's worth of map geometry from the prebuilt batch.
-    void renderWorld();
-
     /// Number of world instances currently uploaded (map geometry).
     size_t worldInstanceCount() const { return worldInstanceCount_; }
 
@@ -304,6 +301,15 @@ private:
 
     size_t worldInstanceCount_ = 0;
     glm::vec3 lastUiExtent_{800.0f, 600.0f, 1.0f}; ///< ortho canvas size for overlays
+    int worldDrawsThisFrame_ = 0;      ///< map batch draws in the current frame
+    size_t mapInstancesLastFrame_ = 0; ///< map batch size at frame end
+
+public:
+    /// How many times the map batch was drawn during the last frame. It must be
+    /// exactly 1 (a second draw shows the world twice with different cameras).
+    int debugWorldDrawsLastFrame() const { return worldDrawsThisFrame_; }
+    /// The map batch instance count at the end of the last frame.
+    size_t debugMapInstancesLastFrame() const { return mapInstancesLastFrame_; }
 };
 
 #endif // RENDERER_HPP

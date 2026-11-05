@@ -17,6 +17,7 @@
 #include <glm/glm.hpp>
 #include <unordered_map>
 #include <filesystem>
+#include <chrono>
 #include <cstring>
 #include "camera.hpp"
 #include "renderer.hpp"
@@ -186,6 +187,55 @@ public:
     int debugState() const { return (int)gameState; }
     /// Open a menu screen by name ("main", "settings", "maps", "server").
     void debugOpenMenu(const std::string& name);
+
+    // ── Spawn / movement tests ───────────────────────────────────────────────
+    /// Start a real match on `mapFile` exactly like the map menu does
+    /// (installMap -> resetGame -> PLAYING).
+    bool debugStartMapForTest(const std::string& mapFile);
+    /// Step real gameplay frames without input, with the current map loaded.
+    void debugStepForTest(int frames, float dt);
+    /// Press the movement/jump keys for `frames` frames (real input path).
+    void debugStepWithInputForTest(int frames, float dt, float forward, float strafe);
+    /// Player feet position, velocity and on-ground flag.
+    void debugPlayerState(glm::vec3& feet, glm::vec3& velocity, bool& onGround) const;
+    /// Live map pointer (nullptr when a map is loading).
+    Map* debugCurrentMap() const { return currentMap; }
+    /// True when the player body overlaps solid geometry (stuck).
+    bool debugPlayerStuck() const;
+    /// The normal "died and came back" path (resetGame).
+    void debugRespawnForTest() { resetGame(); }
+    /// Renderer diagnostics for the rendering test: map draws in the last frame.
+    int debugWorldDrawsLastFrame() const { return renderer.debugWorldDrawsLastFrame(); }
+    size_t debugMapInstancesLastFrame() const { return renderer.debugMapInstancesLastFrame(); }
+    /// Press jump exactly like a key press does: a fresh press that starts the
+    /// jump (a test helper, so several jumps can follow each other).
+    void debugJumpForTest() { isJumping = false; handleJump(); }
+    /// Detonate a grenade at `at` exactly like a grenade would (blast + damage).
+    void debugExplodeForTest(const glm::vec3& at);
+    /// Current player health (grenade test).
+    float debugPlayerHealth() const { return playerHealth; }
+    /// Current bindings (key test).
+    int debugJumpKey() const { return keyBindings.jump; }
+    int debugGrenadeKey() const { return keyBindings.grenade; }
+    /// Run one frame of real gameplay input holding exactly these keys (a
+    /// keyboard press, as far as processGameInput can tell).
+    void debugStepWithKeysForTest(float dt, const std::vector<int>& keys);
+    /// Player feet Y (key test: did the key press jump?).
+    float debugFeetY() const { return playerPos.y; }
+    /// Teleport for physics tests: place the feet and set the vertical speed.
+    void debugSetFeetForTest(const glm::vec3& feet) { playerPos = feet; }
+    void debugSetVerticalVelocityForTest(float vy) { playerVelocity.y = vy; }
+    /// True when the player stands on a floor right now (feet on a surface).
+    bool debugStandingOnFloorForTest() const { return isOnGround(); }
+    /// Keys held during debugStepWithKeysForTest (empty = real keyboard).
+    std::vector<int> debugKeysHeldForTest;
+    /// Is `key` pressed? Either the real keyboard or a test's scripted keys.
+    bool debugKeyDownForTest(int key) const;
+    /// Feet position of a remote player as this client believes it.
+    bool debugRemotePlayerFeetForTest(uint32_t id, glm::vec3& feet) const {
+        return getRemotePlayerFeet(id, feet);
+    }
+
 
     /// Write the current settings to the settings file.
     bool saveSettings();
@@ -431,6 +481,10 @@ private:
         bool rPressed         = false;
         bool digitPressed[10];
 
+        /// Jump key edge: a jump starts on a fresh press, so holding the key
+        /// does not bunny-hop after landing.
+        bool jumpHeld         = false;
+
         // Editor specific
         bool gPressed         = false;
         bool mPressed         = false;
@@ -644,6 +698,33 @@ private:
     float playerHealth;
     float playerMaxHealth;
     float playerDamageCooldown;
+
+    // ── Player body ───────────────────────────────────────────────────────────
+    // Player positions (local, remote, bots) are feet positions; the camera
+    // sits eyeHeight above them and the body box spans the whole character.
+    // Bodies and hit detection share these numbers so what you see is what
+    // you can hit.
+    static constexpr float eyeHeight   = 1.6f;   ///< camera / eye above the feet
+    static constexpr float bodyWidth   = 0.8f;   ///< body box width and depth
+    static constexpr float bodyHeight  = 1.8f;   ///< body box height
+    /// Distance from a shot projectile to the nearest body surface below which
+    /// the shot counts as a hit.
+    static constexpr float bodyHitSlack = 0.15f;
+    /// Height above the feet at which a shot or explosion is aimed at a body
+    /// (chest height), used for hits that carry no reliable height (grenades).
+    static constexpr float bodyCenterHeight = bodyHeight * 0.5f;
+    /// PVP point-blank damage per second (see checkPlayerPlayerCollision).
+    static constexpr float playerCollisionDps = 15.0f;
+
+    /// Grenade blast: damage falls off linearly to 0 at the radius. A body
+    /// only half a block from the blast (eye-thrown grenades land mid-air)
+    /// should still take most of it, so the radius is a bit larger than the
+    /// visible fireball.
+    float explosionRadius_ = 4.0f;
+    float explosionDamage_ = 65.0f;
+
+    /// Upward speed of a jump (m/s). With gravity 9.8 that is a 0.8 m peak.
+    static constexpr float kJumpSpeed = 4.0f;
     
     /// Screen damage effect
     float damageEffectTime; // Time remaining for damage screen effect
@@ -693,6 +774,67 @@ private:
     };
     static const int MAX_REMOTE_PLAYERS = 8;
     RemotePlayer remotePlayers[MAX_REMOTE_PLAYERS];
+
+    /// Upright body box of a player standing at `feet` (feet = bottom centre).
+    static void bodyBox(const glm::vec3& feet, glm::vec3& boxMin, glm::vec3& boxMax);
+    /// Distance from `point` to a body box standing at `feet` (0 = inside).
+    static float distanceToBody(const glm::vec3& point, const glm::vec3& feet);
+    /// True when `point` is inside (or within `slack` of) the body at `feet`.
+    static bool pointHitsBody(const glm::vec3& point, const glm::vec3& feet, float slack);
+    /// Move `feet` to the nearest position where the body does not overlap
+    /// geometry and rests on a floor. Returns false if no such spot was found.
+    bool placeAtSafePosition(glm::vec3& feet, float searchRadius = 1.5f) const;
+    /// True when the body standing at `feet` overlaps solid geometry.
+    bool bodyBlockedAt(const glm::vec3& feet) const;
+    /// True when a horizontal slice of the body `height` above the feet is
+    /// inside a solid block (body occupancy, see bodyBlockedAt). With
+    /// `minHeightInclusive` a block starting exactly at the slice counts too.
+    bool sliceBlocked(const glm::vec3& feet, float height, float radius,
+                      bool minHeightInclusive = true) const;
+    /// Floor support: a surface at most kGroundSnap below the feet.
+    bool isSupportedAt(const glm::vec3& feet) const;
+    /// Can the player start a jump right now? (standing, not already rising)
+    bool isOnGround() const;
+    /// Move the feet down from their height to `targetY`, stopping on the
+    /// surface they reach. Returns true when they landed on it.
+    bool landedOnFloor(glm::vec3& feet, float targetY, float& restingY) const;
+    /// Largest step up/down that still counts as standing on a surface.
+    static constexpr float kGroundSnap = 0.35f;
+    /// World position of the remote player `id` (feet), false when unknown.
+    bool getRemotePlayerFeet(uint32_t id, glm::vec3& feet) const;
+
+    /// Connection time of each local shot that may still be in flight.
+    std::chrono::steady_clock::time_point lastLocalShot_;
+
+    /// Remote-player PVP bookkeeping, indexed like remotePlayers.
+    struct PvpRemote {
+        float lastHitTime = 0.0f;   ///< timestamp of the last bullet/pellet hit
+        float health = 100.0f;      ///< health as this client believes it
+        int   damageSent = 0;       ///< damage reported but not yet confirmed
+        bool  pending = false;      ///< damageSent still in flight
+        std::chrono::steady_clock::time_point sentAt; ///< when it was sent
+    };
+    PvpRemote pvpRemotes_[MAX_REMOTE_PLAYERS];
+    /// Time windows (seconds) of the client-side PVP checks.
+    static constexpr float pvpDuplicateHitWindow = 0.05f;
+    static constexpr float pvpReportReconcileWindow = 1.0f;
+    static constexpr float pvpShotTravelTime = 2.0f;
+
+    /// Player damage that is not tied to a projectile (explosions, contact).
+    /// Applies the damage and resolves death on both ends of the session.
+    void applyPlayerDamage(float damage);
+    /// Local death: stop the player and tell the server (it respawns us).
+    void dieLocally();
+    /// Respawn outside of a round cycle (multiplayer hit ENTER).
+    void respawnLocally();
+    /// Bots are local practice targets: they do not exist in multiplayer.
+    void clearBots();
+    void updateRemotePlayerDeath(float deltaTime);
+    /// Resolve our own shot against remote players' bodies; true on a hit.
+    bool checkProjectileRemoteCollision(Projectile& projectile);
+
+    void checkExplosionRemoteCollision(const glm::vec3& position, float radius, float damage);
+    void renderRemotePlayers();
     
     /// Server connection
     std::string serverAddress;
@@ -835,8 +977,13 @@ private:
     
     /**
      * @brief Create simple explosion at position
+     *
+     * @param position Blast position (drawn and heard there)
+     * @param source The projectile that exploded, when there is one: only
+     *               the local player's own grenade damages the local player
+     *               (relayed blasts are resolved by the network code)
      */
-    void createSimpleExplosion(glm::vec3 position);
+    void createSimpleExplosion(glm::vec3 position, const Projectile* source = nullptr);
     
     /**
      * @brief Create flashbang effect at position
