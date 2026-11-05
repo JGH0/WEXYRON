@@ -21,6 +21,26 @@
 #include <filesystem>
 #include <algorithm>
 #include <cctype>
+#if defined(_WIN32)
+#include <cstdio>
+#endif
+
+// ---------------------------------------------------------------------------
+// Startup failure diagnostics
+// ---------------------------------------------------------------------------
+// A Windows release is launched by double-click, which opens a console window
+// that vanishes as soon as the process exits: any error printed there is lost.
+// Pause before exiting so the message can actually be read.
+namespace {
+void waitForEnterOnFailure() {
+#if defined(_WIN32)
+    std::cerr << "Press Enter to close..." << std::endl;
+    std::cerr.flush();
+    std::fflush(stdout);
+    (void)std::getchar();
+#endif
+}
+} // namespace
 
 // ---------------------------------------------------------------------------
 // Constructor
@@ -198,8 +218,16 @@ Game::Game(int width, int height)
     glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_X11);
 #endif
 #endif
+    // Surface GLFW's own error text (driver, WGL, platform errors) instead of
+    // a bare "Failed to create window": on Windows a double-clicked exe also
+    // opens a console that closes immediately, so wait for a key on failure.
+    glfwSetErrorCallback([](int code, const char* desc) {
+        std::cerr << "GLFW error " << code << ": " << (desc ? desc : "(no description)")
+                  << std::endl;
+    });
     if (!glfwInit()) {
         std::cerr << "Failed to initialize GLFW" << std::endl;
+        waitForEnterOnFailure();
         exit(-1);
     }
     // The shaders are GLSL 330, so ask for a real 3.3 core context. The old
@@ -215,9 +243,21 @@ Game::Game(int width, int height)
     glfwWindowHint(GLFW_COCOA_GRAPHICS_SWITCHING, GLFW_TRUE);
 
     window = glfwCreateWindow(width, height, "Cube CS Lite", nullptr, nullptr);
+#ifdef _WIN32
+    if (!window) {
+        // Remote desktop sessions, basic display drivers and some old Intel/
+        // Microsoft drivers only expose a compatibility profile. GLSL 330
+        // still compiles there, so a 3.3 compatibility context is enough.
+        std::cerr << "Core profile window failed, retrying with a "
+                     "compatibility profile..." << std::endl;
+        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_ANY_PROFILE);
+        window = glfwCreateWindow(width, height, "Cube CS Lite", nullptr, nullptr);
+    }
+#endif
     if (!window) {
         std::cerr << "Failed to create GLFW window" << std::endl;
         glfwTerminate();
+        waitForEnterOnFailure();
         exit(-1);
     }
     glfwMakeContextCurrent(window);
