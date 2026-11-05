@@ -1,0 +1,192 @@
+# GitLab CI: release artifacts for the game client only (the dedicated server
+# has no job here).
+#
+#   Linux   -> AppImage  (Debian-based image, linuxdeploy + appimagetool)
+#   Windows -> .exe      (cross-compiled with MinGW-w64, shipped as a portable
+#                         zip: game.exe + runtime/GLFW DLLs + assets/)
+#
+# Runs on the default branch, on tags and on merge requests. On a tag the
+# artifacts are attached to a GitLab Release.
+
+stages:
+  - build
+  - package
+
+variables:
+  GIT_DEPTH: "0"
+  GAME_LINUX: build/bin/game
+  GAME_WINDOWS: build/bin/game.exe
+  # Official GLFW prebuilt binaries for MinGW-w64 (Debian has no mingw glfw).
+  GLFW_URL: "https://github.com/glfw/glfw/releases/download/3.4/glfw-3.4.bin.WIN64.zip"
+  GLFW_DIR: "$CI_PROJECT_DIR/.mingw-deps/glfw"
+  MINGW_INCLUDE: "/usr/x86_64-w64-mingw32/include"
+
+# Packages shared by the Debian-based jobs.
+.debian-deps: &debian-deps
+  - apt-get update -qq
+  - >-
+    apt-get install -y -qq --no-install-recommends
+    build-essential make git
+    libglfw3-dev libglm-dev uuid-dev
+    libgl1-mesa-dev libx11-dev libxrandr-dev libxi-dev libxcursor-dev libxinerama-dev
+    libfuse2 file curl ca-certificates desktop-file-utils
+
+.debian:
+  image: debian:bookworm-slim
+  before_script:
+    - *debian-deps
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
+
+# Same as .debian, plus the AppImage tooling used by package:appimage. The
+# tools are AppImages themselves, so they run extracted (no FUSE in containers).
+.appimage:
+  extends: .debian
+  variables:
+    APPIMAGE_TOOL: /usr/local/bin/appimagetool
+    LINUXDEPLOY: /usr/local/bin/linuxdeploy
+    APPIMAGE_EXTRACT_AND_RUN: "1"
+  before_script:
+    - *debian-deps
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
+    - >-
+      curl -fsSL -o "$APPIMAGE_TOOL"
+      https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+    - >-
+      curl -fsSL -o "$LINUXDEPLOY"
+      https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+    - chmod +x "$APPIMAGE_TOOL" "$LINUXDEPLOY"
+
+# MinGW-w64 toolchain + GLFW shared library for the Windows jobs.
+.mingw:
+  image: debian:bookworm-slim
+  before_script:
+    - apt-get update -qq
+    # The posix-threads MinGW flavour is required for std::thread/std::mutex
+    # (the default Debian flavour is win32 threads). The unversioned g++ is a
+    # symlink managed by update-alternatives, so select it explicitly.
+    - >-
+      apt-get install -y -qq --no-install-recommends
+      make git zip curl python3 ca-certificates libglm-dev
+      mingw-w64 g++-mingw-w64-x86-64-posix
+    - update-alternatives --set x86_64-w64-mingw32-g++ /usr/bin/x86_64-w64-mingw32-g++-posix
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
+    # Makefile.windows calls plain "g++"; point it at the cross compiler.
+    - ln -sf /usr/bin/x86_64-w64-mingw32-g++-posix /usr/local/bin/g++
+    # GLM is header-only; copy it into the MinGW sysroot.
+    - cp -a /usr/include/glm "$MINGW_INCLUDE/"
+    # GLFW headers go into the compiler's system include path; the DLL import
+    # library and glfw3.dll (for packaging) go into the sysroot.
+    - mkdir -p "$GLFW_DIR" "$MINGW_INCLUDE/GLFW" /usr/x86_64-w64-mingw32/lib
+    - curl -fsSL -o /tmp/glfw.zip "$GLFW_URL"
+    - python3 -m zipfile -e /tmp/glfw.zip "$GLFW_DIR"
+    - cp "$GLFW_DIR/glfw-3.4.bin.WIN64/include/GLFW/glfw3.h" "$MINGW_INCLUDE/GLFW/"
+    - cp "$GLFW_DIR/glfw-3.4.bin.WIN64/include/GLFW/glfw3native.h" "$MINGW_INCLUDE/GLFW/"
+    # The Makefile asks for -lglfw3, so the DLL import library must be named
+    # libglfw3.a (libglfw3dll.a is only found for -lglfw3dll). It goes into the
+    # GCC lib dir, which the linker searches by default.
+    - >-
+      cp "$GLFW_DIR/glfw-3.4.bin.WIN64/lib-mingw-w64/libglfw3dll.a"
+      "$(dirname "$(x86_64-w64-mingw32-g++-posix -print-libgcc-file-name)")/libglfw3.a"
+    - cp "$GLFW_DIR/glfw-3.4.bin.WIN64/lib-mingw-w64/glfw3.dll" /usr/x86_64-w64-mingw32/bin/
+
+# ---------------------------------------------------------------------------
+# Builds
+# ---------------------------------------------------------------------------
+
+build:linux:
+  extends: .debian
+  stage: build
+  script:
+    - make -j"$(nproc)" client
+    - test -x "$GAME_LINUX"
+    - file "$GAME_LINUX"
+  artifacts:
+    paths: ["build/bin/game"]
+    expire_in: 1 day
+
+build:windows:
+  extends: .mingw
+  stage: build
+  variables:
+    CXX: x86_64-w64-mingw32-g++
+  script:
+    # Makefile.windows (shared with BUILD.bat/MSYS2) has no rule for the
+    # miniaudio object and the linker resolves -lglfw3 to its DLL import
+    # library; give it both, then throw the stubs away.
+    - mkdir -p build/obj/third_party
+    - g++ -std=c++17 -I./include -I./include/stb -I./src -DGLFW_INCLUDE_NONE -c third_party/miniaudio/miniaudio.c -o build/obj/third_party/miniaudio.o
+    - CXXFLAGS=-Wl,--out-implib=build/obj/libglfw3.dll.a make -f Makefile.windows client
+    - install -m 755 "$GAME_WINDOWS" /tmp/game.exe
+    # Only the exe is an artifact; don't upload the whole build tree.
+    - rm -rf build
+    - install -D -m 755 /tmp/game.exe "$GAME_WINDOWS"
+    - file "$GAME_WINDOWS"
+  artifacts:
+    paths: ["build/bin/game.exe"]
+    expire_in: 1 day
+
+# ---------------------------------------------------------------------------
+# Packages
+# ---------------------------------------------------------------------------
+
+package:appimage:
+  extends: .appimage
+  stage: package
+  needs: ["build:linux"]
+  script:
+    - chmod +x tools/package.sh
+    - tools/package.sh appimage "$GAME_LINUX" --no-build
+  artifacts:
+    paths: ["dist/*.AppImage"]
+    expire_in: 30 days
+
+package:exe:
+  extends: .mingw
+  stage: package
+  needs: ["build:windows"]
+  script:
+    - chmod +x tools/package.sh
+    # Runtime DLLs live in the GCC lib dir (libstdc++/libgcc) and the sysroot
+    # lib dir (libwinpthread); glfw3.dll was placed in the sysroot bin by
+    # .mingw, so expose all three through MINGW_DLL_DIR.
+    - export MINGW_DLL_DIR="$CI_PROJECT_DIR/.mingw-dlls"
+    - mkdir -p "$MINGW_DLL_DIR"
+    - cp "$(dirname "$(x86_64-w64-mingw32-g++-posix -print-libgcc-file-name)")"/*.dll "$MINGW_DLL_DIR"/
+    - cp /usr/x86_64-w64-mingw32/lib/libwinpthread-1.dll "$MINGW_DLL_DIR"/
+    - cp /usr/x86_64-w64-mingw32/bin/glfw3.dll "$MINGW_DLL_DIR"/
+    - tools/package.sh exe "$GAME_WINDOWS" --no-build
+  artifacts:
+    paths: ["dist/*.zip"]
+    expire_in: 30 days
+
+# ---------------------------------------------------------------------------
+# Release (tags only)
+# ---------------------------------------------------------------------------
+
+release:
+  stage: package
+  image: registry.gitlab.com/gitlab-org/cli:latest
+  needs: ["package:appimage", "package:exe"]
+  rules:
+    - if: $CI_COMMIT_TAG
+  script:
+    - echo "Publishing release $CI_COMMIT_TAG"
+  release:
+    tag_name: "$CI_COMMIT_TAG"
+    name: "Cube CS Lite $CI_COMMIT_TAG"
+    description: "Built from $CI_COMMIT_SHA"
+    assets:
+      links:
+        - name: "Linux AppImage"
+          url: "$CI_PROJECT_URL/-/jobs/artifacts/$CI_COMMIT_TAG/raw/dist/Cube-CS-Lite-${CI_COMMIT_TAG#v}-x86_64.AppImage?job=package:appimage"
+          link_type: package
+        - name: "Windows portable zip"
+          url: "$CI_PROJECT_URL/-/jobs/artifacts/$CI_COMMIT_TAG/raw/dist/Cube-CS-Lite-${CI_COMMIT_TAG#v}-windows-x86_64.zip?job=package:exe"
+          link_type: package
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "web"

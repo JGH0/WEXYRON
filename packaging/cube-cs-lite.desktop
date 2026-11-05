@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Cube CS Lite
+Comment=Lightweight OpenGL multiplayer shooter
+Exec=@EXEC@
+Icon=@ICON@
+Categories=Game;ActionGame;
+Terminal=false

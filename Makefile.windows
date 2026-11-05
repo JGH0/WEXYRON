@@ -120,6 +120,13 @@ $(BUILD_DIR)/engine: $(BUILD_DIR)
 $(BUILD_DIR)/game: $(BUILD_DIR)
 	mkdir -p $(BUILD_DIR)/game
 
+$(BUILD_DIR)/third_party: $(BUILD_DIR)
+	mkdir -p $(BUILD_DIR)/third_party
+
+# miniaudio implementation (large, stable header: compiled once).
+$(MINIAUDIO_OBJECT): $(MINIAUDIO_SOURCES) | $(BUILD_DIR)/third_party
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
 $(BIN_DIR): $(BUILD_DIR)
 	mkdir -p $(BIN_DIR)
 

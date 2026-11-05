@@ -192,7 +192,11 @@ Game::Game(int width, int height)
     // setups, where the native Wayland backend does not report the window as
     // focused. Other platforms pick their default backend.
 #if defined(__linux__) && !defined(_WIN32) && !defined(__APPLE__)
+    // GLFW_PLATFORM hints exist since 3.4; older distro packages (e.g. Debian
+    // bookworm ships 3.3) pick X11 by default on their own.
+#if GLFW_VERSION_MAJOR > 3 || (GLFW_VERSION_MAJOR == 3 && GLFW_VERSION_MINOR >= 4)
     glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_X11);
+#endif
 #endif
     if (!glfwInit()) {
         std::cerr << "Failed to initialize GLFW" << std::endl;

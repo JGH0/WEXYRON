@@ -8,3 +8,6 @@ assets/machine_id
 
 # CMake build tree
 build-cmake/
+
+# Release artifacts from tools/package.sh
+dist/

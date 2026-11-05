@@ -47,6 +47,7 @@ install_debian() {
         cmake \
         libglfw3-dev \
         libglm-dev \
+        uuid-dev \
         libglew-dev \
         libsdl2-dev \
         libssl-dev
