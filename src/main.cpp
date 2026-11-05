@@ -10,6 +10,126 @@
 #include <iostream>
 #include <sstream>
 #include <ctime>
+#include <exception>
+#if defined(_WIN32)
+#include <cstdio>
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <dbghelp.h>
+#endif
+
+// ---------------------------------------------------------------------------
+// Failure diagnostics (release builds on Windows are started by double-click,
+// which closes the console as soon as the process ends)
+// ---------------------------------------------------------------------------
+namespace {
+void waitForEnterOnFailure() {
+#if defined(_WIN32)
+    std::cerr << "Press Enter to close..." << std::endl;
+    std::cerr.flush();
+    std::fflush(stdout);
+    (void)std::getchar();
+#endif
+}
+
+#if defined(_WIN32)
+LONG WINAPI onAccessViolation(EXCEPTION_POINTERS* info) {
+    const DWORD code = info && info->ExceptionRecord
+                           ? info->ExceptionRecord->ExceptionCode
+                           : 0;
+    const void* address = info && info->ExceptionRecord
+                              ? info->ExceptionRecord->ExceptionAddress
+                              : nullptr;
+    std::cerr << "\n*** Crash: exception 0x" << std::hex << code
+              << " at address " << address << std::dec << " ***" << std::endl;
+
+    // Symbolized stack. dbghelp is loaded at runtime so the build does not
+    // depend on the import library being present in every MinGW install.
+    HMODULE dbghelp = LoadLibraryA("dbghelp.dll");
+    if (dbghelp && info && info->ContextRecord) {
+        using SymSetOptions_t = DWORD(WINAPI*)(DWORD);
+        using SymInitialize_t = BOOL(WINAPI*)(HANDLE, PCSTR, BOOL);
+        using SymCleanup_t = BOOL(WINAPI*)(HANDLE);
+        using StackWalk64_t = BOOL(WINAPI*)(DWORD, HANDLE, HANDLE, LPSTACKFRAME64,
+                                            PVOID, PREAD_PROCESS_MEMORY_ROUTINE64,
+                                            PFUNCTION_TABLE_ACCESS_ROUTINE64,
+                                            PGET_MODULE_BASE_ROUTINE64,
+                                            PTRANSLATE_ADDRESS_ROUTINE64);
+        using SymFunctionTableAccess64_t = PVOID(WINAPI*)(HANDLE, DWORD64);
+        using SymGetModuleBase64_t = DWORD64(WINAPI*)(HANDLE, DWORD64);
+        using SymFromAddr_t = BOOL(WINAPI*)(HANDLE, DWORD64, PDWORD64, PSYMBOL_INFO);
+        using SymGetLineFromAddr64_t = BOOL(WINAPI*)(HANDLE, DWORD64, PDWORD, PIMAGEHLP_LINE64);
+
+        auto symSetOptions = (SymSetOptions_t)GetProcAddress(dbghelp, "SymSetOptions");
+        auto symInitialize = (SymInitialize_t)GetProcAddress(dbghelp, "SymInitialize");
+        auto symCleanup = (SymCleanup_t)GetProcAddress(dbghelp, "SymCleanup");
+        auto stackWalk64 = (StackWalk64_t)GetProcAddress(dbghelp, "StackWalk64");
+        auto symFuncTable = (SymFunctionTableAccess64_t)GetProcAddress(dbghelp, "SymFunctionTableAccess64");
+        auto symModuleBase = (SymGetModuleBase64_t)GetProcAddress(dbghelp, "SymGetModuleBase64");
+        auto symFromAddr = (SymFromAddr_t)GetProcAddress(dbghelp, "SymFromAddr");
+        auto symGetLine = (SymGetLineFromAddr64_t)GetProcAddress(dbghelp, "SymGetLineFromAddr64");
+
+        const HANDLE process = GetCurrentProcess();
+        CONTEXT* ctx = info->ContextRecord;
+        if (symSetOptions && symInitialize && stackWalk64 && symFuncTable &&
+            symModuleBase && ctx) {
+            symSetOptions(SYMOPT_LOAD_LINES | SYMOPT_UNDNAME);
+            if (symInitialize(process, nullptr, TRUE)) {
+                STACKFRAME64 frame{};
+                const DWORD machine = IMAGE_FILE_MACHINE_AMD64;
+                frame.AddrPC.Offset = ctx->Rip;
+                frame.AddrPC.Mode = AddrModeFlat;
+                frame.AddrFrame.Offset = ctx->Rbp;
+                frame.AddrFrame.Mode = AddrModeFlat;
+                frame.AddrStack.Offset = ctx->Rsp;
+                frame.AddrStack.Mode = AddrModeFlat;
+                for (int i = 0; i < 32; ++i) {
+                    if (!stackWalk64(machine, process, GetCurrentThread(), &frame, ctx,
+                                     nullptr, symFuncTable, symModuleBase, nullptr)) {
+                        break;
+                    }
+                    std::cerr << "  #" << i << " 0x" << std::hex << frame.AddrPC.Offset
+                              << std::dec;
+                    if (symFromAddr) {
+                        char buffer[sizeof(SYMBOL_INFO) + 256] = {};
+                        auto* symbol = reinterpret_cast<SYMBOL_INFO*>(buffer);
+                        symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+                        symbol->MaxNameLen = 255;
+                        DWORD64 displacement = 0;
+                        if (symFromAddr(process, frame.AddrPC.Offset, &displacement, symbol)) {
+                            std::cerr << " " << symbol->Name;
+                        }
+                        IMAGEHLP_LINE64 line{};
+                        line.SizeOfStruct = sizeof(line);
+                        DWORD lineDisplacement = 0;
+                        if (symGetLine &&
+                            symGetLine(process, frame.AddrPC.Offset, &lineDisplacement, &line)) {
+                            std::cerr << " (" << line.FileName << ":" << line.LineNumber << ")";
+                        }
+                    }
+                    std::cerr << std::endl;
+                }
+                if (symCleanup) symCleanup(process);
+            }
+        }
+    }
+    std::fflush(stdout);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+#endif
+
+void installCrashHandlers() {
+#if defined(_WIN32)
+    SetUnhandledExceptionFilter(onAccessViolation);
+#endif
+}
+} // namespace
+
 
 /**
  * @brief Main function that initializes and runs the game loop
@@ -76,32 +196,46 @@ static void runMenuTest(Game& game, const char* script) {
 }
 
 int main() {
-    Game game(800, 600);
-    game.init();
+    installCrashHandlers();
+    int exitCode = 0;
 
-    if (const char* script = std::getenv("CUBE_MENU_TEST")) {
-        runMenuTest(game, script);
-        // The Game lives until main() returns, i.e. until after glfwTerminate()
-        // has run; shut the sound device down before that so its mixing
-        // thread is joined while everything it touches still exists.
-        game.cleanup();
-        return 0;
+    try {
+        Game game(800, 600);
+        game.init();
+
+        if (const char* script = std::getenv("CUBE_MENU_TEST")) {
+            runMenuTest(game, script);
+            // The Game lives until main() returns, i.e. until after glfwTerminate()
+            // has run; shut the sound device down before that so its mixing
+            // thread is joined while everything it touches still exists.
+            game.cleanup();
+        } else {
+            float lastFrame = glfwGetTime();
+            while (!game.shouldClose()) {
+                float currentFrame = glfwGetTime();
+                float deltaTime = currentFrame - lastFrame;
+                lastFrame = currentFrame;
+                if (deltaTime > 0.05f) deltaTime = 0.05f; // Cap at 50ms to avoid physics issues
+
+                game.processInput(deltaTime);
+                game.update(deltaTime); // Only update physics when playing
+                game.render();
+                game.frameWait();
+                game.endFrame(deltaTime);
+            }
+
+            game.cleanup();
+        }
+    } catch (const std::exception& e) {
+        // Without this, an uncaught exception aborts the process and a
+        // double-clicked release build shows nothing at all.
+        std::cerr << "Fatal error: " << e.what() << std::endl;
+        exitCode = 1;
+    } catch (...) {
+        std::cerr << "Fatal error: unknown exception" << std::endl;
+        exitCode = 1;
     }
 
-    float lastFrame = glfwGetTime();
-    while (!game.shouldClose()) {
-        float currentFrame = glfwGetTime();
-        float deltaTime = currentFrame - lastFrame;
-        lastFrame = currentFrame;
-        if (deltaTime > 0.05f) deltaTime = 0.05f; // Cap at 50ms to avoid physics issues
-
-        game.processInput(deltaTime);
-        game.update(deltaTime); // Only update physics when playing
-        game.render();
-        game.frameWait();
-        game.endFrame(deltaTime);
-    }
-
-    game.cleanup();
-    return 0;
+    waitForEnterOnFailure();
+    return exitCode;
 }
