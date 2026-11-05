@@ -1,0 +1,162 @@
+# GitHub Actions: release artifacts for the game client only (the dedicated
+# server has no job here).
+#
+#   Linux   -> AppImage
+#   Windows -> portable zip with game.exe + runtime/GLFW DLLs + assets/
+#
+# Runs on pushes to the default branch, pull requests and manual dispatches.
+# Pushing a tag (e.g. v1.2.0) also attaches the artifacts to a GitHub Release.
+
+name: Build release artifacts
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Only the client is built; the server target is left alone.
+  GAME_LINUX: build/bin/game
+  GAME_WINDOWS: build/bin/game.exe
+
+jobs:
+  linux:
+    name: Linux (AppImage)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # git describe for the version string
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libglfw3-dev libglm-dev uuid-dev \
+            libgl1-mesa-dev libx11-dev libxrandr-dev libxi-dev \
+            libxcursor-dev libxinerama-dev \
+            file desktop-file-utils libfuse2 curl ca-certificates
+
+      - name: Build
+        run: make -j"$(nproc)" client
+
+      - name: Verify binary
+        run: file "$GAME_LINUX"
+
+      - name: Download AppImage tooling
+        run: |
+          sudo curl -fsSL -o /usr/local/bin/appimagetool \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          sudo curl -fsSL -o /usr/local/bin/linuxdeploy \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          sudo chmod +x /usr/local/bin/appimagetool /usr/local/bin/linuxdeploy
+
+      - name: Package AppImage
+        env:
+          VERSION: ${{ github.ref_name }}
+          APPIMAGE_TOOL: /usr/local/bin/appimagetool
+          LINUXDEPLOY: /usr/local/bin/linuxdeploy
+          APPIMAGE_EXTRACT_AND_RUN: "1" # no FUSE on runners
+        run: tools/package.sh appimage "$GAME_LINUX" --no-build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-appimage
+          path: dist/*.AppImage
+          if-no-files-found: error
+
+  windows:
+    name: Windows (exe, cross-compiled)
+    runs-on: ubuntu-24.04
+    env:
+      MINGW: x86_64-w64-mingw32
+      GLFW_URL: https://github.com/glfw/glfw/releases/download/3.4/glfw-3.4.bin.WIN64.zip
+      GLFW_DIR: ${{ github.workspace }}/.mingw-deps/glfw
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            make zip curl ca-certificates python3 libglm-dev \
+            mingw-w64 g++-mingw-w64-x86-64-posix
+          # posix threads are required for std::thread/std::mutex.
+          sudo update-alternatives --set x86_64-w64-mingw32-g++ /usr/bin/x86_64-w64-mingw32-g++-posix
+          # Makefile.windows calls plain "g++"; point it at the cross compiler.
+          sudo ln -sf /usr/bin/x86_64-w64-mingw32-g++-posix /usr/local/bin/g++
+          # GLM is header-only; copy into the MinGW sysroot.
+          sudo cp -a /usr/include/glm "/usr/${MINGW}/include/"
+
+      - name: Install GLFW for MinGW
+        run: |
+          MINGW_INCLUDE="/usr/${MINGW}/include"
+          GCC_LIB="$(dirname "$(/usr/bin/${MINGW}-g++-posix -print-libgcc-file-name)")"
+          mkdir -p "$GLFW_DIR" "$MINGW_INCLUDE/GLFW"
+          curl -fsSL -o /tmp/glfw.zip "$GLFW_URL"
+          python3 -m zipfile -e /tmp/glfw.zip "$GLFW_DIR"
+          PKG="$GLFW_DIR/glfw-3.4.bin.WIN64"
+          sudo cp "$PKG"/include/GLFW/*.h "$MINGW_INCLUDE/GLFW/"
+          # -lglfw3 resolves to libglfw3.a; the prebuilt is a DLL import lib.
+          sudo cp "$PKG/lib-mingw-w64/libglfw3dll.a" "$GCC_LIB/libglfw3.a"
+          # glfw3.dll is shipped next to game.exe during packaging.
+          sudo cp "$PKG/lib-mingw-w64/glfw3.dll" "/usr/${MINGW}/bin/"
+          echo "GCC_LIB=$GCC_LIB" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: |
+          # Makefile.windows (shared with BUILD.bat/MSYS2) has no rule for the
+          # miniaudio object; compile it here, then let make own the rest.
+          mkdir -p build/obj/third_party
+          g++ -std=c++17 -I./include -I./include/stb -I./src -DGLFW_INCLUDE_NONE \
+            -c third_party/miniaudio/miniaudio.c -o build/obj/third_party/miniaudio.o
+          make -f Makefile.windows client
+
+      - name: Verify binary
+        run: file "$GAME_WINDOWS"
+
+      - name: Package zip
+        env:
+          # The artifact version: the tag name (e.g. v1.2.0) or ref for branches.
+          VERSION: ${{ github.ref_name }}
+          MINGW_DLL_DIR: ${{ github.workspace }}/.mingw-dlls
+        run: |
+          set -e
+          # Runtime DLLs: libstdc++/libgcc in the GCC lib dir, libwinpthread in
+          # the sysroot, glfw3.dll from the MinGW bin.
+          mkdir -p "$MINGW_DLL_DIR"
+          cp "$GCC_LIB"/*.dll "$MINGW_DLL_DIR"/
+          cp "/usr/${MINGW}/lib/libwinpthread-1.dll" "$MINGW_DLL_DIR"/
+          cp "/usr/${MINGW}/bin/glfw3.dll" "$MINGW_DLL_DIR"/
+          tools/package.sh exe "$GAME_WINDOWS" --no-build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe
+          path: dist/*.zip
+          if-no-files-found: error
+
+  release:
+    name: Attach artifacts to release
+    needs: [linux, windows]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

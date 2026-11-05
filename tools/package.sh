@@ -15,6 +15,9 @@
 # Output goes to dist/.
 #
 # Environment:
+#   VERSION                optional override for the version in file names
+#                          (the CI passes the tag name); default is
+#                          "git describe".
 #   APPIMAGE_TOOL          path to the AppImage runtime/tool (default appimagetool)
 #   LINUXDEPLOY            path to linuxdeploy (default linuxdeploy-x86_64.AppImage)
 #   CC/CXX                 cross compiler for the Windows build, e.g.
@@ -27,10 +30,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 DIST="$ROOT/dist"
-VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo "dev")"
-if [ -n "${CI_COMMIT_TAG:-}" ]; then
-    VERSION="${CI_COMMIT_TAG#v}"
-fi
+VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo "dev")}"
 
 usage() {
     sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'
