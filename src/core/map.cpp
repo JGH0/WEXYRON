@@ -11,6 +11,8 @@
 #include <sstream>
 #include <algorithm>
 #include <cstdlib>
+#include <cmath>
+#include <limits>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
@@ -167,6 +169,8 @@ bool Map::loadTexture(const std::string& texturePath, int textureId) {
 
 void Map::addBlock(const MapBlock& block) {
     blocks.push_back(block);
+    blocks.back().updateBoundsCache();
+    rebuildCollisionGrid();
 }
 
 int Map::findBlockAt(const glm::vec3& position, float tolerance) const {
@@ -361,6 +365,7 @@ glm::vec3 Map::getDimensions() const {
 
 void Map::clear() {
     blocks.clear();
+    rebuildCollisionGrid();
     spawnPoints.clear();
     teamSpawns.clear();
 
@@ -468,4 +473,370 @@ void Map::generateTestMap() {
     addBlock(MapBlock(glm::vec3(2.0f, -0.75f, 2.0f), glm::vec3(1.2f, 0.5f, 1.2f), 2, 2, true, glm::vec3(0.8f, 0.3f, 0.2f)));
     
     std::cout << "Generated test map with " << blocks.size() << " blocks" << std::endl;
+}
+
+// ===========================================================================
+// Rigid body collision (box vs blocks)
+// ===========================================================================
+
+void mapBlockBasis(const MapBlock& block, glm::vec3& axisX, glm::vec3& axisY, glm::vec3& axisZ) {
+    // Same order and convention as the renderer (see rotationBasis there):
+    // yaw around Y, then pitch around X, i.e. R = Ry * Rx.
+    const float yaw = glm::radians(block.rotation);
+    const float pit = glm::radians(block.pitch);
+    const float cy = std::cos(yaw), sy = std::sin(yaw);
+    const float cp = std::cos(pit), sp = std::sin(pit);
+
+    axisX = glm::vec3(cy, 0.0f, -sy);
+    axisY = glm::vec3(sy * sp, cp, cy * sp);
+    axisZ = glm::vec3(sy * cp, -sp, cy * cp);
+}
+
+glm::vec3 mapBlockToLocalDir(const MapBlock& block, const glm::vec3& worldDir) {
+    glm::vec3 ax, ay, az;
+    mapBlockBasis(block, ax, ay, az);
+    // The basis is orthonormal, so the inverse is the transpose.
+    return glm::vec3(glm::dot(worldDir, ax), glm::dot(worldDir, ay), glm::dot(worldDir, az));
+}
+
+void MapBlock::updateBoundsCache() const {
+    if (isAxisAligned()) {
+        boundsMin_ = localMin();
+        boundsMax_ = localMax();
+        return;
+    }
+    glm::vec3 ax, ay, az;
+    mapBlockBasis(*this, ax, ay, az);
+    const glm::vec3 halfX = ax * (scale.x * 0.5f);
+    const glm::vec3 halfY = ay * (scale.y * 0.5f);
+    const glm::vec3 halfZ = az * (scale.z * 0.5f);
+    const glm::vec3 extent(glm::abs(halfX.x) + glm::abs(halfY.x) + glm::abs(halfZ.x),
+                           glm::abs(halfX.y) + glm::abs(halfY.y) + glm::abs(halfZ.y),
+                           glm::abs(halfX.z) + glm::abs(halfY.z) + glm::abs(halfZ.z));
+    boundsMin_ = position - extent;
+    boundsMax_ = position + extent;
+}
+
+void MapBlock::worldBounds(glm::vec3& mn, glm::vec3& mx) const {
+    mn = boundsMin_;
+    mx = boundsMax_;
+}
+
+bool MapBlock::containsPoint(const glm::vec3& point) const {
+    if (isAxisAligned()) {
+        const glm::vec3 mn = localMin();
+        const glm::vec3 mx = localMax();
+        return point.x >= mn.x && point.x <= mx.x &&
+               point.y >= mn.y && point.y <= mx.y &&
+               point.z >= mn.z && point.z <= mx.z;
+    }
+    // Box local space: the point relative to the block centre, projected on
+    // the block's own axes.
+    const glm::vec3 d = point - position;
+    glm::vec3 ax, ay, az;
+    mapBlockBasis(*this, ax, ay, az);
+    const glm::vec3 l(glm::dot(d, ax), glm::dot(d, ay), glm::dot(d, az));
+    const glm::vec3 h = scale * 0.5f;
+    return std::abs(l.x) <= h.x && std::abs(l.y) <= h.y && std::abs(l.z) <= h.z;
+}
+
+// ---------------------------------------------------------------------------
+// Broad phase
+// ---------------------------------------------------------------------------
+
+void Map::rebuildCollisionGrid() {
+    gridDirty_ = true;
+}
+
+void Map::ensureGrid() const {
+    if (!gridDirty_) return;
+
+    grid_.clear();
+    gridDirty_ = false;
+
+    for (size_t i = 0; i < blocks.size(); ++i) {
+        const MapBlock& b = blocks[i];
+        b.updateBoundsCache();   // mutable cache: const map, lazy fill
+        if (!b.solid) continue;
+
+        const glm::vec3& mn = b.boundsMin_;
+        const glm::vec3& mx = b.boundsMax_;
+        // One cell of padding so a query on a cell boundary still finds it.
+        const int x0 = static_cast<int>(std::floor((mn.x - 0.01f) / kGridCell));
+        const int x1 = static_cast<int>(std::floor((mx.x + 0.01f) / kGridCell));
+        const int y0 = static_cast<int>(std::floor((mn.y - 0.01f) / kGridCell));
+        const int y1 = static_cast<int>(std::floor((mx.y + 0.01f) / kGridCell));
+        const int z0 = static_cast<int>(std::floor((mn.z - 0.01f) / kGridCell));
+        const int z1 = static_cast<int>(std::floor((mx.z + 0.01f) / kGridCell));
+        for (int x = x0; x <= x1; ++x) {
+            for (int y = y0; y <= y1; ++y) {
+                for (int z = z0; z <= z1; ++z) {
+                    GridCell cell;
+                    cell.x = x; cell.y = y; cell.z = z;
+                    grid_[cell].push_back(static_cast<int>(i));
+                }
+            }
+        }
+    }
+}
+
+template <typename Fn>
+void Map::forEachBlockNear(const glm::vec3& mn, const glm::vec3& mx, Fn&& fn) const {
+    ensureGrid();
+    const int x0 = static_cast<int>(std::floor(mn.x / kGridCell));
+    const int x1 = static_cast<int>(std::floor(mx.x / kGridCell));
+    const int y0 = static_cast<int>(std::floor(mn.y / kGridCell));
+    const int y1 = static_cast<int>(std::floor(mx.y / kGridCell));
+    const int z0 = static_cast<int>(std::floor(mn.z / kGridCell));
+    const int z1 = static_cast<int>(std::floor(mx.z / kGridCell));
+
+    // A block can appear in several cells; visit it once per query.
+    thread_local int stamp = 0;
+    thread_local std::vector<int> visitStamp;
+
+    GridCell cell;
+    for (int x = x0; x <= x1; ++x) {
+        for (int y = y0; y <= y1; ++y) {
+            for (int z = z0; z <= z1; ++z) {
+                cell.x = x; cell.y = y; cell.z = z;
+                auto it = grid_.find(cell);
+                if (it == grid_.end()) continue;
+                for (int index : it->second) {
+                    if (visitStamp.size() <= static_cast<size_t>(index)) {
+                        visitStamp.resize(static_cast<size_t>(index) + 64, -1);
+                    }
+                    if (visitStamp[static_cast<size_t>(index)] == stamp) continue;
+                    visitStamp[static_cast<size_t>(index)] = stamp;
+                    if (!fn(blocks[static_cast<size_t>(index)])) return;
+                }
+            }
+        }
+    }
+    ++stamp;
+}
+
+// ---------------------------------------------------------------------------
+// Narrow phase: axis-aligned body box vs block
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// Separating-axis test of a world AABB (mn..mx) against one block, plus the
+/// shortest way to push the box out. Returns false when they miss.
+///
+/// Axis-aligned blocks (every map block that is not tilted or turned) reduce to
+/// a plain AABB overlap with the minimal translation axis. Rotated blocks use
+/// the 15 axes a box-to-box test needs; that is still cheap, and only rotated
+/// blocks go that way.
+bool boxOverlapsBlockImpl(const MapBlock& block,
+                          const glm::vec3& mn, const glm::vec3& mx,
+                          glm::vec3& pushOut) {
+    const glm::vec3 centre = (mn + mx) * 0.5f;
+    const glm::vec3 half = (mx - mn) * 0.5f;
+
+    if (block.isAxisAligned()) {
+        const glm::vec3 bmn = block.localMin();
+        const glm::vec3 bmx = block.localMax();
+        const glm::vec3 d1 = mx - bmn;   // overlap on + axes
+        const glm::vec3 d2 = bmx - mn;   // overlap on - axes
+        if (d1.x <= 0.0f || d1.y <= 0.0f || d1.z <= 0.0f) return false;
+        if (d2.x <= 0.0f || d2.y <= 0.0f || d2.z <= 0.0f) return false;
+
+        // Move out along the axis with the smallest overlap.
+        glm::vec3 out(0.0f);
+        const float ox = std::min(d1.x, d2.x);
+        const float oy = std::min(d1.y, d2.y);
+        const float oz = std::min(d1.z, d2.z);
+        if (ox <= oy && ox <= oz)      out.x = (d1.x < d2.x) ? -d1.x : d2.x;
+        else if (oy <= oz)             out.y = (d1.y < d2.y) ? -d1.y : d2.y;
+        else                           out.z = (d1.z < d2.z) ? -d1.z : d2.z;
+        pushOut = out;
+        return true;
+    }
+
+    // Oriented block: separating axes are the 3 box axes, the 3 block axes and
+    // the 9 edge-pair cross products.
+    glm::vec3 ax, ay, az;
+    mapBlockBasis(block, ax, ay, az);
+    const glm::vec3 bh = block.scale * 0.5f;
+    const glm::vec3 d = centre - block.position;
+
+    float bestOverlap = std::numeric_limits<float>::max();
+    glm::vec3 bestAxis(0.0f);
+    bool bestIsBoxAxis = false;
+    glm::vec3 bestBoxAxis(0.0f);
+
+    auto testAxis = [&](glm::vec3 axis, bool boxAxis) {
+        const float len = glm::length(axis);
+        if (len < 1e-6f) return true;            // degenerate: ignore
+        axis /= len;
+
+        const float ra = half.x * std::abs(axis.x) + half.y * std::abs(axis.y) + half.z * std::abs(axis.z);
+        const float rb = bh.x * std::abs(glm::dot(axis, ax)) +
+                         bh.y * std::abs(glm::dot(axis, ay)) +
+                         bh.z * std::abs(glm::dot(axis, az));
+        const float distance = glm::dot(d, axis);
+        const float overlap = ra + rb - std::abs(distance);
+        if (overlap <= 0.0f) return false;        // separated
+
+        if (overlap < bestOverlap) {
+            bestOverlap = overlap;
+            bestAxis = (distance < 0.0f) ? -axis : axis;
+            bestIsBoxAxis = boxAxis;
+            bestBoxAxis = axis;
+        }
+        return true;
+    };
+
+    const glm::vec3 boxAxes[3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+    const glm::vec3 blockAxes[3] = {ax, ay, az};
+    for (const glm::vec3& a : boxAxes) if (!testAxis(a, true)) return false;
+    for (const glm::vec3& a : blockAxes) if (!testAxis(a, false)) return false;
+    for (const glm::vec3& a : boxAxes) {
+        for (const glm::vec3& b : blockAxes) {
+            if (!testAxis(glm::cross(a, b), false)) return false;
+        }
+    }
+
+    // Push out along the smallest axis, preferring a world axis when it is
+    // almost as short (keeps sliding along floors and walls predictable).
+    glm::vec3 out = bestAxis * (bestOverlap + 1e-4f);
+    (void)bestIsBoxAxis;
+    (void)bestBoxAxis;
+    pushOut = out;
+    return true;
+}
+
+} // namespace
+
+bool Map::boxOverlapsBlock(const glm::vec3& mn, const glm::vec3& mx) const {
+    glm::vec3 unused;
+    return boxOverlapsBlock(mn, mx, unused);
+}
+
+bool Map::boxOverlapsBlock(const glm::vec3& mn, const glm::vec3& mx, glm::vec3& normal) const {
+    bool hit = false;
+    glm::vec3 best(0.0f);
+    float bestLen = std::numeric_limits<float>::max();
+
+    forEachBlockNear(mn, mx, [&](const MapBlock& b) {
+        // Cheap AABB rejection before the exact test.
+        glm::vec3 bmn, bmx;
+        b.worldBounds(bmn, bmx);
+        if (mx.x <= bmn.x || mn.x >= bmx.x) return true;
+        if (mx.y <= bmn.y || mn.y >= bmx.y) return true;
+        if (mx.z <= bmn.z || mn.z >= bmx.z) return true;
+
+        glm::vec3 push(0.0f);
+        if (!boxOverlapsBlockImpl(b, mn, mx, push)) return true;
+        const float len = glm::length(push);
+        if (len < bestLen) {
+            bestLen = len;
+            best = push;
+            hit = true;
+        }
+        return true;   // keep looking for the smallest push
+    });
+
+    if (!hit) return false;
+    normal = (glm::length(best) > 1e-6f) ? glm::normalize(best) : glm::vec3(0.0f, 1.0f, 0.0f);
+    return true;
+}
+
+void Map::resolveBox(const glm::vec3& move, glm::vec3& mn, glm::vec3& mx) const {
+    // Iterate a few times: pushing out of one block can touch another in a
+    // corner. Four passes is enough for map geometry (blocks are convex and
+    // axis-aligned, and the move never exceeds one frame's travel).
+    for (int pass = 0; pass < 4; ++pass) {
+        glm::vec3 push(0.0f);
+        if (!boxOverlapsBlock(mn, mx, push)) break;
+
+        // Only move along the requested axes (Y for a falling body, X and Z
+        // for horizontal motion, all for a stuck body).
+        glm::vec3 delta(0.0f);
+        if (move.x != 0.0f) delta.x = push.x;
+        if (move.y != 0.0f) delta.y = push.y;
+        if (move.z != 0.0f) delta.z = push.z;
+        // If the smallest push has no intended component, use the smallest one
+        // that does; failing that, leave the box where it is.
+        if (delta.x == 0.0f && delta.y == 0.0f && delta.z == 0.0f) {
+            delta = push;
+        }
+        mn += delta;
+        mx += delta;
+    }
+}
+
+bool Map::supportHeight(const glm::vec3& mn, const glm::vec3& mx, float maxDrop,
+                        float& height) const {
+    const glm::vec3 footMin(mn.x, mn.y - maxDrop, mn.z);
+    const glm::vec3 footMax(mx.x, mn.y + 0.02f, mx.z);   // include floats at the feet
+
+    // Surfaces whose top is under the feet. Take the highest such surface whose
+    // top is not covered by another block that starts right on it.
+    std::vector<std::pair<float, const MapBlock*>> tops;
+    forEachBlockNear(footMin, footMax, [&](const MapBlock& b) {
+        glm::vec3 bmn, bmx;
+        b.worldBounds(bmn, bmx);
+        if (bmx.x <= mn.x || bmn.x >= mx.x) return true;
+        if (bmx.z <= mn.z || bmn.z >= mx.z) return true;
+        if (bmx.y > mn.y + 0.02f) return true;      // above the feet: a ceiling
+        if (highestPoint(b) < mn.y - maxDrop) return true;
+        tops.push_back({bmx.y, &b});
+        return true;
+    });
+    if (tops.empty()) return false;
+
+    std::sort(tops.begin(), tops.end(),
+              [](const auto& a, const auto& b) { return a.first > b.first; });
+    for (const auto& [top, block] : tops) {
+        bool covered = false;
+        forEachBlockNear(glm::vec3(mn.x, top - 0.02f, mn.z), glm::vec3(mx.x, top + 0.05f, mx.z),
+                         [&](const MapBlock& other) {
+            if (&other == block) return true;
+            glm::vec3 omn, omx;
+            other.worldBounds(omn, omx);
+            if (omx.x <= mn.x || omn.x >= mx.x) return true;
+            if (omx.z <= mn.z || omn.z >= mx.z) return true;
+            if (omn.y >= top - 0.02f && omn.y <= top + 0.05f) covered = true;
+            return !covered;
+        });
+        if (!covered) {
+            height = top;
+            return true;
+        }
+    }
+    height = tops.front().first;
+    return true;
+}
+
+float Map::ceilingHeight(const glm::vec3& mn, const glm::vec3& mx, float maxRise) const {
+    const glm::vec3 headMin(mn.x, mx.y, mn.z);
+    const glm::vec3 headMax(mx.x, mx.y + std::max(0.0f, maxRise), mx.z);
+    float lowest = headMax.y;
+    forEachBlockNear(headMin, headMax, [&](const MapBlock& b) {
+        glm::vec3 bmn, bmx;
+        b.worldBounds(bmn, bmx);
+        if (bmx.x <= mn.x || bmn.x >= mx.x) return true;
+        if (bmx.z <= mn.z || bmn.z >= mx.z) return true;
+        if (bmn.y < mx.y) return true;               // not above the head
+        if (bmn.y < lowest) lowest = bmn.y;
+        return true;
+    });
+    return lowest;
+}
+
+float Map::highestPoint(const MapBlock& block) const {
+    glm::vec3 bmn, bmx;
+    block.worldBounds(bmn, bmx);
+    return bmx.y;
+}
+
+glm::vec3 Map::topNormalOf(std::size_t blockIndex) const {
+    if (blockIndex >= blocks.size()) return glm::vec3(0.0f, 1.0f, 0.0f);
+    const MapBlock& b = blocks[blockIndex];
+    if (b.isAxisAligned()) return glm::vec3(0.0f, 1.0f, 0.0f);
+    glm::vec3 ax, ay, az;
+    mapBlockBasis(b, ax, ay, az);
+    return ay;
 }

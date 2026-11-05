@@ -204,6 +204,15 @@ public:
     bool debugPlayerStuck() const;
     /// The normal "died and came back" path (resetGame).
     void debugRespawnForTest() { resetGame(); }
+    /// Install a hand-built map (body collision tests) and enter PLAYING.
+    bool debugInstallMapForTest(std::unique_ptr<Map> map);
+    /// Enter PLAYING with the current map without loading a file (and take the
+    /// player out of the match menu, or every ESC key would reopen it).
+    void debugEnterPlayingForTest() {
+        gameState = PLAYING;
+        gameInProgress_ = true;
+        menuJustEntered = false;
+    }
     /// Renderer diagnostics for the rendering test: map draws in the last frame.
     int debugWorldDrawsLastFrame() const { return renderer.debugWorldDrawsLastFrame(); }
     size_t debugMapInstancesLastFrame() const { return renderer.debugMapInstancesLastFrame(); }
@@ -784,20 +793,21 @@ private:
     /// Move `feet` to the nearest position where the body does not overlap
     /// geometry and rests on a floor. Returns false if no such spot was found.
     bool placeAtSafePosition(glm::vec3& feet, float searchRadius = 1.5f) const;
+    /// World-space AABB of the player body standing at `feet`.
+    void bodyBounds(const glm::vec3& feet, glm::vec3& mn, glm::vec3& mx) const;
     /// True when the body standing at `feet` overlaps solid geometry.
     bool bodyBlockedAt(const glm::vec3& feet) const;
-    /// True when a horizontal slice of the body `height` above the feet is
-    /// inside a solid block (body occupancy, see bodyBlockedAt). With
-    /// `minHeightInclusive` a block starting exactly at the slice counts too.
-    bool sliceBlocked(const glm::vec3& feet, float height, float radius,
-                      bool minHeightInclusive = true) const;
+    /// Move the body for one frame: `horizontalSpeed` * dt along X/Z, and
+    /// playerVelocity.y * dt vertically, colliding as a rigid box.
+    void movePlayerBody(float dt, const glm::vec3& horizontalSpeed);
+    /// One frame's horizontal step (X then Z), sliding along blocked axes.
+    void horizontalSweep(glm::vec3& feet, glm::vec3& mn, glm::vec3& mx, float dx, float dz);
+    /// One frame's vertical step, resting on / stopping at surfaces.
+    void verticalSweep(glm::vec3& feet, glm::vec3& mn, glm::vec3& mx, float dy, bool falling);
     /// Floor support: a surface at most kGroundSnap below the feet.
     bool isSupportedAt(const glm::vec3& feet) const;
     /// Can the player start a jump right now? (standing, not already rising)
     bool isOnGround() const;
-    /// Move the feet down from their height to `targetY`, stopping on the
-    /// surface they reach. Returns true when they landed on it.
-    bool landedOnFloor(glm::vec3& feet, float targetY, float& restingY) const;
     /// Largest step up/down that still counts as standing on a surface.
     static constexpr float kGroundSnap = 0.35f;
     /// World position of the remote player `id` (feet), false when unknown.

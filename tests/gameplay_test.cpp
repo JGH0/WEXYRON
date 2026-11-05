@@ -42,11 +42,12 @@ int main() {
 
         // A real press: jump, then the key is released. Twice in a row, to
         // catch a latch that stays set after a jump ends off a ledge.
-        // sniper.map has a low ceiling at the centre (the spawn sits under a
-        // 10x2x10 block ending 0.3 units above the head), so only a hop fits
-        // there; on every other map a full jump must get off the ground.
-        const bool lowCeiling = std::string(map) == "sniper.map";
-        const float needed = lowCeiling ? 0.1f : 0.5f;
+        // On every other map a full jump must get off the ground.
+        // sniper and complex spawn under a slab: the head hits it after a few
+        // centimetres (correct rigid-body behaviour), so only a hop fits.
+        const bool lowCeiling = std::string(map) == "sniper.map" ||
+                                std::string(map) == "complex.map";
+        const float needed = lowCeiling ? 0.05f : 0.5f;
         for (int attempt = 0; attempt < 2; ++attempt) {
             // Let the jump cooldown (0.5 s) expire between the two presses.
             if (attempt > 0) game.debugStepForTest(20, kDt);

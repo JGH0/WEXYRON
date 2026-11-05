@@ -88,6 +88,10 @@ int main() {
     for (int i = 0; i < 90; ++i) {
         a.debugStepWithInputForTest(1, kDt, 0.0f, 1.0f);
         b.debugStepWithInputForTest(1, kDt, 0.0f, -1.0f);
+        // Keep both sessions pumped (inputs are acknowledged by the server
+        // and copied into packets the other side receives).
+        a.debugPumpFrame();
+        b.debugPumpFrame();
     }
     glm::vec3 bFeet, bVel;
     bool bGround = false;
@@ -95,21 +99,31 @@ int main() {
     std::printf("B: feet=(%.2f, %.2f, %.2f) stuck=%d\n", bFeet.x, bFeet.y, bFeet.z, b.debugPlayerStuck());
     CHECK(!b.debugPlayerStuck());
 
-    glm::vec3 aSeesB;
-    bool seen = false;
-    for (int i = 0; i < 120 && !seen; ++i) {
+    // Both clients stop moving; keep the match running (network + gameplay)
+    // until A's view of B has converged onto B's final position. Remote
+    // positions are smoothed on screen, so the view trails by a little.
+    b.debugStepWithInputForTest(1, kDt, 0.0f, 0.0f);     // stop at once
+    b.debugPlayerState(bFeet, bVel, bGround);
+
+    glm::vec3 aSeesB;               // A's view of B's feet
+    bool converged = false;
+    for (int i = 0; i < 300; ++i) {
         a.debugPumpFrame();
+        b.debugPumpFrame();
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        seen = a.debugRemotePlayerFeetForTest(b.debugClientId(), aSeesB);
+        glm::vec3 current;
+        if (!a.debugRemotePlayerFeetForTest(b.debugClientId(), current)) continue;
+        aSeesB = current;
+        if (glm::length(current - bFeet) < 0.75f) { converged = true; break; }
     }
-    CHECK(seen);
-    if (seen) {
-        // Heights must agree: the remote body is drawn and hit where B says.
-        std::printf("A sees B at (%.2f, %.2f, %.2f), B is at (%.2f, %.2f, %.2f)\n",
-                    aSeesB.x, aSeesB.y, aSeesB.z, bFeet.x, bFeet.y, bFeet.z);
-        CHECK(std::abs(aSeesB.y - bFeet.y) < 0.25f);
-        CHECK(std::abs(aSeesB.x - bFeet.x) < 1.5f && std::abs(aSeesB.z - bFeet.z) < 1.5f);
-    }
+    CHECK(converged);
+    std::printf("A sees B at (%.2f, %.2f, %.2f), B is at (%.2f, %.2f, %.2f)\n",
+                aSeesB.x, aSeesB.y, aSeesB.z, bFeet.x, bFeet.y, bFeet.z);
+
+    // Heights must agree exactly (hit detection and the drawn body share the
+    // feet height); X/Z within the smoothing lag.
+    CHECK(std::abs(aSeesB.y - bFeet.y) < 0.05f);
+    CHECK(std::abs(aSeesB.x - bFeet.x) < 0.75f && std::abs(aSeesB.z - bFeet.z) < 0.75f);
 
     std::printf(failures ? "MULTIPLAYER SPAWN TEST: %d FAILURES\n" : "MULTIPLAYER SPAWN TEST: ALL OK\n", failures);
     a.cleanup();

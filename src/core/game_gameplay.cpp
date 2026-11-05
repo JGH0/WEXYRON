@@ -34,59 +34,155 @@ bool Game::pointHitsBody(const glm::vec3& point, const glm::vec3& feet, float sl
 }
 
 // ---------------------------------------------------------------------------
-// Player body occupancy
+// Player body collision
 //
-// Map::checkCollision(point, r) inflates a box around the point. A player
-// standing with its feet on a floor has its feet point exactly on (or a few
-// millimetres inside) that surface, so asking "does the feet point collide"
-// says yes for every standing player. Occupancy is therefore tested on a
-// horizontal slice of the body instead: a slice is blocked when a box
-// contains the slice's centre in X/Z and covers its height range. A surface at
-// the feet is below the slice, so standing on it does not count as a block.
+// The player is a rigid box from the toes to the head (feet position + body
+// size), not a point with a radius. Map geometry collides with the whole box:
+// a floating slab at knee height stops the body whether it hits the toes, the
+// legs, the torso or the head. Box-vs-block tests run on the map's block grid
+// (Map::boxOverlapsBlock), so this costs the same as the old point test.
 // ---------------------------------------------------------------------------
 
-bool Game::sliceBlocked(const glm::vec3& feet, float height, float radius, bool minHeightInclusive) const {
-    if (!currentMap) return false;
-    const glm::vec3 centre = feet + glm::vec3(0.0f, height, 0.0f);
-
-    for (const MapBlock& block : currentMap->getBlocks()) {
-        if (!block.solid) continue;
-
-        // Horizontal test in the block's frame (rotation-aware). tilt is how
-        // far the block reaches downwards below its centre line ...
-        glm::mat4 invRotation = glm::mat4(1.0f);
-        invRotation = glm::rotate(invRotation, glm::radians(-block.pitch), glm::vec3(1.0f, 0.0f, 0.0f));
-        invRotation = glm::rotate(invRotation, glm::radians(-block.rotation), glm::vec3(0.0f, 1.0f, 0.0f));
-        const glm::vec3 local = glm::vec3(invRotation * glm::vec4(centre - block.position, 1.0f)) + block.position;
-
-        const glm::vec3 blockMin = block.position - block.scale * 0.5f;
-        const glm::vec3 blockMax = block.position + block.scale * 0.5f;
-        if (local.x + radius < blockMin.x || local.x - radius > blockMax.x) continue;
-        if (local.z + radius < blockMin.z || local.z - radius > blockMax.z) continue;
-
-        // Vertical test in world space. For a rotated block use its highest
-        // and lowest world point, or a tilted lid would not block headroom.
-        const float tilt = std::abs(glm::vec3(invRotation * glm::vec4(0.0f, block.scale.y * 0.5f, 0.0f, 0.0f)).y);
-        const float top = block.position.y + tilt;
-        const float bottom = block.position.y - tilt;
-        const bool coversBeside = minHeightInclusive ? centre.y >= bottom : centre.y > bottom;
-        if (coversBeside && top > centre.y) return true;
-    }
-    return false;
+void Game::bodyBounds(const glm::vec3& feet, glm::vec3& mn, glm::vec3& mx) const {
+    const float half = bodyWidth * 0.5f;
+    mn = glm::vec3(feet.x - half, feet.y, feet.z - half);
+    mx = glm::vec3(feet.x + half, feet.y + bodyHeight, feet.z + half);
 }
 
 bool Game::bodyBlockedAt(const glm::vec3& feet) const {
-    // A hair narrower than the body so walking along a wall is not "inside".
-    const float radius = bodyWidth * 0.5f - 0.05f;
-    // The lowest slice (just above the feet) treats a surface whose top is
-    // exactly at the feet as a floor, not as a wall: a body standing on a
-    // platform is not buried in it. Higher slices use the strict test, so a
-    // wall with its surface at the feet stays solid.
-    if (sliceBlocked(feet, 0.02f, radius, /*minHeightInclusive=*/false)) return true;
-    for (float h : {0.45f, 0.9f, 1.35f, bodyHeight - 0.02f}) {
-        if (sliceBlocked(feet, h, radius, /*minHeightInclusive=*/true)) return true;
+    if (!currentMap) return false;
+    glm::vec3 mn, mx;
+    bodyBounds(feet, mn, mx);
+    return currentMap->boxOverlapsBlock(mn, mx);
+}
+
+void Game::movePlayerBody(float dt, const glm::vec3& horizontalSpeed) {
+    if (!currentMap) {
+        playerPos += playerVelocity * dt;
+        return;
     }
-    return false;
+
+    float dx = horizontalSpeed.x * dt;
+    float dz = horizontalSpeed.z * dt;
+    const float dy = playerVelocity.y * dt;
+
+    // Sub-stepping: no single horizontal step may be longer than a fraction of
+    // the thinnest map block, so a fast body cannot pass through a slab
+    // between two frames (the box test would then land it inside the slab).
+    const float maxStep = 0.3f;
+    const int steps = glm::clamp(static_cast<int>(std::ceil(
+        std::max(std::abs(dx), std::abs(dz)) / maxStep)), 1, 8);
+    dx /= static_cast<float>(steps);
+    dz /= static_cast<float>(steps);
+
+    glm::vec3 feet = playerPos;
+    glm::vec3 mn, mx;
+    bodyBounds(feet, mn, mx);
+
+    // Vertical first (falls land on a surface), then horizontal sliding on the
+    // grounded body, then any remaining vertical motion (rising past a ledge).
+    // Doing the dominant motion first is what keeps a falling body from
+    // catching on the lip of a surface it should land on.
+    const bool falling = dy <= 0.0f;
+    if (falling) {
+        verticalSweep(feet, mn, mx, dy, true);
+        for (int i = 0; i < steps; ++i) horizontalSweep(feet, mn, mx, dx, dz);
+    } else {
+        for (int i = 0; i < steps; ++i) horizontalSweep(feet, mn, mx, dx, dz);
+        verticalSweep(feet, mn, mx, dy, false);
+    }
+
+    // The box never ends up inside geometry: a final push-out covers corners
+    // and the few cases the per-axis moves cannot resolve.
+    currentMap->resolveBox(glm::vec3(dx, dy, dz), mn, mx);
+    feet = glm::vec3((mn.x + mx.x) * 0.5f, mn.y, (mn.z + mx.z) * 0.5f);
+
+    // The body never leaves the playable volume.
+    const glm::vec3 half = currentMap->getDimensions() * 0.5f;
+    const float bound = 1.0f;
+    feet.x = glm::clamp(feet.x, -half.x + bound, half.x - bound);
+    feet.z = glm::clamp(feet.z, -half.z + bound, half.z - bound);
+    feet.y = std::max(feet.y, -30.0f);
+
+    playerPos = feet;
+}
+
+void Game::horizontalSweep(glm::vec3& feet, glm::vec3& mn, glm::vec3& mx, float dx, float dz) {
+    // One axis at a time: X then Z. A blocked axis stops that component (so
+    // sliding along a wall keeps the other), and a blocked step also stops the
+    // body on this frame even if it would have fitted once further along.
+    if (dx != 0.0f) {
+        glm::vec3 tmn = mn, tmx = mx;
+        tmn.x += dx; tmx.x += dx;
+        glm::vec3 push;
+        if (!currentMap->boxOverlapsBlock(tmn, tmx, push)) {
+            mn = tmn; mx = tmx;
+        } else {
+            playerVelocity.x = 0.0f;
+        }
+    }
+    if (dz != 0.0f) {
+        glm::vec3 tmn = mn, tmx = mx;
+        tmn.z += dz; tmx.z += dz;
+        glm::vec3 push;
+        if (!currentMap->boxOverlapsBlock(tmn, tmx, push)) {
+            mn = tmn; mx = tmx;
+        } else {
+            playerVelocity.z = 0.0f;
+        }
+    }
+    feet = glm::vec3((mn.x + mx.x) * 0.5f, mn.y, (mn.z + mx.z) * 0.5f);
+}
+
+void Game::verticalSweep(glm::vec3& feet, glm::vec3& mn, glm::vec3& mx, float dy, bool falling) {
+    // A vertical move is swept between the start and the target: the body
+    // stops on the first surface it reaches in that direction, so a fall can
+    // never pass through a slab (and lands without dropping a frame's worth).
+    if (falling) {
+        float support = mn.y;
+        if (currentMap->supportHeight(mn, mx, -dy + 0.02f, support)) {
+            // The body reaches the surface this step: rest exactly on it.
+            const float lift = support - mn.y;
+            mn.y += lift; mx.y += lift;
+            playerVelocity.y = 0.0f;
+            isJumping = false;
+            feet.y = mn.y;
+            return;
+        }
+        if (dy != 0.0f) {
+            glm::vec3 tmn = mn, tmx = mx;
+            tmn.y += dy; tmx.y += dy;
+            glm::vec3 push;
+            if (!currentMap->boxOverlapsBlock(tmn, tmx, push)) {
+                mn = tmn; mx = tmx;
+            } else {
+                playerVelocity.y = 0.0f;      // entered geometry: stop here
+            }
+        }
+    } else if (dy > 0.0f) {
+        // ceilingHeight() returns the top of the searched range when nothing
+        // is above within reach (mx.y + maxRise); anything below that is real.
+        const float ceiling = currentMap->ceilingHeight(mn, mx, dy + 0.05f);
+        if (ceiling < mx.y + 0.01f) {
+            // Already touching a surface above the head: stop.
+            playerVelocity.y = 0.0f;
+        } else if (ceiling - mx.y <= dy + 0.02f) {
+            // The head reaches the surface this step: stop right under it.
+            const float lift = ceiling - mx.y;
+            if (lift > 0.0f) { mn.y += lift; mx.y += lift; }
+            playerVelocity.y = 0.0f;
+        } else {
+            glm::vec3 tmn = mn, tmx = mx;
+            tmn.y += dy; tmx.y += dy;
+            glm::vec3 push;
+            if (!currentMap->boxOverlapsBlock(tmn, tmx, push)) {
+                mn = tmn; mx = tmx;
+            } else {
+                playerVelocity.y = 0.0f;
+            }
+        }
+    }
+    feet.y = mn.y;
 }
 
 // ---------------------------------------------------------------------------
@@ -254,77 +350,21 @@ void Game::updatePlayerPhysics(float deltaTime) {
     }
     
     // ── Ground state ────────────────────────────────────────────────────────
-    // onGround is decided from where the body is *before* the gravity step, so
-    // the jump pressed this frame can still act (the input runs before the
-    // physics). It is set below again from the position after the move, which
-    // is what the next frame starts from.
-    const bool wasOnGround = isOnGround();
+    // isOnGround() is decided from where the body is *before* the gravity step,
+    // so the jump pressed this frame can still act (the input runs before the
+    // physics). The state is refreshed below from where the body ends up.
 
     // Apply gravity
     playerVelocity.y -= 9.8f * deltaTime;
-    
-    // Calculate intended new position
-    glm::vec3 newPos = playerPos + playerVelocity * deltaTime;
-    
-    // Store original position
-    glm::vec3 originalPos = playerPos;
-    (void)originalPos;   // kept for readability of the movement below
-    
-    // ── Movement ────────────────────────────────────────────────────────────
-    // The player is an upright body with its feet at playerPos, moved one axis
-    // at a time. A spot is free when the body does not overlap geometry
-    // (bodyBlockedAt), so standing on a floor or next to a wall is fine.
-    bool onGround = wasOnGround;
-    if (currentMap) {
-        glm::vec3 moved = playerPos;
 
-        // Horizontal: X, then Z, each allowed only where the body fits.
-        glm::vec3 tryX = moved;
-        tryX.x = newPos.x;
-        if (!bodyBlockedAt(tryX)) moved.x = newPos.x;
-        else playerVelocity.x = 0.0f;
+    // Horizontal speed comes from the input (processGameInput set it); the
+    // vertical speed comes from gravity and jumps.
+    const glm::vec3 horizontal(playerVelocity.x, 0.0f, playerVelocity.z);
+    movePlayerBody(deltaTime, horizontal);
 
-        glm::vec3 tryZ = moved;
-        tryZ.z = newPos.z;
-        if (!bodyBlockedAt(tryZ)) moved.z = newPos.z;
-        else playerVelocity.z = 0.0f;
-
-        // Vertical. Rising stops at a ceiling; falling is a swept test from
-        // the feet to where they would land, so the feet come to rest exactly
-        // on the floor instead of sinking into it and being snapped up later
-        // (which looked like a teleport at the end of the fall).
-        if (playerVelocity.y > 0.0f) {
-            glm::vec3 tryY = moved;
-            tryY.y = newPos.y;
-            if (!bodyBlockedAt(tryY)) {
-                moved.y = newPos.y;
-                onGround = false;
-            } else {
-                playerVelocity.y = 0.0f;                 // hit the ceiling
-            }
-        } else if (landedOnFloor(moved, newPos.y, moved.y)) {
-            // Landed on the floor this frame: rest on it and end the fall.
-            playerVelocity.y = 0.0f;
-            isJumping = false;
-            onGround = true;
-        } else {
-            onGround = false;
-        }
-
-        // A body never leaves the playable volume (the map's outer walls are
-        // solid; this is the backstop for maps without them).
-        const glm::vec3 half = currentMap->getDimensions() * 0.5f;
-        const float bound = 1.0f;
-        moved.x = glm::clamp(moved.x, -half.x + bound, half.x - bound);
-        moved.z = glm::clamp(moved.z, -half.z + bound, half.z - bound);
-        moved.y = std::max(moved.y, -30.0f);
-
-        playerPos = moved;
-
-        // Standing after this frame: the feet rest on a surface (at most a
-        // small step below them) and the body is not falling.
-        onGround = playerVelocity.y <= 0.0f && !bodyBlockedAt(playerPos) && isSupportedAt(playerPos);
-    }
+    // Standing after this frame: the feet rest on a surface (at most a small
+    // step below them) and the body is not falling.
+    const bool onGround = isOnGround();
 
     // Debug output
     static int frameCount = 0;
@@ -348,70 +388,19 @@ void Game::updatePlayerPhysics(float deltaTime) {
 
 bool Game::isSupportedAt(const glm::vec3& feet) const {
     if (!currentMap) return false;
-    // The floor may be up to one small step below the feet, or a few
-    // millimetres above them (float error after a snap). Looking 2 cm above
-    // the feet covers that, so a feet position that is exactly on a surface
-    // is always supported - independent of any previous frame.
-    float groundHeight = feet.y;
-    if (!currentMap->getFloorBelow(feet + glm::vec3(0.0f, 0.02f, 0.0f),
-                                   bodyWidth * 0.5f - 0.05f, kGroundSnap + 0.02f, groundHeight)) {
-        return false;
-    }
-    return feet.y - groundHeight <= kGroundSnap + 0.02f;
+    // The body rests on the highest surface under its footprint, up to one
+    // small step below the feet (a few millimetres above them are float error
+    // after a snap).
+    glm::vec3 mn, mx;
+    bodyBounds(feet, mn, mx);
+    float support = feet.y;
+    if (!currentMap->supportHeight(mn, mx, kGroundSnap + 0.02f, support)) return false;
+    return support <= feet.y + 0.02f && feet.y - support <= kGroundSnap + 0.02f;
 }
 
 bool Game::isOnGround() const {
     return !isDead && currentMap != nullptr && playerVelocity.y <= 0.0f &&
            !bodyBlockedAt(playerPos) && isSupportedAt(playerPos);
-}
-
-bool Game::landedOnFloor(glm::vec3& feet, float targetY, float& restingY) const {
-    // The feet sweep downwards from `feet.y` to `targetY` this frame; the
-    // highest surface in that range (plus a small look-ahead for the next
-    // frame's step) is where they come to rest. Landing exactly on it keeps
-    // the motion continuous, however fast the fall.
-    if (!currentMap) {
-        feet.y = targetY;
-        restingY = targetY;
-        return false;
-    }
-
-    // A surface that lies between the feet and the target: a fall ends on the
-    // first one it reaches (this also catches tiny per-frame steps, where the
-    // target is still fractionally above the floor).
-    float groundHeight;
-    if (currentMap->getFloorBelow(feet, bodyWidth * 0.5f - 0.05f,
-                                  feet.y - targetY + 0.02f, groundHeight)) {
-        feet.y = groundHeight;                       // rest on the surface
-        restingY = groundHeight;
-        return true;
-    }
-
-    // No floor between here and the target: keep falling, unless the body
-    // would enter geometry (a wall corner, or a lip the body is too tall to
-    // pass under). Then step up just enough to clear it: a sweep from here to
-    // the target, landing on the first height where the body fits.
-    glm::vec3 tried = feet;
-    tried.y = targetY;
-    if (bodyBlockedAt(tried)) {
-        const float from = feet.y;
-        const float to = targetY;
-        for (float y = from; y >= to - 1e-4f; y -= 0.01f) {
-            glm::vec3 spot = feet;
-            spot.y = y;
-            if (!bodyBlockedAt(spot)) {
-                feet.y = y;
-                restingY = y;
-                return true;
-            }
-        }
-        // Nowhere fits (a body thicker than the gap): stay where it was.
-        restingY = feet.y;
-        return true;
-    }
-    feet.y = targetY;
-    restingY = targetY;
-    return false;
 }
 
 void Game::handleJump() {
@@ -1564,12 +1553,18 @@ void Game::renderRemotePlayers() {
         RemotePlayer& remote = remotePlayers[i];
         if (!remote.active || remote.isDead) continue;
 
-        // Smooth out the network rate: converge on the latest position.
+        // Smooth out the network rate: converge on the latest position. The
+        // height follows exactly (a body never slides vertically between the
+        // floor it stands on and the one behind), only X/Z are smoothed: a
+        // stale height made the remote body float while its hits used the
+        // real one.
         if (glm::length(remote.renderPosition - glm::vec3(0.0f)) < 0.001f) {
             remote.renderPosition = remote.position;
         } else {
             const float interpolationFactor = 0.2f;
-            remote.renderPosition += (remote.position - remote.renderPosition) * interpolationFactor;
+            remote.renderPosition.x += (remote.position.x - remote.renderPosition.x) * interpolationFactor;
+            remote.renderPosition.z += (remote.position.z - remote.renderPosition.z) * interpolationFactor;
+            remote.renderPosition.y = remote.position.y;
         }
 
         // The body is drawn with the same box the hits are checked against,
@@ -1829,3 +1824,4 @@ void Game::updateSpectator() {
         playerPos += camera.Right * spectatorSpeed * 0.016f;
     }
 }
+

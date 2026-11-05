@@ -10,6 +10,10 @@
 
 #include <vector>
 #include <string>
+#include <utility>
+#include <functional>
+#include <array>
+#include <unordered_map>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -45,7 +49,44 @@ struct MapBlock {
              float rot = 0.0f,
              float pit = 0.0f)
         : position(pos), scale(scl), textureId(texId), blockType(type), solid(isSolid), color(col), rotation(rot), pitch(pit) {}
+
+    /// True when the block is an axis-aligned box (every rotation is 0).
+    bool isAxisAligned() const {
+        return rotation == 0.0f && pitch == 0.0f;
+    }
+
+    /// Local (unrotated) bounds around `position`.
+    glm::vec3 localMin() const { return position - scale * 0.5f; }
+    glm::vec3 localMax() const { return position + scale * 0.5f; }
+
+    /// Axis-aligned world bounds; for a rotated block the box that contains
+    /// every corner (so the broad phase never misses a tilted block).
+    /// Cached: bounds are computed once per block (see rebuildCollisionGrid).
+    void worldBounds(glm::vec3& min, glm::vec3& max) const;
+
+    /// Recompute the cached bounds (called by the map whenever a block moves).
+    void updateBoundsCache() const;
+
+    /// Cached AABB (valid after updateBoundsCache()).
+    mutable glm::vec3 boundsMin_{0.0f};
+    mutable glm::vec3 boundsMax_{0.0f};
+
+    /// True when `point` is inside the oriented block.
+    bool containsPoint(const glm::vec3& point) const;
 };
+
+/**
+ * @brief Rotation basis of a block: the three unit axes of its local space.
+ *
+ * Order and convention match the renderer exactly (yaw around Y, then pitch
+ * around X, evaluated as R = Ry * Rx): axisY is the block's local up, which is
+ * the direction a surface on top of it faces.
+ */
+void mapBlockBasis(const MapBlock& block, glm::vec3& axisX, glm::vec3& axisY, glm::vec3& axisZ);
+
+/// Inverse of mapBlockBasis: world direction -> block local direction.
+glm::vec3 mapBlockToLocalDir(const MapBlock& block, const glm::vec3& worldDir);
+
 
 /**
  * @brief Structure representing a generic spawn point (for Deathmatch)
@@ -228,6 +269,42 @@ public:
      */
     bool getFloorBelow(const glm::vec3& position, float radius, float maxDrop,
                        float& groundHeight) const;
+
+    // ── Rigid body collision ────────────────────────────────────────────────
+    // A moving body is an axis-aligned box (min..max, often rotated around the
+    // player's feet). Collision is tested against the *whole* box, not against
+    // points: a slab at knee height collides whether it hits the feet, the
+    // legs, the torso or the head. Everything below runs on the block grid, so
+    // a query only visits the cells the box overlaps (see rebuildCollisionGrid).
+
+    /// True when the box min..max overlaps any solid block.
+    bool boxOverlapsBlock(const glm::vec3& min, const glm::vec3& max) const;
+
+    /// True when the box overlaps any solid block; on a hit `normal` receives
+    /// the world direction to move the box out of it (the contact normal).
+    bool boxOverlapsBlock(const glm::vec3& min, const glm::vec3& max,
+                          glm::vec3& normal) const;
+
+    /// Push `min`/`max` out of every block they overlap, as little as possible
+    /// (the smallest translation along one axis, optionally only along the
+    /// given world axis, e.g. Y for a floor). Returns the corrected box.
+    void resolveBox(const glm::vec3& move, glm::vec3& min, glm::vec3& max) const;
+
+    /// Highest surface below the whole footprint of min..max that the box can
+    /// rest on: a block top at or below `min.y`, whose top is not covered by
+    /// another block (so stacked slabs give the one you actually stand on).
+    /// Returns false when nothing lies within `maxDrop` below (then `height`
+    /// is left alone; callers must not treat a missing surface as support).
+    bool supportHeight(const glm::vec3& min, const glm::vec3& max, float maxDrop,
+                       float& height) const;
+
+    /// Lowest surface above the box that stops a rising body (its underside),
+    /// or `max.y` when nothing is above within `maxRise`.
+    float ceilingHeight(const glm::vec3& min, const glm::vec3& max, float maxRise) const;
+
+    /// World axis of a block's top surface (its local up). Mostly +Y; a
+    /// rotated block can have a sloped top, which ground checks use.
+    glm::vec3 topNormalOf(std::size_t blockIndex) const;
     
     /**
      * @brief Get map dimensions
@@ -329,6 +406,39 @@ public:
 private:
     /// All blocks in the map
     std::vector<MapBlock> blocks;
+
+    // ── Broad phase: uniform 3D grid over the block list ────────────────────
+    // Collision queries need "which blocks are near this box". A 4-unit cell
+    // holds the indices of every block whose padded world bounds touch it, so a
+    // query only visits its own cells (a few blocks) instead of the whole map.
+    // Rebuilt lazily after every change of the block list (addBlock / clear).
+    void rebuildCollisionGrid();          ///< mark the grid as stale
+    void ensureGrid() const;              ///< rebuild it if stale
+    /// Visit every solid block whose bounds touch the box.
+    template <typename Fn> void forEachBlockNear(const glm::vec3& min, const glm::vec3& max, Fn&& fn) const;
+    /// Lowest index of a solid block overlapping a box whose top is at the
+    /// box bottom (used for support queries).
+    int supportBlockAt(const glm::vec3& min, const glm::vec3& max) const;
+
+    /// Highest world point of a block (its top for axis-aligned blocks).
+    float highestPoint(const MapBlock& block) const;
+
+    static constexpr float kGridCell = 4.0f;
+    /// Linear cell lookup: cell (x, y, z) -> row index, or -1 when empty.
+    struct GridCell {
+        int x = 0, y = 0, z = 0;
+        bool operator==(const GridCell& o) const { return x == o.x && y == o.y && z == o.z; }
+    };
+    struct GridCellHash {
+        std::size_t operator()(const GridCell& c) const {
+            return (static_cast<std::size_t>(c.x) * 73856093u) ^
+                   (static_cast<std::size_t>(c.y) * 19349663u) ^
+                   (static_cast<std::size_t>(c.z) * 83492791u);
+        }
+    };
+    mutable std::unordered_map<GridCell, std::vector<int>, GridCellHash> grid_;
+    mutable bool gridDirty_ = true;
+
     /// Available textures
     std::vector<Texture*> textures;
     /// Map dimensions

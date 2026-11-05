@@ -558,10 +558,11 @@ bool Game::debugMenuSelect(const std::string& label) {
 }
 
 void Game::debugPumpFrame() {
-    // The real per-frame network pump (update() also runs gameplay/physics,
-    // which needs no GL); then the input routing of the current state.
-    updateNetwork();
-    processInput(1.0f / 60.0f);
+    // The real per-frame network pump and gameplay step (input + physics +
+    // sending), exactly like the game loop's frame, without drawing. A match
+    // test never means to be in the menu (ESC would open it).
+    if (gameState == MENU) gameState = PLAYING;
+    update(1.0f / 60.0f);
 }
 
 void Game::debugRunFrames(int frames) {
@@ -598,6 +599,8 @@ void Game::debugStepWithInputForTest(int frames, float dt, float forward, float 
     // Same convention as processGameInput: horizontal velocity is set from
     // the keys each frame, then the real physics (and everything else) runs.
     for (int i = 0; i < frames; ++i) {
+        // Like a player in a match: never leave the menu state behind.
+        if (gameState != PLAYING) gameState = PLAYING;
         const float yaw = glm::radians(camera.Yaw);
         const glm::vec2 fwd(std::cos(yaw), std::sin(yaw));        // same as the keys
         const glm::vec2 side(std::cos(yaw + glm::radians(90.0f)), std::sin(yaw + glm::radians(90.0f)));
@@ -616,6 +619,17 @@ void Game::debugStepWithInputForTest(int frames, float dt, float forward, float 
 
 void Game::debugExplodeForTest(const glm::vec3& at) {
     createSimpleExplosion(at);
+}
+
+bool Game::debugInstallMapForTest(std::unique_ptr<Map> map) {
+    // Same path as a loaded map: reset the match on the new geometry and give
+    // the renderer the world batch.
+    if (!map) return false;
+    installMap(std::move(map));
+    if (currentMap) {
+        renderer.buildWorld(currentMap);
+    }
+    return currentMap != nullptr;
 }
 
 bool Game::debugKeyDownForTest(int key) const {
@@ -708,3 +722,4 @@ void Game::debugOpenMenu(const std::string& name) {
     }
     menuJustEntered = false;
 }
+
