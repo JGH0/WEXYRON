@@ -11,3 +11,6 @@ build-cmake/
 
 # Release artifacts from tools/package.sh
 dist/
+
+# Crash/startup log written by the Windows build
+game-log.txt

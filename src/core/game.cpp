@@ -377,6 +377,18 @@ Game::Game(int width, int height)
         exit(-1);
     }
 
+    // Report which OpenGL implementation is actually in use: on a GPU-less
+    // Windows install this must say "Mesa" (llvmpipe), otherwise the fallback
+    // did not take effect.
+    {
+        const auto* version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
+        const auto* rendererName = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+        const auto* vendor = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
+        std::cout << "OpenGL: " << (version ? version : "?") << "\n"
+                  << "  renderer: " << (rendererName ? rendererName : "?") << "\n"
+                  << "  vendor:   " << (vendor ? vendor : "?") << std::endl;
+    }
+
     // Sound engine: open the device and load assets/audio (never fatal).
     initAudio();
 

@@ -25,6 +25,7 @@ MapLoader::~MapLoader() {
 
 void MapLoader::ensureTextures(Map& map) {
     for (int i = 0; i < kDefaultTextureCount; ++i) {
+        std::cout << "  loading " << kDefaultTextures[i] << "..." << std::endl;
         map.loadTexture(kDefaultTextures[i], i);
     }
 }

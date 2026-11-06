@@ -13,6 +13,7 @@
 #include <exception>
 #if defined(_WIN32)
 #include <cstdio>
+#include <fstream>
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -128,6 +129,36 @@ void installCrashHandlers() {
     SetUnhandledExceptionFilter(onAccessViolation);
 #endif
 }
+
+// Writes to two streams at once (console + log file), so diagnostics survive
+// both a closed console and a process that is killed mid-run.
+class TeeBuf : public std::streambuf {
+public:
+    TeeBuf(std::streambuf* a, std::streambuf* b) : first_(a), second_(b) {}
+
+protected:
+    int overflow(int ch) override {
+        if (ch == traits_type::eof()) return traits_type::not_eof(ch);
+        const char c = static_cast<char>(ch);
+        const bool ok = first_->sputc(c) != traits_type::eof() &&
+                        second_->sputc(c) != traits_type::eof();
+        return ok ? ch : traits_type::eof();
+    }
+    std::streamsize xsputn(const char* s, std::streamsize n) override {
+        first_->sputn(s, n);
+        second_->sputn(s, n);
+        return n;
+    }
+    int sync() override {
+        first_->pubsync();
+        second_->pubsync();
+        return 0;
+    }
+
+private:
+    std::streambuf* first_;
+    std::streambuf* second_;
+};
 } // namespace
 
 
@@ -197,6 +228,24 @@ static void runMenuTest(Game& game, const char* script) {
 
 int main() {
     installCrashHandlers();
+
+#ifdef _WIN32
+    // Tee stdout/stderr into a log next to the exe (keeping the console).
+    // Unbuffered so the last line survives a hard kill - that is what tells us
+    // where a silent exit happened.
+    static std::ofstream logFile("game-log.txt", std::ios::out | std::ios::trunc);
+    static TeeBuf coutTee(std::cout.rdbuf(), logFile.is_open() ? logFile.rdbuf()
+                                                              : std::cout.rdbuf());
+    static TeeBuf cerrTee(std::cerr.rdbuf(), logFile.is_open() ? logFile.rdbuf()
+                                                              : std::cerr.rdbuf());
+    if (logFile.is_open()) {
+        std::cout.rdbuf(&coutTee);
+        std::cerr.rdbuf(&cerrTee);
+        std::cout << std::unitbuf;
+        std::cerr << std::unitbuf;
+    }
+#endif
+
     int exitCode = 0;
 
     try {
