@@ -421,6 +421,7 @@ void Game::init() {
     // Start the first map in the background; init() finishes before it is ready
     // and the game shows the menu meanwhile. Simpler and just as fast: load the
     // first map up front so the menu immediately has something to show.
+    std::cout << "[init] loadMap" << std::endl;
     if (!currentMap && !mapFiles.empty())
         loadMap(mapFiles[0]);
 
@@ -428,13 +429,16 @@ void Game::init() {
     // game opens on the main menu, not in a match. Build the menu page before
     // the first frame - a menu state without a page draws nothing.
     gameInProgress_ = false;
+    std::cout << "[init] openMainMenu" << std::endl;
     openMainMenu();
     gameState = MENU;
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
 
     // The startup map was loaded before the texture array existed; build it now
     // so the map renders with its real materials.
+    std::cout << "[init] refreshTextures" << std::endl;
     renderer.refreshTextures(currentMap);
+    std::cout << "[init] buildWorld" << std::endl;
     renderer.buildWorld(currentMap);
 
     // Now that weapons, window and renderer exist, apply the settings loaded
@@ -449,6 +453,7 @@ void Game::init() {
     spawnEnemy(glm::vec3(-5.0f, -1.0f,  5.0f));
     spawnEnemy(glm::vec3( 5.0f, -1.0f, -5.0f));
 
+    std::cout << "[init] done" << std::endl;
     std::cout << "Game initialization complete." << std::endl;
 }
 
