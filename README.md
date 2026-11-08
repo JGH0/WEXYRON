@@ -27,14 +27,35 @@ A multiplayer-enabled 3D first-person shooter game built with OpenGL and C++.
 
 ### Windows (MSYS2)
 1. Install MSYS2 (see [WINDOWS_SETUP.md](WINDOWS_SETUP.md))
-2. Open **MSYS2 MINGW64** from Start Menu
-3. Install dependencies: `pacman -S --noconfirm mingw-w64-x86_64-gcc mingw-w64-x86_64-make mingw-w64-x86_64-glfw mingw-w64-x86_64-glm`
-4. Build with: `make -f Makefile.windows`
-5. Run with: `./build/bin/game.exe`
+2. Run `BUILD.bat` — it installs the gcc/glfw/glm packages, builds with
+   `Makefile.windows`, and stages the runtime DLLs, `assets/` and the Mesa
+   software renderer into `build/bin/`
+3. Run with `run.bat` (or double-click `build\bin\game.exe`)
+4. Start the server with `runServer.bat` (UDP port 7777)
+
+GPU-less VMs (QEMU/VirtualBox basic display, no OpenGL driver) work too:
+the game ships Mesa `opengl32_sw.dll` in `build/bin/` and automatically
+falls back to it when WGL cannot create a context. With a real GPU it uses
+the driver directly. Set `CUBE_RENDERER=gpu` to disable Mesa, or
+`CUBE_RENDERER=software` to force it.
+
+Manual (MSYS2 UCRT64 terminal, whether the README is accurate is
+checked by `BUILD.bat` instead):
+```bash
+pacman -S --needed mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-make mingw-w64-ucrt-x86_64-glfw mingw-w64-ucrt-x86_64-glm
+mingw32-make -f Makefile.windows
+./build/bin/game.exe
+```
+
+Or CMake (same sources):
+```cmd
+cmake -S . -B build-cmake -DCMAKE_BUILD_TYPE=Release
+cmake --build build-cmake --config Release
+```
 
 Or use the batch scripts:
-- `install_deps_mgw.bat` — install dependencies for MINGW64
-- `BUILD.bat` — interactive build (select MINGW64 when prompted)
+- `install_deps_mgw.bat` — install dependencies
+- `BUILD.bat` — build + stage runtime files
 - `run.bat` — launch the game
 - `runServer.bat` — start a multiplayer server
 

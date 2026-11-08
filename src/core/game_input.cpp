@@ -157,9 +157,10 @@ void Game::processInput(float deltaTime) {
     // ── Final cursor mode enforcement ────────────────────────────────
     // Runs after every state's input handler above. If any code path
     // transitioned to PLAYING (mouse click, keyboard ENTER, etc.), the
-    // cursor must be hidden.
+    // cursor must be hidden. Lightweight per-frame path: no look reset
+    // (that happens once on entry via capturePlayCursor(true)).
     if (gameState == PLAYING) {
-        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        capturePlayCursor(false);
     } else if (gameState != MAP_EDITOR) {
         glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
     }
@@ -168,7 +169,8 @@ void Game::processInput(float deltaTime) {
 void Game::closeMenuToGame() {
     // ESC on the bottom page of a menu that was opened from the game returns
     // to it; from the main menu (no game in progress) it just re-opens the
-    // main menu itself.
+    // main menu itself. Returning to the game re-grabs + forgets the menu
+    // cursor position so the first move does not spin.
     inp.resetNavKeys();
     menuJustEntered = true;
     if (gameState == MENU) {
@@ -176,7 +178,7 @@ void Game::closeMenuToGame() {
         return;
     }
     gameState = PLAYING;
-    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    capturePlayCursor(true);
 }
 
 // ---------------------------------------------------------------------------
@@ -260,7 +262,7 @@ void Game::processMenuInput() {
 
     // A row action may have changed the state (play, back, exit...).
     if (gameState == PLAYING) {
-        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        capturePlayCursor(true);
     }
 }
 

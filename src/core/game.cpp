@@ -16,6 +16,7 @@
 #include "game.hpp"
 #include "network/network.hpp"
 #include <iostream>
+#include <cstdlib>
 #include <cstring>
 #include <glm/gtc/matrix_transform.hpp>
 #include <filesystem>
@@ -82,70 +83,159 @@ GLFWwindow* createGameWindow(int width, int height) {
 // "auto" (the default) = GPU when available, Mesa otherwise.
 // CUBE_RENDERER=gpu     = never use Mesa (fail like before)
 // CUBE_RENDERER=software = always use Mesa (useful for slower GPUs)
-extern "C" __declspec(dllimport) unsigned long __stdcall GetEnvironmentVariableA(
-    const char* name, char* buffer, unsigned long size);
-extern "C" __declspec(dllimport) unsigned long __stdcall GetModuleFileNameA(
-    void* module, char* filename, unsigned long size);
-extern "C" __declspec(dllimport) int __stdcall CopyFileA(
-    const char* existing, const char* replacement, int failIfExists);
-extern "C" __declspec(dllimport) int __stdcall SetEnvironmentVariableA(
-    const char* name, const char* value);
-extern "C" __declspec(dllimport) int __stdcall GetCurrentProcessId();
-extern "C" __declspec(dllimport) void __stdcall ExitProcess(unsigned int code);
-
+//
+// The Mesa loader DLL needs libgallium_wgl.dll (and, for completeness,
+// libdlclose-skip.dll) sitting next to it. The packaging step ships those
+// with their original names; only opengl32.dll is renamed to opengl32_sw.dll.
+// After the copy below, the sibling DLLs are already next to the new
+// opengl32.dll, so Windows resolves them without extra work.
+//
+// Uses the plain <windows.h> declarations (already included above) — the
+// previous hand-written dllimport prototypes duplicated those and made the
+// [[noreturn]] relaunch path warn on some toolchains.
 constexpr const char* kMesaActiveVar = "CUBE_SOFTWARE_GL";
 constexpr const char* kRendererVar = "CUBE_RENDERER";
 
-std::string exeDirectory() {
-    char path[MAX_PATH];
-    const unsigned long len = GetModuleFileNameA(nullptr, path, MAX_PATH);
-    std::filesystem::path exe(std::string(path, len));
-    return exe.parent_path().string();
+std::filesystem::path exeDirectory() {
+    char path[MAX_PATH] = {};
+    const DWORD len = ::GetModuleFileNameA(nullptr, path, MAX_PATH);
+    if (len == 0) return std::filesystem::current_path();
+    return std::filesystem::path(std::string(path, len)).parent_path();
 }
 
 // Copy Mesa into place if it is not there yet. Returns false when it cannot be
 // installed (already active, disabled, or not shipped).
-bool enableMesaFallback(const std::string& dir) {
+bool enableMesaFallback(const std::filesystem::path& dir) {
     char active[8] = {0};
-    if (GetEnvironmentVariableA(kMesaActiveVar, active, sizeof(active)) > 0) return false;
+    if (::GetEnvironmentVariableA(kMesaActiveVar, active, sizeof(active)) > 0) return false;
 
     char mode[16] = {0};
-    if (GetEnvironmentVariableA(kRendererVar, mode, sizeof(mode)) > 0 && std::strcmp(mode, "gpu") == 0) {
+    if (::GetEnvironmentVariableA(kRendererVar, mode, sizeof(mode)) > 0 && std::strcmp(mode, "gpu") == 0) {
         return false;
     }
 
-    const auto software = std::filesystem::path(dir) / "opengl32_sw.dll";
-    const auto target = std::filesystem::path(dir) / "opengl32.dll";
+    const auto software = dir / "opengl32_sw.dll";
+    const auto target = dir / "opengl32.dll";
+    const auto gallium = dir / "libgallium_wgl.dll";
     if (!std::filesystem::exists(software)) return false;
-    if (!CopyFileA(software.string().c_str(), target.string().c_str(), 0)) return false;
+    if (!std::filesystem::exists(gallium)) {
+        std::cerr << "Software renderer disabled: " << gallium.string()
+                  << " is missing (only opengl32_sw.dll was shipped)."
+                  << std::endl;
+        return false;
+    }
+    if (!::CopyFileA(software.string().c_str(), target.string().c_str(), FALSE)) return false;
     return true;
 }
 
-[[noreturn]] void relaunchWithMesa(const std::string& dir) {
+// Point Mesa at llvmpipe (CPU) instead of its D3D12 backend. See
+// relaunchWithMesa for why D3D12 is unusable on GPU-less VMs. Called before
+// any context is created, so a second launch that already finds
+// opengl32.dll next to the exe (no relaunch) still gets the stable backend.
+void forceMesaLlvmpipe() {
+    if (::GetEnvironmentVariableA("GALLIUM_DRIVER", nullptr, 0) == 0) {
+        ::SetEnvironmentVariableA("GALLIUM_DRIVER", "llvmpipe");
+    }
+    if (::GetEnvironmentVariableA("LIBGL_ALWAYS_SOFTWARE", nullptr, 0) == 0) {
+        ::SetEnvironmentVariableA("LIBGL_ALWAYS_SOFTWARE", "1");
+    }
+}
+
+[[noreturn]] void relaunchWithMesa(const std::filesystem::path& dir) {
     std::cerr << "No hardware OpenGL available; restarting with the bundled "
                  "software renderer (Mesa). This is slower but works without a "
                  "GPU driver."
               << std::endl;
 
-    SetEnvironmentVariableA(kMesaActiveVar, "1");
+    ::SetEnvironmentVariableA(kMesaActiveVar, "1");
+    // Force Mesa's CPU rasterizer (llvmpipe), not its D3D12 backend. The D3D12
+    // backend on GPU-less Windows (Microsoft Basic Render Driver / WARP)
+    // creates a context but then exits with 0x80070057 on the second
+    // glTexImage2D / first glDrawArrays / glfwTerminate — the window flashes
+    // and closes instantly. llvmpipe (pure CPU, no D3D) runs the whole game
+    // stably. The env vars only affect the restarted child process.
+    forceMesaLlvmpipe();
     // Re-run this executable in a new process, then exit. The new process
-    // resolves opengl32.dll to the Mesa copy next to the exe.
-    std::string cmd = "\"" + (std::filesystem::path(dir) / "game.exe").string() + "\"";
+    // resolves opengl32.dll to the Mesa copy next to the exe. Keep the
+    // caller's working directory (nullptr) so the relative assets/ lookup
+    // finds the same files the parent process did; passing the exe directory
+    // here previously made the child look for build/bin/assets/ when the
+    // parent ran from the project root (and vice versa).
+    std::string cmd = "\"" + (dir / "game.exe").string() + "\"";
     std::vector<char> mutableCmd(cmd.begin(), cmd.end());
     mutableCmd.push_back('\0');
     STARTUPINFOA si{};
     si.cb = sizeof(si);
     PROCESS_INFORMATION pi{};
-    if (CreateProcessA(nullptr, mutableCmd.data(), nullptr, nullptr, FALSE, 0, nullptr, dir.c_str(), &si, &pi)) {
-        CloseHandle(pi.hProcess);
-        CloseHandle(pi.hThread);
-        ExitProcess(0);
+    if (::CreateProcessA(nullptr, mutableCmd.data(), nullptr, nullptr, FALSE, 0, nullptr,
+                         nullptr, &si, &pi)) {
+        ::CloseHandle(pi.hProcess);
+        ::CloseHandle(pi.hThread);
+        ::ExitProcess(0);
     }
     std::cerr << "Could not restart with the software renderer." << std::endl;
     waitForEnterOnFailure();
-    ExitProcess(1);
+    ::ExitProcess(1);
+    // The compiler cannot see that ExitProcess never returns on every
+    // toolchain (MinGW declares it, MSVC's declaration is not marked
+    // noreturn), so keep the no-return contract explicit.
+    std::abort();
+}
+#else
+// Linux (and macOS): the Mesa restart path does not exist here. Linux always
+// has Mesa/llvmpipe in the system OpenGL stack (LIBGL_ALWAYS_SOFTWARE /
+// LIBGL software paths), so a failed context creation is a real error.
+std::filesystem::path exeDirectory() {
+#if defined(__linux__)
+    std::error_code ec;
+    const auto self = std::filesystem::read_symlink("/proc/self/exe", ec);
+    if (!ec) return self.parent_path();
+#endif
+    return std::filesystem::current_path();
 }
 #endif
+
+// Make the relative "assets/..." lookups used everywhere (shaders, maps,
+// textures, audio, settings) find their files no matter how the game was
+// started: double-click from Explorer (cwd = exe folder), run.bat from the
+// project root, a launcher script, or the Mesa restart above.
+//
+// Preference order (first hit wins, so normal Linux runs never change):
+//   1. ./assets                 (project root / cwd — Linux run.sh, run.bat)
+//   2. <exe dir>/assets         (CMake install / build/bin layout)
+//   3. <exe dir>/../assets      (exe in build/bin, assets in the repo root)
+//   4. <exe dir>/../../assets   (exe in a deeper build tree)
+// When a later candidate wins we change the working directory to its parent
+// (the folder that holds assets/); everything else keeps its behaviour.
+void ensureAssetsVisible() {
+    std::error_code ec;
+    auto isAssetsDir = [&ec](const std::filesystem::path& p) {
+        ec.clear();
+        return std::filesystem::is_directory(p, ec);
+    };
+    if (isAssetsDir("assets")) return; // normal case, including Linux
+
+    const auto exeDir = exeDirectory();
+    const std::filesystem::path candidates[] = {
+        exeDir / "assets",
+        exeDir / ".." / "assets",
+        exeDir / ".." / ".." / "assets",
+    };
+    for (const auto& candidate : candidates) {
+        if (!isAssetsDir(candidate)) continue;
+        const auto parent = candidate.parent_path();
+        if (!parent.empty()) {
+            std::filesystem::current_path(parent, ec);
+        }
+        std::cerr << "assets: using " << std::filesystem::absolute(
+            std::filesystem::path("assets"), ec) << " (working directory "
+            << std::filesystem::current_path(ec) << ")" << std::endl;
+        return;
+    }
+    // No assets/ found anywhere: keep the cwd so the shader/map loaders
+    // print their usual "file not found" diagnostics instead of failing
+    // silently. The game already degrades to flat colours in that case.
+}
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -240,6 +330,12 @@ Game::Game(int width, int height)
       prevMouseDown(false)
 {
     std::cout << "Game initializing..." << std::endl;
+
+    // Find assets/ before anything reads it (settings.cfg, audio, maps,
+    // shaders). On Linux with ./assets present this is a no-op; on Windows
+    // double-click / Mesa restarts it picks the folder that actually holds
+    // the files. See ensureAssetsVisible() for the search order.
+    ensureAssetsVisible();
 
     // Remote players
     for (int i = 0; i < MAX_REMOTE_PLAYERS; i++)
@@ -348,12 +444,50 @@ Game::Game(int width, int height)
     // Ask the driver to prefer the dedicated GPU on hybrid laptops.
     glfwWindowHint(GLFW_COCOA_GRAPHICS_SWITCHING, GLFW_TRUE);
 
+#ifdef _WIN32
+    // If Mesa is already the WGL implementation (opengl32.dll next to the
+    // exe from a previous fallback), force it to llvmpipe now — before the
+    // first context — so second and later launches get the stable CPU
+    // rasterizer instead of the crashy D3D12 backend. First launches (no
+    // opengl32.dll yet) take the relaunch path below, which sets the same
+    // vars for the child. CUBE_RENDERER=gpu opts out explicitly.
+    {
+        char mode[16] = {0};
+        const bool gpuLocked = ::GetEnvironmentVariableA(kRendererVar, mode, sizeof(mode)) > 0 &&
+                               std::strcmp(mode, "gpu") == 0;
+        if (!gpuLocked) {
+            const std::filesystem::path dir = exeDirectory();
+            if (std::filesystem::exists(dir / "opengl32.dll") &&
+                std::filesystem::exists(dir / "opengl32_sw.dll")) {
+                forceMesaLlvmpipe();
+            }
+        }
+    }
+    // CUBE_RENDERER=software forces the Mesa path even on machines with a
+    // working GPU (useful to test the VM path, or when a GPU driver is
+    // present but broken for OpenGL 3.3). CUBE_RENDERER=gpu disables the
+    // fallback; unset/"auto" tries the GPU first and falls back on failure.
+    {
+        char mode[16] = {0};
+        if (::GetEnvironmentVariableA(kRendererVar, mode, sizeof(mode)) > 0 &&
+            std::strcmp(mode, "software") == 0) {
+            const std::filesystem::path dir = exeDirectory();
+            if (enableMesaFallback(dir)) {
+                glfwTerminate();
+                relaunchWithMesa(dir);
+            }
+            // No Mesa shipped: fall through and try the GPU as usual.
+        }
+    }
+#endif
+
     window = createGameWindow(width, height);
     if (!window) {
 #ifdef _WIN32
         // No OpenGL from the GPU driver at all (typical for a VM with a
         // qxl/basic adapter). Switch to the bundled Mesa renderer and restart.
-        const std::string dir = exeDirectory();
+        // Honours CUBE_RENDERER=gpu (never), =software (always), unset (auto).
+        const std::filesystem::path dir = exeDirectory();
         if (enableMesaFallback(dir)) {
             glfwTerminate();
             relaunchWithMesa(dir);
@@ -369,6 +503,13 @@ Game::Game(int width, int height)
     glfwSetFramebufferSizeCallback(window, framebufferSizeCallback);
     glfwSetCursorPosCallback(window, mouseCallback);
     glfwSetScrollCallback(window, scrollCallback);
+    // Start in the menu (NORMAL in init()); enable raw motion now so the
+    // first capture does not need a restart, and focus the game window so
+    // the console does not steal the first click.
+    if (glfwRawMouseMotionSupported()) {
+        glfwSetInputMode(window, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
+    }
+    glfwFocusWindow(window);
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
     handCursor = glfwCreateStandardCursor(GLFW_HAND_CURSOR);
 
@@ -804,7 +945,7 @@ void Game::resetGame() {
     }
 
     gameState = PLAYING;
-    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    capturePlayCursor(true);
 
     std::cout << "Game reset. HP=" << playerHealth << "/" << playerMaxHealth << std::endl;
 }
@@ -820,6 +961,39 @@ void Game::initKeyBindings() {
 // ---------------------------------------------------------------------------
 // GLFW callbacks
 // ---------------------------------------------------------------------------
+void Game::capturePlayCursor(bool resetLook) {
+    if (!window) return;
+    // Focus first: GLFW_CURSOR_DISABLED only grabs on the active window.
+    // When the exe is double-clicked the console is active, and inside a VM
+    // the host may hold the grab — without focus the cursor stays fully free
+    // ("cannot look around"). Clicking the game window then focuses it and
+    // the next frame captures.
+    glfwFocusWindow(window);
+    // True relative motion (WM_INPUT on Windows, evdev/libinput on Linux).
+    // Without it, an absolute-mode VM tablet/grid (QEMU default) reports
+    // absolute positions, so a disabled cursor stuck at the window edge
+    // produces no deltas or inverted look. Supported on both platforms;
+    // gracefully skipped where it is not.
+    if (glfwRawMouseMotionSupported()) {
+        glfwSetInputMode(window, GLFW_RAW_MOUSE_MOTION, GLFW_TRUE);
+    }
+    // Only hide/grab when focused. Hiding while unfocused leaves an
+    // invisible cursor with no capture — the player cannot click to recover.
+    const int focused = glfwGetWindowAttrib(window, GLFW_FOCUSED);
+    if (focused) {
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    } else {
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+    }
+    if (resetLook) {
+        // Forget the menu hover position so the first gameplay move does
+        // not spin the camera to the menu's last cursor location.
+        firstMouse = true;
+        lastX = 400.0f;
+        lastY = 300.0f;
+    }
+}
+
 void Game::framebufferSizeCallback(GLFWwindow* /*window*/, int width, int height) {
     if (width > 0 && height > 0)
         glViewport(0, 0, width, height);

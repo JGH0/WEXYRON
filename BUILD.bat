@@ -1,152 +1,56 @@
 @echo off
+REM Build the game on Windows with MSYS2 (UCRT64 or MINGW64) + Makefile.windows.
+REM Canonical with CMakeLists.txt. Linux uses ./Makefile and is untouched.
+REM Prereq: MSYS2 installed (https://www.msys2.org/) + internet on first run.
+REM Run this script from cmd or PowerShell; it installs the toolchain itself.
+setlocal enabledelayedexpansion
 cd /d "%~dp0"
 color 0B
-
 echo.
-echo === OpenGL Game Build Script ===
+echo === Cube CS Lite — Windows build (MSYS2 + Makefile.windows) ===
 echo.
 
-REM Initialize variables
-set MSYS2_FOUND=0
-set MSYS2_PATH=""
-set MSYS2_ENV=ucrt64
-
-:check_msys2
-echo [1/4] Checking MSYS2 installation...
-
-REM Check common installation paths
-if exist "C:\msys64\msys2.exe" (
-    set MSYS2_FOUND=1
-    set MSYS2_PATH=C:\msys64\msys2.exe
-    echo [SUCCESS] MSYS2 found at C:\msys64\msys2.exe
-    goto :msys2_detected
-)
-
-if exist "C:\msys2\msys2.exe" (
-    set MSYS2_FOUND=1
-    set MSYS2_PATH=C:\msys2\msys2.exe
-    echo [SUCCESS] MSYS2 found at C:\msys2\msys2.exe
-    goto :msys2_detected
-)
-
-REM Try to find MSYS2 in PATH
-for /f "tokens=*" %%i in ('where msys2.exe 2^>nul') do (
-    if not "%%i"=="" (
-        set MSYS2_FOUND=1
-        set MSYS2_PATH=%%i
-        echo [SUCCESS] MSYS2 found in PATH: %%i
-        goto :msys2_detected
+REM Pick MSYS2 root (first found wins) and its bash.exe. The ucrt64.exe /
+REM mingw64.exe launchers are mintty front-ends; plain bash.exe with the
+REM toolchain bin dir prepended to PATH is what CI and the manual steps use.
+set MSYS2_ROOT=
+for %%D in ("C:\msys64" "C:\msys2") do if exist "%%~D\usr\bin\bash.exe" if not defined MSYS2_ROOT set MSYS2_ROOT=%%~D
+if not defined MSYS2_ROOT (
+    for /f "tokens=*" %%i in ('where msys2.exe 2^>nul') do if exist "%%i" set MSYS2_PATH=%%i
+    if defined MSYS2_PATH (
+        for %%i in ("!MSYS2_PATH!") do set MSYS2_ROOT=%%~dpi
+        REM trim trailing backslash
+        set "MSYS2_ROOT=!MSYS2_ROOT:~0,-1!"
     )
 )
+if not defined MSYS2_ROOT goto :msys2_missing
+if not exist "%MSYS2_ROOT%\usr\bin\bash.exe" goto :msys2_missing
+set BASH=%MSYS2_ROOT%\usr\bin\bash.exe
 
-:msys2_not_found
-echo [ERROR] MSYS2 not found!
-echo.
-echo MSYS2 is required to build this game.
-echo.
-echo What is MSYS2?
-echo   - A development environment for Windows
-echo   - Provides Linux-like tools on Windows
-echo   - Required for building this OpenGL game
-echo.
-echo Installation Options:
-echo.
-echo 1. Automatic Installation (Recommended):
-echo    - Download: https://www.msys2.org/
-echo    - Run installer with default settings
-echo    - After installation, this script will continue automatically
-echo.
-echo 2. Manual Installation:
-echo    - Download from: https://www.msys2.org/
-echo    - Install to C:\msys64\ (recommended)
-echo    - Restart this script after installation
-echo.
-echo 3. I already have MSYS2 installed:
-echo    - Specify the path to msys2.exe
-echo    - Common locations: C:\msys64\msys2.exe or C:\msys2\msys2.exe
-echo.
+echo [1/4] MSYS2 found: %MSYS2_ROOT%
+goto :msys2_found
 
-set /p choice="Choose option (1/2/3) or press 'q' to quit: "
-
-if /i "%choice%"=="1" goto :install_msys2
-if /i "%choice%"=="2" goto :manual_install
-if /i "%choice%"=="3" goto :manual_path
-if /i "%choice%"=="q" exit /b 0
-echo Invalid choice. Please try again.
-goto :msys2_not_found
-
-:install_msys2
-echo.
-echo [2/4] Opening MSYS2 download page...
-echo Please follow these steps:
-echo.
-echo 1. Download MSYS2 from the browser that will open
-echo 2. Run the installer
-echo 3. Accept all default settings
-echo 4. After installation completes, press any key to continue
-echo.
-echo Download page: https://www.msys2.org/
-echo.
-start https://www.msys2.org/
-echo Waiting for MSYS2 installation...
-echo Press any key when installation is complete...
-pause >nul
-goto :check_msys2
-
-:manual_install
-echo.
-echo Opening MSYS2 download page...
-echo Please install to C:\msys64\ for best compatibility.
-start https://www.msys2.org/
-echo.
-echo After installation, run this script again.
+:msys2_missing
+echo [ERROR] MSYS2 not found ^(no C:\msys64\usr\bin\bash.exe^).
+echo Install it from https://www.msys2.org/ ^(default location C:\msys64^),
+echo then re-run this script. This script installs the C++ toolchain for you.
 pause
-exit /b 0
+exit /b 1
 
-:manual_path
-echo.
-set /p manual_path="Enter full path to msys2.exe (e.g., C:\msys64\msys2.exe): "
-if exist "%manual_path%" (
-    set MSYS2_FOUND=1
-    set MSYS2_PATH=%manual_path%
-    echo [OK] Using manual path: %MSYS2_PATH%
-    goto :msys2_detected
-) else (
-    echo [ERROR] Path not found: %manual_path%
-    goto :manual_path
-)
-
-:msys2_detected
-echo.
-echo [2/4] Validating MSYS2 installation...
-
-REM Test MSYS2 by running a simple command
-%MSYS2_PATH% -ucrt64 -shell bash -lc "echo 'MSYS2 validation successful'" >nul 2>&1
+:msys2_found
+echo [2/4] Validating MSYS2...
+"%BASH%" -lc "echo MSYS2 validation ok" 2>nul
 if %errorlevel% neq 0 (
-    echo [ERROR] MSYS2 validation failed!
-    echo The path exists but MSYS2 cannot run properly.
-    echo.
-    echo Possible causes:
-    echo   - MSYS2 installation is corrupted
-    echo   - Permission issues
-    echo   - Antivirus blocking MSYS2
-    echo.
-    echo Solutions:
-    echo   1. Reinstall MSYS2
-    echo   2. Run this script as administrator
-    echo   3. Temporarily disable antivirus
-    echo.
+    echo [ERROR] MSYS2 bash failed to start. Try reinstalling MSYS2 or running
+    echo as administrator. Antivirus sometimes quarantines msys2_runtime.dll.
     pause
     exit /b 1
 )
 
-echo [SUCCESS] MSYS2 is working properly
-
-REM Select environment
 echo.
 echo Select MSYS2 environment:
-echo   1) UCRT64 (default)
-echo   2) MINGW64 (recommended for Makefile.windows)
+echo   1) UCRT64  ^(default, recommended for x86-64 Windows^)
+echo   2) MINGW64
 set /p env_choice="Choice (1/2): "
 if "%env_choice%"=="" set env_choice=1
 if "%env_choice%"=="2" (
@@ -158,106 +62,57 @@ if "%env_choice%"=="2" (
     set PKG_PREFIX=mingw-w64-ucrt-x86_64
     echo Selected: UCRT64
 )
-
-echo.
-echo [3/4] Creating build script...
-
-REM Create temporary build script
-(
-echo #!/bin/bash
-echo cd "%CD:\=/%"
-echo echo "[1/6] Updating package database..."
-echo pacman -Sy --noconfirm
-echo echo "[2/6] Installing dependencies..."
-echo pacman -S --noconfirm %PKG_PREFIX%-gcc %PKG_PREFIX%-make %PKG_PREFIX%-glfw %PKG_PREFIX%-glm
-echo echo "[3/6] Cleaning previous build..."
-echo mingw32-make -f Makefile.windows clean
-echo echo "[4/6] Building game..."
-echo if mingw32-make -f Makefile.windows all; then
-echo     echo "[5/6] Build successful!"
-echo     echo "[6/6] Setting up runtime files..."
-echo     mkdir -p build/bin
-echo     cp /%MSYS2_ENV%/bin/libgcc_s_seh-1.dll build/bin/ 2>/dev/null ^&^& echo "  - libgcc_s_seh-1.dll copied" ^|^| echo "  - WARNING: libgcc_s_seh-1.dll not found"
-echo     cp /%MSYS2_ENV%/bin/libstdc++-6.dll build/bin/ 2>/dev/null ^&^& echo "  - libstdc++-6.dll copied" ^|^| echo "  - WARNING: libstdc++-6.dll not found"
-echo     cp /%MSYS2_ENV%/bin/libwinpthread-1.dll build/bin/ 2>/dev/null ^&^& echo "  - libwinpthread-1.dll copied" ^|^| echo "  - WARNING: libwinpthread-1.dll not found"
-echo     cp /%MSYS2_ENV%/bin/glfw3.dll build/bin/ 2>/dev/null ^&^& echo "  - glfw3.dll copied" ^|^| echo "  - WARNING: glfw3.dll not found"
-echo     cp -r assets build/ 2>/dev/null ^&^& echo "  - Assets copied" ^|^| echo "  - WARNING: Could not copy assets"
-echo     echo ""
-echo     echo "=== BUILD COMPLETED SUCCESSFULLY ==="
-echo     if [ -f "build/bin/game.exe" ]; then
-echo         echo "Game executable: build/bin/game.exe"
-echo         echo "Server executable: build/bin/server.exe"
-echo         echo "DLLs: build/bin/*.dll"
-echo         echo "Assets: build/assets/"
-echo         echo ""
-echo         echo "Ready to play! Use 'run.bat' to start the game."
-echo     else
-echo         echo "ERROR: Game executable not found!"
-echo     fi
-echo else
-echo     echo "BUILD FAILED!"
-echo     echo "Check the error messages above."
-echo     exit 1
-echo fi
-) > temp_build.sh
-
-echo [4/4] Building game...
-echo This may take a few minutes on first run...
 echo.
 
-%MSYS2_PATH% -%MSYS2_ENV% -shell bash -lc "cd '%CD:\=/%' && chmod +x temp_build.sh && ./temp_build.sh"
-
-set BUILD_RESULT=%errorlevel%
-
-REM Cleanup
-if exist temp_build.sh del temp_build.sh
-
-echo.
-echo === Build Results ===
-if %BUILD_RESULT% equ 0 (
-    if exist "build\bin\game.exe" (
-        echo [SUCCESS] Game built successfully!
-        echo.
-        echo Files created:
-        dir build\bin\*.exe build\bin\*.dll 2>nul
-        echo.
-        echo Assets: build\assets\ (shaders, textures, maps)
-        echo.
-        echo Next steps:
-        echo   - Run 'run.bat' to play the game
-        echo   - Run 'runServer.bat' for multiplayer server
-        echo.
-        echo Build summary:
-        echo   - Game executable: build\bin\game.exe
-        echo   - Server executable: build\bin\server.exe
-        echo   - Required DLLs: build\bin\*.dll
-        echo   - Game assets: build\assets\
-    ) else (
-        echo [FAILED] Build completed but executable not found
-    )
-) else (
-    echo [FAILED] Build process failed with error %BUILD_RESULT%
-    echo.
-    echo Common issues and solutions:
-    echo.
-    echo 1. Network Issues:
-    echo    - Check internet connection
-    echo    - Try running: pacman -Sy --noconfirm
-    echo.
-    echo 2. Permission Issues:
-    echo    - Run this script as administrator
-    echo    - Check if antivirus is blocking MSYS2
-    echo.
-    echo 3. MSYS2 Issues:
-    echo    - Restart MSYS2 completely
-    echo    - Try: pacman -Syy --noconfirm (force refresh)
-    echo.
-    echo 4. Manual Build:
-    echo    - Open MSYS2 MINGW64 manually
-    echo    - cd to this directory
-    echo    - Run: mingw32-make -f Makefile.windows clean ^&^& mingw32-make -f Makefile.windows all
+echo [3/4] Installing toolchain packages ^(%PKG_PREFIX%-gcc make glfw glm^)...
+echo First run downloads ~100 MB; later runs are quick checks.
+REM pacman runs from the plain msys bash (it installs into the chosen env).
+"%BASH%" -lc "pacman -Sy --noconfirm --needed %PKG_PREFIX%-gcc %PKG_PREFIX%-make %PKG_PREFIX%-glfw %PKG_PREFIX%-glm 2>&1 | tail -20"
+if %errorlevel% neq 0 (
+    echo [ERROR] pacman install failed. Check the internet connection,
+    echo then retry. A mirror hiccup ^(HTTP 500^) is usually fixed by re-running.
+    pause
+    exit /b 1
 )
 
 echo.
+echo [4/4] Building game + server (Makefile.windows stages runtime DLLs,
+echo       assets/ and the Mesa software renderer automatically)...
+REM The toolchain bin dir must lead PATH so mingw32-make finds g++/glfw/glm.
+REM No cd needed: bash inherits the project root set at the top of this script.
+"%BASH%" -lc "export PATH=/%MSYS2_ENV%/bin:$PATH; mingw32-make -f Makefile.windows clean && mingw32-make -f Makefile.windows 2>&1 | tail -40"
+if %errorlevel% neq 0 (
+    echo [FAILED] Build error above. Common causes:
+    echo   - MSYS2 env lacks posix threads: re-run pacman with the same env.
+    echo   - Stale objects: delete build\ and re-run.
+    pause
+    exit /b 1
+)
+
+echo.
+if exist "build\bin\game.exe" goto :build_ok
+echo [FAILED] Build finished but build\bin\game.exe is missing.
 pause
-exit /b %BUILD_RESULT%
+exit /b 1
+
+:build_ok
+echo [SUCCESS] Build complete.
+echo.
+echo Staged in build\bin :
+if exist "build\bin\game.exe" echo   - game.exe
+if exist "build\bin\server.exe" echo   - server.exe
+if exist "build\bin\glfw3.dll" echo   - glfw3.dll
+if exist "build\bin\libstdc++-6.dll" echo   - libstdc++-6.dll
+if exist "build\bin\opengl32_sw.dll" echo   - opengl32_sw.dll + Mesa DLLs  ^(GPU-less VM fallback^)
+if exist "build\bin\assets\shaders\glow_vertex.glsl" echo   - assets\shaders\glow_vertex.glsl  ^(exe-relative assets^)
+echo.
+echo Next:
+echo   - run.bat          play the game
+echo   - runServer.bat    start the multiplayer server
+echo.
+echo Rendering modes:
+echo   - auto (default)  use GPU if present, else Mesa software GL
+echo   - set CUBE_RENDERER=gpu to disable Mesa, or =software to force it.
+echo.
+pause
+exit /b 0

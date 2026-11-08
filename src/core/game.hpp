@@ -353,6 +353,13 @@ private:
     /// Take ownership of a loaded map and make it the active one (GL thread).
     void installMap(std::unique_ptr<Map> loaded);
 
+    /// Hide/grab the cursor for gameplay (PLAYING / MAP_EDITOR): focus the
+    /// window, enable raw motion where supported, hide the cursor and forget
+    /// the last mouse position so the first move does not spin the camera.
+    /// Safe to call on every PLAYING frame via capturePlayCursor(false) from
+    /// processInput; the reset-on-transition path calls it once.
+    void capturePlayCursor(bool resetLook = true);
+
     /// Shared map-start logic for the map selection menu (ENTER / click).
     void startSelectedMap(const std::string& mapFile);
 

@@ -6,10 +6,11 @@
  */
 
 #include "core/game.hpp"
+#include <chrono>
 #include <cstdlib>
 #include <iostream>
 #include <sstream>
-#include <ctime>
+#include <thread>
 #include <exception>
 #if defined(_WIN32)
 #include <cstdio>
@@ -130,6 +131,16 @@ void installCrashHandlers() {
 #endif
 }
 
+// Portable short sleep (this file is compiled as-is on Linux and Windows).
+// std::this_thread::sleep_for avoids <unistd.h>/nanosleep, which do not
+// exist under MSVC; it works on both and keeps the Linux side unchanged
+// (the test harness and frame hold already link Threads::Threads).
+inline void sleepMs(int ms) {
+    if (ms > 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+    }
+}
+
 // Writes to two streams at once (console + log file), so diagnostics survive
 // both a closed console and a process that is killed mid-run.
 class TeeBuf : public std::streambuf {
@@ -207,8 +218,7 @@ static void runMenuTest(Game& game, const char* script) {
             game.render();
             // Let the game loop build the page this key opens before the next
             // step acts on it (a real player cannot press faster either).
-            struct timespec ts = {0, 60000000};
-            nanosleep(&ts, nullptr);
+            sleepMs(60);
         }
         std::cout << "step " << step << std::endl;
     }
@@ -221,8 +231,7 @@ static void runMenuTest(Game& game, const char* script) {
     while (glfwGetTime() < holdUntil) {
         game.render();
         glfwPollEvents();
-        struct timespec ts = {0, 16000000};
-        nanosleep(&ts, nullptr);
+        sleepMs(16);
     }
 }
 

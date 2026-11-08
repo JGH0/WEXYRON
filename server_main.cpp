@@ -8,7 +8,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <string>
-#include <unistd.h>
+#include <thread>
 #include <fstream>
 #include <sstream>
 #include <algorithm>
@@ -445,7 +445,9 @@ int main(int argc, char* argv[]) {
         }
         
         // Small sleep to prevent 100% CPU usage
-        usleep(1000); // 1ms
+        // std::this_thread::sleep_for works on Linux and Windows (usleep /
+        // <unistd.h> do not exist under MSVC); the server links Threads.
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     
     return 0;

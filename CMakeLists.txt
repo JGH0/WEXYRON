@@ -6,20 +6,80 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Platform detection
 if(WIN32)
-    add_definitions(-DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS)
+    add_definitions(-DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS -DNOMINMAX)
     set(PLATFORM_LIBS ws2_32)
 else()
     set(PLATFORM_LIBS pthread dl)
 endif()
 
-# Threads for the worker pool / background map loading
+# Threads for the worker pool / background map loading + std::this_thread::sleep_for
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
 
-# Find packages
+# Find packages. On Linux these come from the distro (pacman/apt) and this is
+# all that runs. On Windows the same find_package calls succeed when built
+# inside MSYS2 UCRT64/MINGW64 (pacman -S mingw-w64-ucrt-x86_64-glfw
+# mingw-w64-ucrt-x86_64-glm) or with vcpkg (glfw3 + glm, see vcpkg.json).
+# When they are missing (e.g. Visual Studio without vcpkg), fall back to
+# FetchContent so `cmake --preset` / `cmake -S . -B build` works with just
+# internet access on first configure. Vendored MinGW binaries in
+# .mingw-deps/glfw are the last resort for GLFW only when git is unavailable.
 find_package(OpenGL REQUIRED)
-find_package(glfw3 REQUIRED)
-find_package(glm REQUIRED)
+
+find_package(glfw3 QUIET)
+if(NOT glfw3_FOUND)
+    message(STATUS "glfw3 not found via find_package — trying FetchContent / vendored fallback")
+    set(CUBE_HAS_GLFW OFF)
+    # Vendored prebuilt GLFW (committed in the repo for offline MinGW builds).
+    set(_vendored_glfw "${CMAKE_SOURCE_DIR}/.mingw-deps/glfw/glfw-3.4.bin.WIN64")
+    if(WIN32 AND EXISTS "${_vendored_glfw}/include/GLFW/glfw3.h")
+        if(NOT MSVC AND EXISTS "${_vendored_glfw}/lib-mingw-w64/libglfw3dll.a")
+            add_library(glfw_vendored UNKNOWN IMPORTED)
+            set_target_properties(glfw_vendored PROPERTIES
+                IMPORTED_LOCATION "${_vendored_glfw}/lib-mingw-w64/libglfw3dll.a"
+                INTERFACE_INCLUDE_DIRECTORIES "${_vendored_glfw}/include")
+            add_library(glfw ALIAS glfw_vendored)
+            set(CUBE_HAS_GLFW ON)
+            message(STATUS "Using vendored MinGW GLFW from .mingw-deps/glfw")
+        elseif(MSVC AND EXISTS "${_vendored_glfw}/lib-vc2022/glfw3dll.lib")
+            add_library(glfw_vendored UNKNOWN IMPORTED)
+            # glfw3_mt.lib is the static one; prefer the DLL import lib.
+            set_target_properties(glfw_vendored PROPERTIES
+                IMPORTED_LOCATION "${_vendored_glfw}/lib-vc2022/glfw3dll.lib"
+                INTERFACE_INCLUDE_DIRECTORIES "${_vendored_glfw}/include")
+            add_library(glfw ALIAS glfw_vendored)
+            set(CUBE_HAS_GLFW ON)
+            message(STATUS "Using vendored MSVC GLFW from .mingw-deps/glfw")
+        endif()
+    endif()
+    if(NOT CUBE_HAS_GLFW)
+        include(FetchContent)
+        FetchContent_Declare(glfw
+            GIT_REPOSITORY https://github.com/glfw/glfw.git
+            GIT_TAG 3.4)
+        set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+        set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+        set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+        FetchContent_MakeAvailable(glfw)
+        message(STATUS "Using FetchContent GLFW")
+    endif()
+endif()
+
+find_package(glm QUIET)
+if(NOT glm_FOUND)
+    message(STATUS "glm not found via find_package — trying FetchContent fallback")
+    include(FetchContent)
+    FetchContent_Declare(glm
+        GIT_REPOSITORY https://github.com/g-truc/glm.git
+        GIT_TAG 1.0.1)
+    FetchContent_MakeAvailable(glm)
+    # glm 1.0.x provides glm::glm-header-only (CMake <3.19 compat) and
+    # glm::glm; normalise to glm::glm for the server link below.
+    if(TARGET glm::glm-header-only AND NOT TARGET glm::glm)
+        add_library(glm::glm ALIAS glm::glm-header-only)
+    endif()
+    message(STATUS "Using FetchContent glm")
+endif()
 
 # Include directories
 include_directories(
@@ -107,12 +167,15 @@ add_executable(game
     ${GLAD_SOURCES}
 )
 
-target_link_libraries(game
+target_link_libraries(game PRIVATE
     OpenGL::GL
     glfw
     Threads::Threads
     ${PLATFORM_LIBS}
 )
+if(TARGET glm::glm)
+    target_link_libraries(game PRIVATE glm::glm)
+endif()
 
 # Server executable (headless, no OpenGL/GLFW needed)
 add_executable(server
@@ -125,7 +188,7 @@ target_include_directories(server PRIVATE
     ${CMAKE_SOURCE_DIR}/src/network
 )
 
-target_link_libraries(server
+target_link_libraries(server PRIVATE
     glm::glm
     Threads::Threads
     ${PLATFORM_LIBS}
@@ -144,3 +207,54 @@ add_custom_command(TARGET game POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
     ${CMAKE_SOURCE_DIR}/assets/ $<TARGET_FILE_DIR:game>/assets/
 )
+
+# Windows: stage the runtime + software-rendering DLLs next to the exes so a
+# double-click (or run.bat) works without the MSYS2 toolchain on PATH, and so
+# the Mesa fallback in game.cpp finds opengl32_sw.dll + its sibling DLLs.
+#   - MinGW runtime + glfw3.dll: from the toolchain's bin dir when CMake is
+#     driven from inside MSYS2 (where CMAKE_PREFIX_PATH / registry layout
+#     exposes /ucrt64/bin), else from the vendored bundle in .mingw-dlls.
+#   - Mesa (VMs without a GPU driver): mesa-deps/x64/* -> opengl32_sw.dll
+#     (renamed — the system opengl32.dll must stay the default), siblings
+#     keep their names. The game copies opengl32_sw.dll to opengl32.dll
+#     only when WGL fails (or CUBE_RENDERER=software).
+# Nothing here runs on Linux (guarded by WIN32).
+if(WIN32)
+    set(_mingw_bin "")
+    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+        # An MSYS2/UCRT64 cmake invocation has the toolchain bin dir on PATH
+        # at configure time; find_program locates the compiler's DLLs.
+        find_program(_cube_gcc NAMES gcc.exe x86_64-w64-mingw32-gcc.exe PATHS
+            "C:/msys64/ucrt64/bin" "C:/msys2/ucrt64/bin"
+            "C:/msys64/mingw64/bin" "C:/msys2/mingw64/bin")
+        if(_cube_gcc)
+            get_filename_component(_mingw_bin "${_cube_gcc}" DIRECTORY)
+        endif()
+    endif()
+
+    foreach(_dll libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll glfw3.dll)
+        if(_mingw_bin AND EXISTS "${_mingw_bin}/${_dll}")
+            add_custom_command(TARGET game POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_mingw_bin}/${_dll}" "$<TARGET_FILE_DIR:game>/${_dll}")
+        elseif(EXISTS "${CMAKE_SOURCE_DIR}/.mingw-dlls/${_dll}")
+            add_custom_command(TARGET game POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_SOURCE_DIR}/.mingw-dlls/${_dll}" "$<TARGET_FILE_DIR:game>/${_dll}")
+        endif()
+    endforeach()
+
+    # Mesa software renderer (llvmpipe/D3D12) for GPU-less VMs. Installed
+    # repeatedly so a fresh configure always re-stages it.
+    if(EXISTS "${CMAKE_SOURCE_DIR}/mesa-deps/x64/opengl32.dll")
+        add_custom_command(TARGET game POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/mesa-deps/x64/libgallium_wgl.dll" "$<TARGET_FILE_DIR:game>/libgallium_wgl.dll"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/mesa-deps/x64/libdlclose-skip.dll" "$<TARGET_FILE_DIR:game>/libdlclose-skip.dll"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/mesa-deps/x64/opengl32.dll" "$<TARGET_FILE_DIR:game>/opengl32_sw.dll"
+        )
+        message(STATUS "Mesa software renderer will be staged as opengl32_sw.dll (auto-fallback for VMs without a GPU)")
+    endif()
+endif()

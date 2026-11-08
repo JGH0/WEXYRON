@@ -1,6 +1,7 @@
 # Manual MSYS2 Installation Guide
 
-Since the automatic installation is having issues, follow these steps manually:
+`BUILD.bat` does all of this itself. Use these steps only if you prefer a
+manual install.
 
 ## Step 1: Open MSYS2 UCRT64
 1. Open Start Menu
@@ -13,23 +14,16 @@ In the MSYS2 UCRT64 terminal, run:
 pacman -Sy
 ```
 
-## Step 3: Install Development Tools
+## Step 3: Install the Toolchain + Libraries
+The game needs gcc, make, cmake (for the CMake build), glfw and glm.
+No SDL2/GLEW: the game does not use them.
 ```bash
-pacman -S mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-make mingw-w64-ucrt-x86_64-cmake --noconfirm
+pacman -S --needed mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-make mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-glfw mingw-w64-ucrt-x86_64-glm --noconfirm
 ```
 
-## Step 4: Install Graphics Libraries
+## Step 4: Verify Installation
 ```bash
-pacman -S mingw-w64-ucrt-x86_64-glfw mingw-w64-ucrt-x86_64-glm mingw-w64-ucrt-x86_64-glew --noconfirm
-```
-
-## Step 5: Install Additional Libraries
-```bash
-pacman -S mingw-w64-ucrt-x86_64-SDL2 --noconfirm
-```
-
-## Step 6: Verify Installation
-```bash
+export PATH=/ucrt64/bin:$PATH   # if gcc is not on PATH yet
 which gcc
 which make
 which mingw32-make
@@ -37,10 +31,10 @@ gcc --version
 make --version
 ```
 
-## Step 7: Build the Game
-1. Navigate to the game directory:
+## Step 5: Build the Game
+1. Navigate to the game directory (adjust the path to yours):
 ```bash
-cd /c/Users/bfo/Documents/GitHub/cube-cs-lite/OpenGl-Game
+cd /c/Users/JGH/Documents/GitHub/cube-cs-lite
 ```
 
 2. Build the game:
@@ -49,19 +43,32 @@ mingw32-make -f Makefile.windows clean
 mingw32-make -f Makefile.windows all
 ```
 
-## Step 8: Copy Required DLLs
+3. Or with CMake:
 ```bash
-mkdir -p build/bin
-cp /ucrt64/bin/libgcc_s_seh-1.dll build/bin/
-cp /ucrt64/bin/libstdc++-6.dll build/bin/
-cp /ucrt64/bin/libwinpthread-1.dll build/bin/
-cp /ucrt64/bin/glfw3.dll build/bin/
-cp -r assets build/
+cmake -S . -B build-cmake -DCMAKE_BUILD_TYPE=Release
+cmake --build build-cmake --config Release
 ```
 
-## Step 9: Test the Game
+## Step 6: Runtime files (automatic)
+`mingw32-make -f Makefile.windows` already stages `build/bin/` with
+everything the exes need: `libgcc_s_seh-1.dll`, `libstdc++-6.dll`,
+`libwinpthread-1.dll`, `glfw3.dll`, `assets/` (exe-relative), plus Mesa
+`opengl32_sw.dll` + `libgallium_wgl.dll` + `libdlclose-skip.dll` for
+GPU-less VMs. There is nothing to copy by hand. The only manual step is
+if you build with a generator that skips `stage-runtime` (e.g. a bare
+`cmake --build` — CMake's POST_BUILD does the same staging, so nothing
+to do there either).
+
+## Step 7: Run
 ```bash
-./build/bin/game.exe
+./build/bin/game.exe        # or run.bat
+./build/bin/server.exe      # or runServer.bat (default UDP port 7777)
 ```
 
-If you encounter any issues during these steps, please let me know the specific error messages.
+No GPU? Leave `CUBE_RENDERER` unset: the game tries the GPU first and
+falls back to the staged Mesa renderer automatically. Set
+`CUBE_RENDERER=gpu` to disable Mesa, or `CUBE_RENDERER=software` to
+force it.
+
+If you encounter any issues during these steps, send the specific error
+messages (or `game-log.txt` next to `game.exe`).

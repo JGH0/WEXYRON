@@ -88,7 +88,7 @@ void Game::openMainMenu() {
         inp.resetNavKeys();
         menuJustEntered = true;
         gameState = PLAYING;
-        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        capturePlayCursor(true);
     }, resumable ? "Back to the match" : "Start a match on the selected map"));
 
     page.add(menu::action("MAP SELECTION", [this]() {
@@ -109,7 +109,7 @@ void Game::openMainMenu() {
             camera.Pitch = 0.0f;
             camera.updateCameraVectors();
             editorGridPos = camera.Position + camera.Front * 5.0f;
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+            capturePlayCursor(true);
         }, "Build and save maps"));
     }
 
@@ -270,7 +270,7 @@ void Game::startSelectedMap(const std::string& mapFile) {
     gameInProgress_ = true;
     gameState = PLAYING;
     playUiSound("round_start");
-    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    capturePlayCursor(true);
 }
 
 // ---------------------------------------------------------------------------
@@ -584,7 +584,7 @@ bool Game::debugStartMapForTest(const std::string& mapFile) {
     menuJustEntered = true;
     gameInProgress_ = true;
     gameState = PLAYING;
-    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    capturePlayCursor(true);
     return currentMap != nullptr;
 }
 

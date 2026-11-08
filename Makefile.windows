@@ -1,13 +1,20 @@
-# Windows Makefile for OpenGL Game (MinGW)
-# Usage: mingw32-make -f Makefile.windows
+# Windows Makefile for OpenGL Game (MinGW / MSYS2)
+# Usage (inside MSYS2 UCRT64 or MINGW64, PATH must contain the toolchain):
+#   mingw32-make -f Makefile.windows
+# Canonical with CMakeLists.txt: same sources, same C++17 flags, same
+# OpenGL 3.3-core requirement. Linux uses ./Makefile; this file is
+# Windows-only, so changes here cannot break the Linux build.
 
 CXX = g++
-CXXFLAGS = -std=c++17 -Wall -I./include -I./include/stb -I./src -DGLFW_INCLUDE_NONE
+CXXFLAGS = -std=c++17 -Wall -I./include -I./include/stb -I./src
 # Track header dependencies so editing a header (e.g. game.hpp) recompiles every
 # object that uses it. Stale objects would otherwise disagree about sizeof(Game)
 # and corrupt game members at wrong offsets.
 DEPFLAGS = -MMD -MP
-LDFLAGS = -lglfw3 -lopengl32 -lgdi32 -luser32 -lkernel32 -lshell32 -lws2_32 -lstdc++ -lpthread
+# Client needs GLFW + system OpenGL; the headless server must NOT, so a
+# server without a GPU/GLFW runtime still starts.
+CLIENT_LDFLAGS = -lglfw3 -lopengl32 -lgdi32 -luser32 -lkernel32 -lshell32 -lws2_32 -lstdc++ -lpthread
+SERVER_LDFLAGS = -lws2_32 -lstdc++ -lpthread
 
 SRC_DIR = src
 CORE_DIR = src/core
@@ -46,6 +53,11 @@ MINIAUDIO_OBJECT = $(BUILD_DIR)/third_party/miniaudio.o
 ALL_OBJECTS = $(CORE_OBJECTS) $(SYSTEMS_OBJECTS) $(NETWORK_OBJECTS) $(UI_OBJECTS) $(ENGINE_OBJECTS) $(MAIN_OBJECT) $(GLAD_OBJECT) $(MINIAUDIO_OBJECT)
 SERVER_OBJECTS = $(SERVER_MAIN_OBJECT) $(NETWORK_OBJECTS)
 
+# Toolchain bin dir holding the MinGW runtime + glfw3.dll (UCRT64 by
+# default; MINGW64 if that is what is on PATH). Resolved at recipe time so
+# `mingw32-make` works from either environment without editing this file.
+DLL_SEARCH_DIRS = /ucrt64/bin /mingw64/bin /c/msys64/ucrt64/bin /c/msys64/mingw64/bin
+
 all: $(TARGET) $(SERVER_TARGET)
 
 client: $(TARGET)
@@ -53,10 +65,12 @@ client: $(TARGET)
 server: $(SERVER_TARGET)
 
 $(TARGET): $(ALL_OBJECTS) | $(BIN_DIR)
-	$(CXX) $^ -o $@ $(LDFLAGS)
+	$(CXX) $^ -o $@ $(CLIENT_LDFLAGS)
+	$(MAKE) -f Makefile.windows --no-print-directory stage-runtime
 
 $(SERVER_TARGET): $(SERVER_OBJECTS) | $(BIN_DIR)
-	$(CXX) $^ -o $@ $(LDFLAGS)
+	$(CXX) $^ -o $@ $(SERVER_LDFLAGS)
+	$(MAKE) -f Makefile.windows --no-print-directory stage-runtime
 
 # Core object files
 $(BUILD_DIR)/core/%.o: $(CORE_DIR)/%.cpp | $(BUILD_DIR)/core
@@ -130,6 +144,36 @@ $(MINIAUDIO_OBJECT): $(MINIAUDIO_SOURCES) | $(BUILD_DIR)/third_party
 $(BIN_DIR): $(BUILD_DIR)
 	mkdir -p $(BIN_DIR)
 
+# Stage everything the exes need at runtime into build/bin so the game can
+# be double-clicked (no MSYS2 on PATH) and the Mesa fallback can find its
+# DLLs. Idempotent; safe to run after either target. Mirrors the CMake
+# POST_BUILD steps — keep the two in sync.
+#   assets/            -> build/bin/assets (exe-relative; see game.cpp)
+#   libgcc/libstdc++/libwinpthread/glfw3.dll -> build/bin (toolchain or
+#                          the vendored .mingw-dlls bundle as fallback)
+#   mesa-deps/x64/*    -> opengl32_sw.dll + libgallium_wgl.dll +
+#                          libdlclose-skip.dll (renamed opengl32 only; the
+#                          system opengl32.dll stays the default)
+stage-runtime:
+	mkdir -p $(BIN_DIR) $(BIN_DIR)/assets
+	cp -a assets/. $(BIN_DIR)/assets/
+	rm -f $(BIN_DIR)/assets/settings.cfg $(BIN_DIR)/assets/machine_id 2>/dev/null || true
+	@for dll in libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll glfw3.dll; do \
+		found=""; \
+		for d in $(DLL_SEARCH_DIRS); do \
+			if [ -f "$$d/$$dll" ]; then cp -f "$$d/$$dll" $(BIN_DIR)/; found="$$d/$$dll"; break; fi; \
+		done; \
+		if [ -z "$$found" ] && [ -f ".mingw-dlls/$$dll" ]; then cp -f ".mingw-dlls/$$dll" $(BIN_DIR)/; found=".mingw-dlls/$$dll"; fi; \
+		if [ -z "$$found" ]; then echo "stage-runtime: warning: $$dll not found in toolchain or .mingw-dlls (run pacman -S mingw-w64-ucrt-x86_64-glfw)" >&2; fi; \
+	done
+	@if [ -f mesa-deps/x64/opengl32.dll ]; then \
+		cp -f mesa-deps/x64/libgallium_wgl.dll mesa-deps/x64/libdlclose-skip.dll $(BIN_DIR)/ 2>/dev/null || true; \
+		cp -f mesa-deps/x64/opengl32.dll $(BIN_DIR)/opengl32_sw.dll; \
+		echo "stage-runtime: Mesa software renderer staged as $(BIN_DIR)/opengl32_sw.dll (auto-fallback for VMs without a GPU; CUBE_RENDERER=gpu disables it)"; \
+	else \
+		echo "stage-runtime: warning: mesa-deps/x64/opengl32.dll missing — shipping without the GPU-less fallback" >&2; \
+	fi
+
 clean:
 	rm -rf $(BUILD_DIR) $(BIN_DIR)
 
@@ -146,4 +190,4 @@ debug: $(TARGET)
 # they never become the default goal).
 -include $(ALL_OBJECTS:.o=.d)
 
-.PHONY: all clean run run-server debug client server
+.PHONY: all clean run run-server debug client server stage-runtime

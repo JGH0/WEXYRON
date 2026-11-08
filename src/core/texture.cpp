@@ -47,9 +47,16 @@ bool Texture::loadFromFile(const char* path) {
         else if (nrChannels == 4)
             format = GL_RGBA;
         
-        // Upload texture data to GPU
+        // Upload texture data to GPU. No glGenerateMipmap on purpose: the
+        // 64x64 source textures are ever only read back as pixels and
+        // re-uploaded into the renderer's texture array (NEAREST, no
+        // mipmaps), so mipmaps are never sampled. Calling
+        // glGenerateMipmap here crashes the Mesa D3D12 software driver on
+        // GPU-less Windows VMs (process exits with 0x80070057 while loading
+        // the second texture) and is wasted work on every driver. The
+        // default LINEAR/LINEAR filters keep the texture complete without
+        // a mipmap chain.
         glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
-        glGenerateMipmap(GL_TEXTURE_2D);
         
         std::cout << "Loaded texture: " << path << " (" << width << "x" << height << ", " << nrChannels << " channels)" << std::endl;
     } else {
