@@ -34,8 +34,8 @@ ifeq ($(UNAME_S),Darwin)
     BREW_PREFIX ?= $(shell brew --prefix 2>/dev/null || echo /usr/local)
     CPPFLAGS += -I$(BREW_PREFIX)/include
     LDFLAGS = -L$(BREW_PREFIX)/lib -lglfw \
-        -framework OpenGL -framework Cocoa -framework IOKit -framework CoreVideo \
-        -pthread
+	-framework OpenGL -framework Cocoa -framework IOKit -framework CoreVideo \
+	-pthread
 else ifeq ($(UNAME_S),Linux)
     LDFLAGS = -lglfw -lGL -ldl -pthread
 else
@@ -88,123 +88,123 @@ server: $(SERVER_TARGET)
 # `deps` is order-only: it runs (and can fail with a helpful message) before
 # linking, but never forces a relink or appears in $^.
 $(TARGET): $(ALL_OBJECTS) | deps-check $(BIN_DIR)
-        $(CXX) $^ -o $@ $(LDFLAGS)
+	$(CXX) $^ -o $@ $(LDFLAGS)
 
 $(SERVER_TARGET): $(SERVER_OBJECTS) | deps-check $(BIN_DIR)
-        $(CXX) $^ -o $@ $(LDFLAGS)
+	$(CXX) $^ -o $@ $(LDFLAGS)
 
 # Core object files
 $(BUILD_DIR)/core/%.o: $(CORE_DIR)/%.cpp | $(BUILD_DIR)/core
-        $(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
 
 # Systems object files
 $(BUILD_DIR)/systems/%.o: $(SYSTEMS_DIR)/%.cpp | $(BUILD_DIR)/systems
-        $(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
 
 # Network object files
 $(BUILD_DIR)/network/%.o: $(NETWORK_DIR)/%.cpp | $(BUILD_DIR)/network
-        $(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
 
 # UI object files
 $(BUILD_DIR)/ui/%.o: $(UI_DIR)/%.cpp | $(BUILD_DIR)/ui
-        $(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
 
 # Engine object files
 $(BUILD_DIR)/engine/%.o: $(ENGINE_DIR)/%.cpp | $(BUILD_DIR)/engine
-        $(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
 
 # Game object files
 $(BUILD_DIR)/game/%.o: $(GAME_DIR)/%.cpp | $(BUILD_DIR)/game
-        $(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
 
 # Main object file
 $(BUILD_DIR)/main_new.o: $(SRC_DIR)/main_new.cpp | $(BUILD_DIR)
-        $(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
 
 # Main object file
 $(BUILD_DIR)/main.o: $(SRC_DIR)/main.cpp | $(BUILD_DIR)
-        $(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
 
 # Server main object file
 $(BUILD_DIR)/server_main.o: server_main.cpp | $(BUILD_DIR)
-        $(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
 
 # miniaudio implementation (third_party/miniaudio). Its header is large and
 # stable, so it is compiled once into its own object.
 $(MINIAUDIO_OBJECT): $(MINIAUDIO_SOURCES) | $(BUILD_DIR)/third_party
-        $(CXX) $(CXXFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 # GLAD object file (C, no header deps to track)
 $(GLAD_OBJECT): $(GLAD_SOURCES) | $(BUILD_DIR)
-        $(CXX) $(CXXFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 # Create directories
 $(BUILD_DIR):
-        mkdir -p $(BUILD_DIR)
+	mkdir -p $(BUILD_DIR)
 
 $(BUILD_DIR)/core:
-        mkdir -p $(BUILD_DIR)/core
+	mkdir -p $(BUILD_DIR)/core
 
 $(BUILD_DIR)/systems:
-        mkdir -p $(BUILD_DIR)/systems
+	mkdir -p $(BUILD_DIR)/systems
 
 $(BUILD_DIR)/network:
-        mkdir -p $(BUILD_DIR)/network
+	mkdir -p $(BUILD_DIR)/network
 
 $(BUILD_DIR)/ui:
-        mkdir -p $(BUILD_DIR)/ui
+	mkdir -p $(BUILD_DIR)/ui
 
 $(BUILD_DIR)/engine:
-        mkdir -p $(BUILD_DIR)/engine
+	mkdir -p $(BUILD_DIR)/engine
 
 $(BUILD_DIR)/game:
-        mkdir -p $(BUILD_DIR)/game
+	mkdir -p $(BUILD_DIR)/game
 
 $(BUILD_DIR)/third_party:
-        mkdir -p $(BUILD_DIR)/third_party
+	mkdir -p $(BUILD_DIR)/third_party
 
 $(BIN_DIR):
-        mkdir -p $(BIN_DIR)
+	mkdir -p $(BIN_DIR)
 
 clean:
-        rm -rf $(BUILD_DIR) $(BIN_DIR)
+	rm -rf $(BUILD_DIR) $(BIN_DIR)
 
 # Preflight: fail early with install instructions instead of a bare
 # "'GLFW/glfw3.h' file not found" deep in the first compile.
 # `deps-check` is silent so it can run as a build prerequisite; `deps` reports.
 deps: deps-check
-        @echo "Dependencies OK"
+	@echo "Dependencies OK"
 
 deps-check:
-        @printf '#include <GLFW/glfw3.h>\n#include <glm/glm.hpp>\n' \
-            | $(CXX) -std=c++17 $(CPPFLAGS) -E -x c++ - >/dev/null 2>&1 \
-            || { \
-                echo "error: GLFW and/or GLM headers not found." >&2; \
-                echo "  macOS          brew install glfw glm" >&2; \
-                echo "  Debian/Ubuntu  sudo apt-get install libglfw3-dev libglm-dev" >&2; \
-                echo "  Arch           sudo pacman -S glfw glm" >&2; \
-                exit 1; \
-            }
+	@printf '#include <GLFW/glfw3.h>\n#include <glm/glm.hpp>\n' \
+	    | $(CXX) -std=c++17 $(CPPFLAGS) -E -x c++ - >/dev/null 2>&1 \
+	    || { \
+	        echo "error: GLFW and/or GLM headers not found." >&2; \
+	        echo "  macOS          brew install glfw glm" >&2; \
+	        echo "  Debian/Ubuntu  sudo apt-get install libglfw3-dev libglm-dev" >&2; \
+	        echo "  Arch           sudo pacman -S glfw glm" >&2; \
+	        exit 1; \
+	    }
 
 run: $(TARGET)
-        ./$(TARGET)
+	./$(TARGET)
 
 run-server: $(SERVER_TARGET)
-        ./$(SERVER_TARGET)
+	./$(SERVER_TARGET)
 
 debug: CXXFLAGS += -g -DDEBUG
 debug: $(TARGET)
 
 help:
-        @echo "Targets:"
-        @echo "  all         build client and server (default)"
-        @echo "  client      build $(TARGET)"
-        @echo "  server      build $(SERVER_TARGET)"
-        @echo "  run         build and launch the client"
-        @echo "  run-server  build and launch the server"
-        @echo "  debug       client build with -g -DDEBUG"
-        @echo "  deps        check that GLFW/GLM headers are installed"
-        @echo "  clean       remove build artifacts"
+	@echo "Targets:"
+	@echo "  all         build client and server (default)"
+	@echo "  client      build $(TARGET)"
+	@echo "  server      build $(SERVER_TARGET)"
+	@echo "  run         build and launch the client"
+	@echo "  run-server  build and launch the server"
+	@echo "  debug       client build with -g -DDEBUG"
+	@echo "  deps        check that GLFW/GLM headers are installed"
+	@echo "  clean       remove build artifacts"
 
 # Header dependency files produced by -MMD (included after the first target so
 # they never become the default goal).
