@@ -263,9 +263,6 @@ void Game::startSelectedMap(const std::string& mapFile) {
     // the map is swapped in by pollMapLoad() once ready.
     requestMapLoad(mapFile);
 
-    if (currentGameMode == TEAM_VS_TEAM || currentGameMode == BOMB_DEFUSAL) {
-        playerTeam = 0;
-    }
     menuJustEntered = true;
     gameInProgress_ = true;
     gameState = PLAYING;

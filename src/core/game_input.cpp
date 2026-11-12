@@ -271,6 +271,10 @@ void Game::processMenuInput() {
 // ---------------------------------------------------------------------------
 
 void Game::processGameInput(float deltaTime) {
+    // Dead spectators only fly the camera (updateSpectator); they must not
+    // shoot, switch weapons or plant/defuse while the round continues.
+    if (spectatorMode) return;
+
     bool inputProcessed = false;
     
     // Unstuck key (U) - move player to safe center position

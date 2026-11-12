@@ -317,6 +317,7 @@ void NetworkClient::closeSocket() {
     connected  = false;
     connecting = false;
     clientId   = 0;
+    assignedTeam = 0;
 }
 
 double NetworkClient::secondsSinceLastReceive() const {
@@ -341,7 +342,8 @@ void NetworkClient::disconnect() {
 }
 
 void NetworkClient::sendPlayerInput(float moveX, float moveZ, float yaw, float pitch,
-                                     bool jump, bool shoot, uint8_t weaponId, float posX, float posY, float posZ) {
+                                     bool jump, bool shoot, uint8_t weaponId, float posX, float posY, float posZ,
+                                     bool alive, uint8_t gameMode) {
     if (!connected) return;
 
     PlayerInputPacket packet;
@@ -362,6 +364,8 @@ void NetworkClient::sendPlayerInput(float moveX, float moveZ, float yaw, float p
     packet.posX = posX;
     packet.posY = posY;
     packet.posZ = posZ;
+    packet.alive = alive;
+    packet.gameMode = gameMode;
 
     sendPacket(&packet, sizeof(packet));
 }
@@ -380,6 +384,31 @@ void NetworkClient::sendPing() {
     // Even a failed send updates the clock: the next attempt comes next tick.
     sendPacket(&ping, sizeof(ping));
     lastPingSend = nowSeconds();
+}
+
+void NetworkClient::sendProjectileSpawn(const glm::vec3& pos, const glm::vec3& vel,
+                                        float lifetime, uint8_t type) {
+    if (!connected) return;
+
+    ProjectileSpawnPacket packet;
+    packet.header.magic = PACKET_MAGIC;
+    packet.header.type = PACKET_PROJECTILE_SPAWN;
+    packet.header.sequence = sequence++;
+    packet.header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    packet.header.clientId = clientId;
+
+    packet.posX = pos.x;
+    packet.posY = pos.y;
+    packet.posZ = pos.z;
+    packet.velX = vel.x;
+    packet.velY = vel.y;
+    packet.velZ = vel.z;
+    packet.lifetime = lifetime;
+    packet.projectileType = type;
+    packet.ownerId = clientId;
+
+    sendPacket(&packet, sizeof(packet));
 }
 
 void NetworkClient::sendPlayerDamage(uint32_t victimId, uint16_t damage, uint8_t weaponId) {
@@ -464,9 +493,16 @@ void NetworkClient::update() {
                     break;
                 }
                 if (!connected) {
-                    std::cout << "Connected to server! Client ID: " << header->clientId << std::endl;
+                    std::cout << "Connected to server! Client ID: " << header->clientId
+                              << " Team: " << (received >= sizeof(ConnectAckPacket)
+                                                   ? static_cast<int>(((const ConnectAckPacket*)buffer)->team)
+                                                   : 0)
+                              << std::endl;
                 }
                 clientId = header->clientId;
+                if (received >= sizeof(ConnectAckPacket)) {
+                    assignedTeam = ((const ConnectAckPacket*)buffer)->team & 1u;
+                }
                 connecting = false;
                 connected = true;
                 lastReceive = nowSeconds();
@@ -700,7 +736,11 @@ void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_
     if (header->magic != PACKET_MAGIC) return;
 
     // Any packet from a known player is proof the client is still alive.
-    if (header->clientId != 0) {
+    // PACKET_PLAYER_DAMAGE names the victim in clientId (the shooter is the
+    // packet's sender), so its liveness is resolved from the source address.
+    if (header->type == PACKET_PLAYER_DAMAGE) {
+        if (ServerPlayer* sender = findPlayerByAddress(from)) sender->lastPacketTime = 0.0f;
+    } else if (header->clientId != 0) {
         auto known = players.find(header->clientId);
         if (known != players.end()) {
             known->second.lastPacketTime = 0.0f;
@@ -764,13 +804,14 @@ void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_
                     existing->address = from;
                 }
 
-                PacketHeader reAck;
-                reAck.magic = PACKET_MAGIC;
-                reAck.type = PACKET_CONNECT_ACK;
-                reAck.sequence = 0;
-                reAck.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+                ConnectAckPacket reAck{};
+                reAck.header.magic = PACKET_MAGIC;
+                reAck.header.type = PACKET_CONNECT_ACK;
+                reAck.header.sequence = 0;
+                reAck.header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now().time_since_epoch()).count();
-                reAck.clientId = existing->id;
+                reAck.header.clientId = existing->id;
+                reAck.team = existing->team;
                 sendPacket(&reAck, sizeof(reAck), from);
                 break;
             }
@@ -816,15 +857,28 @@ void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_
             std::strncpy(player.machineId, machineId, MACHINE_ID_LENGTH - 1);
             player.machineId[MACHINE_ID_LENGTH - 1] = '\0';
             strcpy(player.mapName, "simple.map"); // Default map
+
+            // Balance the two teams: the new player joins the smaller one, so
+            // two clients start on opposite sides of a team map. The newly
+            // inserted record is already in the map (active, team 0) and must
+            // not be counted as an existing player.
+            int teamCounts[2] = {0, 0};
+            for (const auto& pair : players) {
+                if (pair.first == newId) continue;
+                if (pair.second.active) teamCounts[pair.second.team & 1]++;
+            }
+            player.team = static_cast<uint8_t>(teamCounts[0] <= teamCounts[1] ? 0 : 1);
+            player.gameMode = 0;
             
-            // Send connect ack
-            PacketHeader ack;
-            ack.magic = PACKET_MAGIC;
-            ack.type = PACKET_CONNECT_ACK;
-            ack.sequence = 0;
-            ack.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+            // Send connect ack (with the assigned team)
+            ConnectAckPacket ack{};
+            ack.header.magic = PACKET_MAGIC;
+            ack.header.type = PACKET_CONNECT_ACK;
+            ack.header.sequence = 0;
+            ack.header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now().time_since_epoch()).count();
-            ack.clientId = newId;
+            ack.header.clientId = newId;
+            ack.team = player.team;
             sendPacket(&ack, sizeof(ack), from);
             
             // Notify other players on the same map only
@@ -832,12 +886,13 @@ void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_
             join.header.magic = PACKET_MAGIC;
             join.header.type = PACKET_PLAYER_JOIN;
             join.header.sequence = 0;
-            join.header.timestamp = ack.timestamp;
+            join.header.timestamp = ack.header.timestamp;
             join.header.clientId = newId;
             join.playerId = newId;
             join.spawnX = player.position.x;
             join.spawnY = player.position.y;
             join.spawnZ = player.position.z;
+            join.team = player.team;
             broadcastToMap(player.mapName, &join, sizeof(join), newId);
             
             // Notify callback
@@ -879,7 +934,9 @@ void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_
         case PACKET_PLAYER_DAMAGE: {
             // The shooter resolved the hit against the victim's body (the same
             // box everyone is drawn with); the server only validates it and
-            // relays the outcome to both sides.
+            // relays the outcome to both sides. header->clientId is the
+            // victim, so the shooter is looked up by the packet's source
+            // address (and can be the victim itself for self-damage).
             if (size < sizeof(PlayerDamagePacket)) return;
             const PlayerDamagePacket* hit = (const PlayerDamagePacket*)data;
             if (hit->header.clientId == 0 || hit->header.clientId == 0xFFFFFFFFu) return;
@@ -887,9 +944,36 @@ void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_
             auto victim = players.find(hit->header.clientId);
             if (victim == players.end() || !victim->second.active) break;
 
+            ServerPlayer* shooter = findPlayerByAddress(from);
+            if (!shooter) break;
+
             if (onPlayerDamage) {
-                onPlayerDamage(header->clientId, *hit);
+                onPlayerDamage(shooter->id, *hit);
             }
+            break;
+        }
+
+        case PACKET_PROJECTILE_SPAWN: {
+            // A client fired a projectile. The local client is authoritative
+            // about what it fired (weapon type, pellet count, ammo use and
+            // start position); the server only forwards the exact projectile
+            // to the other players on its map. Deriving shots from the input
+            // flags used to turn a shotgun into grenades, because weapon ids
+            // and projectile types are numbered differently.
+            if (size < sizeof(ProjectileSpawnPacket)) return;
+            ProjectileSpawnPacket* spawn = (ProjectileSpawnPacket*)data;
+
+            ServerPlayer* owner = findPlayerByAddress(from);
+            if (!owner) break;
+
+            // Never trust an owner id inside the packet: it must be the
+            // sender, or a client could spawn projectiles as someone else.
+            spawn->header.clientId = owner->id;
+            spawn->ownerId = owner->id;
+            if (spawn->projectileType > 3) break;
+            if (spawn->lifetime <= 0.0f || spawn->lifetime > 10.0f) break;
+
+            broadcastToMap(owner->mapName, spawn, sizeof(*spawn), owner->id);
             break;
         }
         
@@ -951,6 +1035,7 @@ void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_
                 join.spawnX = players[id].position.x;
                 join.spawnY = players[id].position.y;
                 join.spawnZ = players[id].position.z;
+                join.team = players[id].team;
                 broadcastToMap(newMap, &join, sizeof(join), id);
 
                 // Broadcast updated player counts to all clients
@@ -983,6 +1068,7 @@ void NetworkServer::broadcastPlayerState(uint32_t playerId, const glm::vec3& pos
     packet.pitch = pitch;
     packet.health = health;
     packet.isDead = isDead;
+    packet.team = (players.find(playerId) != players.end()) ? players[playerId].team : 0;
 
     // Only broadcast to players on the same map
     if (players.find(playerId) != players.end()) {
@@ -1096,7 +1182,8 @@ void NetworkServer::broadcastToMap(const std::string& mapName, const void* data,
 
 void NetworkServer::broadcastPlayerStateToMap(uint32_t playerId, const std::string& mapName,
                                                const glm::vec3& pos, const glm::vec3& vel,
-                                               float yaw, float pitch, float health, bool isDead) {
+                                               float yaw, float pitch, float health, bool isDead,
+                                               bool includePlayer) {
     PlayerStatePacket packet;
     packet.header.magic = PACKET_MAGIC;
     packet.header.type = PACKET_PLAYER_STATE;
@@ -1116,8 +1203,12 @@ void NetworkServer::broadcastPlayerStateToMap(uint32_t playerId, const std::stri
     packet.pitch = pitch;
     packet.health = health;
     packet.isDead = isDead;
+    packet.team = (players.find(playerId) != players.end()) ? players[playerId].team : 0;
 
-    broadcastToMap(mapName, &packet, sizeof(packet), playerId);
+    // Damage and respawn outcomes must also reach the player they describe
+    // (otherwise the victim never learns it died). Ordinary position updates
+    // keep excluding the sender.
+    broadcastToMap(mapName, &packet, sizeof(packet), includePlayer ? 0 : playerId);
 }
 
 void NetworkServer::broadcastProjectileSpawnToMap(const std::string& mapName, const glm::vec3& pos,

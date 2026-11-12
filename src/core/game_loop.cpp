@@ -23,40 +23,18 @@ void Game::update(float deltaTime) {
     updateAudio(deltaTime);
 
     if (gameState == PLAYING) {
-        // Update player physics (always run, client controls own movement in multiplayer)
-        updatePlayerPhysics(deltaTime);
+        const bool spectating = spectatorMode && isDead;
 
-        // Footsteps / landing (needs the velocity physics just produced)
-        updateFootsteps(deltaTime);
+        if (spectating) {
+            // Dead players fly freely (map-editor style) instead of running
+            // gravity/collision on a body that is no longer in the round.
+            updateSpectator(deltaTime);
+        } else {
+            // Update player physics (always run, client controls own movement in multiplayer)
+            updatePlayerPhysics(deltaTime);
 
-        // Send player input to server
-        if (networkClient && networkClient->isConnected()) {
-            float moveX = 0.0f, moveZ = 0.0f;
-            if (glfwGetKey(window, keyBindings.forward) == GLFW_PRESS) {
-                moveX += cos(glm::radians(camera.Yaw));
-                moveZ += sin(glm::radians(camera.Yaw));
-            }
-            if (glfwGetKey(window, keyBindings.backward) == GLFW_PRESS) {
-                moveX -= cos(glm::radians(camera.Yaw));
-                moveZ -= sin(glm::radians(camera.Yaw));
-            }
-            if (glfwGetKey(window, keyBindings.left) == GLFW_PRESS) {
-                moveX += cos(glm::radians(camera.Yaw - 90.0f));
-                moveZ += sin(glm::radians(camera.Yaw - 90.0f));
-            }
-            if (glfwGetKey(window, keyBindings.right) == GLFW_PRESS) {
-                moveX += cos(glm::radians(camera.Yaw + 90.0f));
-                moveZ += sin(glm::radians(camera.Yaw + 90.0f));
-            }
-
-            bool jump  = glfwGetKey(window, keyBindings.jump) == GLFW_PRESS;
-            bool shoot = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
-
-            // Send eye-level position for projectile spawning (playerPos + eye height)
-            glm::vec3 eyePos = playerPos + glm::vec3(0.0f, 1.6f, 0.0f);
-            networkClient->sendPlayerInput(moveX, moveZ, camera.Yaw, camera.Pitch, jump, shoot,
-                                           static_cast<uint8_t>(currentWeapon),
-                                           eyePos.x, eyePos.y, eyePos.z);
+            // Footsteps / landing (needs the velocity physics just produced)
+            updateFootsteps(deltaTime);
         }
 
         // Update weapon cooldowns
@@ -98,16 +76,51 @@ void Game::update(float deltaTime) {
         // Update bomb in bomb defusal mode
         updateBomb(deltaTime);
 
-        // Update spectator camera
-        if (spectatorMode) {
-            updateSpectator();
-        }
-
     } else if (gameState == DEAD) {
         // Update spectator camera in dead state
         if (spectatorMode) {
-            updateSpectator();
+            updateSpectator(deltaTime);
         }
+    }
+
+    // Tell the server every frame whether we are alive or dead/spectating.
+    // This runs in DEAD too, so a lost damage packet cannot leave a client
+    // dead locally while the server still believes it is alive (or the other
+    // way round): the next input corrects it. Menu states are not gameplay:
+    // they must not report a living player as dead.
+    if (networkClient && networkClient->isConnected() &&
+        (gameState == PLAYING || gameState == DEAD)) {
+        const bool alive = (gameState == PLAYING) && !isDead && !spectatorMode;
+        float moveX = 0.0f, moveZ = 0.0f;
+        if (alive) {
+            if (glfwGetKey(window, keyBindings.forward) == GLFW_PRESS) {
+                moveX += cos(glm::radians(camera.Yaw));
+                moveZ += sin(glm::radians(camera.Yaw));
+            }
+            if (glfwGetKey(window, keyBindings.backward) == GLFW_PRESS) {
+                moveX -= cos(glm::radians(camera.Yaw));
+                moveZ -= sin(glm::radians(camera.Yaw));
+            }
+            if (glfwGetKey(window, keyBindings.left) == GLFW_PRESS) {
+                moveX += cos(glm::radians(camera.Yaw - 90.0f));
+                moveZ += sin(glm::radians(camera.Yaw - 90.0f));
+            }
+            if (glfwGetKey(window, keyBindings.right) == GLFW_PRESS) {
+                moveX += cos(glm::radians(camera.Yaw + 90.0f));
+                moveZ += sin(glm::radians(camera.Yaw + 90.0f));
+            }
+        }
+
+        const bool jump  = alive && glfwGetKey(window, keyBindings.jump) == GLFW_PRESS;
+        const bool shoot = alive && glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+
+        // Send eye-level position for projectile spawning (playerPos + eye height)
+        const glm::vec3 eyePos = playerPos + glm::vec3(0.0f, 1.6f, 0.0f);
+        networkClient->sendPlayerInput(moveX, moveZ, camera.Yaw, camera.Pitch, jump, shoot,
+                                       static_cast<uint8_t>(currentWeapon),
+                                       eyePos.x, eyePos.y, eyePos.z,
+                                       alive,
+                                       static_cast<uint8_t>(currentGameMode));
     }
 
     // Update round end timer (delay before next round)
@@ -218,7 +231,7 @@ void Game::render() {
         }
 
         // Render crosshair
-        renderCrosshair();
+        if (!spectatorMode) renderCrosshair();
 
         // Render damage effect
         renderDamageEffect();

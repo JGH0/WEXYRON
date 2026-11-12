@@ -47,6 +47,10 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
     networkClient->onPlayerState = [this](const PlayerStatePacket& packet) {
         // Only sync health/death state for local player (client controls own movement)
         if (networkClient && packet.playerId == networkClient->getClientId()) {
+            // The server assigns teams (balanced on connect); keep the local
+            // team in sync so spawns and remote colours agree everywhere.
+            if (packet.team <= 1) playerTeam = packet.team;
+
             // Don't override local position/velocity - client controls own movement
             // Only sync health and death state from server.
             //
@@ -60,15 +64,11 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
                 // The server put us back on our feet (respawn).
                 respawnLocally();
             } else {
-                // Alive and well. Health shown is the server's health minus
-                // shots we reported that it has not forwarded back yet.
-                int pending = 0;
-                for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
-                    if (!remotePlayers[i].active || !pvpRemotes_[i].pending) continue;
-                    pending += pvpRemotes_[i].damageSent;
-                }
-                pending = std::min(pending, 99);
-                playerHealth = std::max(0.0f, packet.health - static_cast<float>(pending));
+                // The server's health is authoritative. Do not subtract the
+                // damage we reported to *other* players here: those books
+                // belong to their health, and deducting them from our own
+                // made clients die at different moments.
+                playerHealth = std::max(0.0f, packet.health);
             }
             return;
         }
@@ -89,6 +89,7 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
                     remotePlayers[i].health   = packet.health;
                     remotePlayers[i].isDead   = packet.isDead;
                     remotePlayers[i].active   = true;
+                    remotePlayers[i].team     = packet.team;
                     // The server confirmed health got through: no need to
                     // re-send the damage we reported for this player.
                     pvpRemotes_[i].damageSent = 0;
@@ -114,6 +115,7 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
                 remotePlayers[i].pitch          = 0.0f;
                 remotePlayers[i].health         = 100.0f;
                 remotePlayers[i].isDead         = false;
+                remotePlayers[i].team           = packet.team;
                 return;
             }
         }
@@ -131,6 +133,7 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
                 remotePlayers[i].health         = 100.0f;
                 remotePlayers[i].isDead         = false;
                 remotePlayers[i].active         = true;
+                remotePlayers[i].team           = packet.team;
                 playerCount++; // Update player count
                 break;
             }
@@ -287,6 +290,10 @@ void Game::updateNetwork() {
     if (!networkClient->isConnected()) {
         return;   // handshake still in flight (retried by the network layer)
     }
+
+    // The server assigned our team in the handshake (it balances players
+    // across both teams, so two clients spawn on opposite sides).
+    playerTeam = networkClient->getTeam() & 1u;
 
     // A live session goes silent when the server is gone: report it instead of
     // keeping a dead connection (and the "CONNECTED" status) forever.

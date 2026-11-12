@@ -220,10 +220,38 @@ int main(int argc, char* argv[]) {
         ServerPlayer* player = server.getPlayer(id);
         if (!player) return;
 
-        // A dead player is frozen at the death spot until the respawn: their
-        // inputs must not move them (the client is on the death screen) or
-        // resurrect them before the respawn delay ends.
-        if (player->isDead) return;
+        // Remember the mode the client is in: round-based games keep a dead
+        // player in spectator mode until that client starts the next round.
+        player->gameMode = input.gameMode;
+
+        // A client that reports itself dead/spectating does not move its body.
+        // If the server did not know yet (a lost damage packet, a fall, a
+        // local death), adopt the client's death state so every other client
+        // hides the body immediately. The respawn/round logic then brings it
+        // back through the normal path.
+        if (!input.alive) {
+            if (!player->isDead) {
+                player->isDead = true;
+                player->health = 0.0f;
+                player->velocity = glm::vec3(0.0f);
+                server.broadcastPlayerStateToMap(
+                    player->id, player->mapName, player->position, player->velocity,
+                    player->yaw, player->pitch, player->health, player->isDead, true);
+            }
+            return;
+        }
+
+        // The client came back to life: either the server respawned it, or a
+        // round-based client started a new round locally. Make the server
+        // match, then let it move again from the next input.
+        if (player->isDead) {
+            player->isDead = false;
+            player->health = 100.0f;
+            player->velocity = glm::vec3(0.0f);
+            server.broadcastPlayerStateToMap(
+                player->id, player->mapName, player->position, player->velocity,
+                player->yaw, player->pitch, player->health, player->isDead, true);
+        }
         
         // Update player state based on input
         // Use client position from input packet (client-authoritative movement).
@@ -260,85 +288,10 @@ int main(int argc, char* argv[]) {
             player->velocity.y = 0.0f;
         }
         
-        // Handle shoot with cooldown and proper pitch/yaw
-        if (input.shoot && player->shootCooldown <= 0.0f) {
-            // Calculate direction using both yaw and pitch
-            float yawRad = glm::radians(input.yaw);
-            float pitchRad = glm::radians(input.pitch);
-            
-            glm::vec3 front(
-                cos(pitchRad) * cos(yawRad),
-                sin(pitchRad),
-                cos(pitchRad) * sin(yawRad)
-            );
-            
-            // Weapon-specific projectile spawning. The packet's position is an
-            // eye position, the player record holds feet: projectiles should
-            // start around chest height, not 1.6 units above the head.
-            glm::vec3 clientPos(player->position.x,
-                                player->position.y + 1.2f,
-                                player->position.z);
-            
-            // Weapon-specific projectile spawning
-            switch (input.weaponId) {
-                case 1: // PUMP_SHOTGUN - 5 pellets with spread
-                    player->shootCooldown = 0.8f;
-                    for (int i = 0; i < 5; i++) {
-                        glm::vec3 spread = glm::vec3(
-                            (rand() % 100 - 50) * 0.002f,
-                            (rand() % 100 - 50) * 0.002f,
-                            0.0f
-                        );
-                        glm::vec3 dir = glm::normalize(front + spread);
-                        server.broadcastProjectileSpawnToMap(
-                            player->mapName,
-                            clientPos + front * 0.5f,
-                            dir * 50.0f,
-                            1.0f,
-                            input.weaponId,
-                            id
-                        );
-                    }
-                    break;
-                    
-                case 2: // GRENADE - slower, longer lifetime
-                    player->shootCooldown = 1.0f;
-                    server.broadcastProjectileSpawnToMap(
-                        player->mapName,
-                        clientPos + front * 0.5f,
-                        front * 30.0f,
-                        5.0f,
-                        input.weaponId,
-                        id
-                    );
-                    break;
-
-                case 3: // FLASHBANG - slower, medium lifetime
-                    player->shootCooldown = 1.0f;
-                    server.broadcastProjectileSpawnToMap(
-                        player->mapName,
-                        clientPos + front * 0.5f,
-                        front * 25.0f,
-                        4.0f,
-                        input.weaponId,
-                        id
-                    );
-                    break;
-                    
-                case 0: // PISTOL (default)
-                default:
-                    player->shootCooldown = 0.3f;
-                    server.broadcastProjectileSpawnToMap(
-                        player->mapName,
-                        clientPos + front * 0.5f,
-                        front * 60.0f,
-                        2.0f,
-                        input.weaponId,
-                        id
-                    );
-                    break;
-            }
-        }
+        // Projectiles are not invented here. The client that fired reports the
+        // exact ProjectileSpawnPacket (type, speed, pellet count), and the
+        // server relays it; deriving shots from input.weaponId mixed up weapon
+        // ids and projectile types (a shotgun pellet showed up as a grenade).
         
         // Broadcast updated state only to clients on the same map
         server.broadcastPlayerStateToMap(
@@ -394,7 +347,7 @@ int main(int argc, char* argv[]) {
 
         server.broadcastPlayerStateToMap(
             victim->id, victim->mapName, victim->position, victim->velocity,
-            victim->yaw, victim->pitch, victim->health, victim->isDead);
+            victim->yaw, victim->pitch, victim->health, victim->isDead, true);
     };
 
     // Main server loop
@@ -415,14 +368,18 @@ int main(int argc, char* argv[]) {
         
         server.update(deltaTime);
 
-        // Respawn dead players after a short delay. This is time-based and
-        // independent of further hits: a dead client keeps streaming inputs
-        // (camera/keys), but nothing guarantees another damage packet.
+        // Respawn dead players after a short delay in deathmatch. Round-based
+        // games (team vs team / bomb defusal) keep the body dead and invisible
+        // until the client starts the next round and reports itself alive.
         for (ServerPlayer* player : server.getPlayers()) {
             if (!player->isDead) {
                 deadSince.erase(player->id);
                 continue;
             }
+
+            const bool roundBased = player->gameMode == 1 || player->gameMode == 2;
+            if (roundBased) continue;
+
             const auto it = deadSince.find(player->id);
             if (it == deadSince.end()) {
                 deadSince[player->id] = now;
@@ -441,7 +398,7 @@ int main(int argc, char* argv[]) {
             std::cout << "[Server] Player " << player->id << " respawned" << std::endl;
             server.broadcastPlayerStateToMap(
                 player->id, player->mapName, player->position, player->velocity,
-                player->yaw, player->pitch, player->health, player->isDead);
+                player->yaw, player->pitch, player->health, player->isDead, true);
         }
         
         // Small sleep to prevent 100% CPU usage

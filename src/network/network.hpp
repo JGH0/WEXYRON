@@ -96,6 +96,13 @@ struct ConnectRejectPacket {
     uint8_t limit;                 ///< the limit that was hit (0 when n/a)
 };
 
+/// Acceptance of a CONNECT. The team is assigned by the server (players are
+/// spread evenly over the two teams), so both clients spawn on opposite sides.
+struct ConnectAckPacket {
+    PacketHeader header;           ///< clientId = the new player's id
+    uint8_t team;                  ///< 0 = Team A, 1 = Team B
+};
+
 // Player input from client
 struct PlayerInputPacket {
     PacketHeader header;
@@ -105,6 +112,13 @@ struct PlayerInputPacket {
     bool shoot;
     uint8_t weaponId;
     float posX, posY, posZ; // Client position for projectile spawning
+    /// Client is alive and playing (not dead / spectating). A round-based
+    /// client keeps sending input while it spectates, so the server can tell
+    /// the difference between "dead" and "new round started".
+    bool alive;
+    /// GameMode (0 = deathmatch, 1 = team vs team, 2 = bomb defusal). The
+    /// server needs it to stop auto-respawning players during a round.
+    uint8_t gameMode;
 };
 
 // Player state from server
@@ -116,6 +130,7 @@ struct PlayerStatePacket {
     float yaw, pitch;
     float health;
     bool isDead;
+    uint8_t team;                  ///< 0 = Team A, 1 = Team B
 };
 
 /// A hit one client scored on another player (client -> server -> victim and
@@ -132,6 +147,7 @@ struct PlayerJoinPacket {
     PacketHeader header;
     uint32_t playerId;
     float spawnX, spawnY, spawnZ;
+    uint8_t team;                  ///< 0 = Team A, 1 = Team B
 };
 
 // Player left
@@ -221,13 +237,15 @@ public:
     double secondsSinceLastReceive() const;
     
     // Send player input to server
-    void sendPlayerInput(float moveX, float moveZ, float yaw, float pitch, bool jump, bool shoot, uint8_t weaponId, float posX, float posY, float posZ);
+    void sendPlayerInput(float moveX, float moveZ, float yaw, float pitch, bool jump, bool shoot, uint8_t weaponId, float posX, float posY, float posZ, bool alive = true, uint8_t gameMode = 0);
     
     // Receive packets from server - call every frame
     void update();
     
     // Getters for received state
     uint32_t getClientId() const { return clientId; }
+    /// Team the server assigned in the handshake (0 = Team A, 1 = Team B).
+    uint8_t getTeam() const { return assignedTeam; }
     
     // Callbacks (set these to handle incoming data)
     std::function<void(const PlayerStatePacket&)> onPlayerState;
@@ -242,6 +260,12 @@ public:
     // Send a keepalive PING (update() does this on its own every second)
     void sendPing();
 
+    /// Relay one projectile the local player just fired. The server forwards
+    /// it to the other players on the map, so they see exactly what was fired
+    /// (weapon type, pellet count, ammo use and start position/speed).
+    void sendProjectileSpawn(const glm::vec3& pos, const glm::vec3& vel,
+                             float lifetime, uint8_t type);
+
     // Report a hit on player `victimId` (resolved against its body below)
     void sendPlayerDamage(uint32_t victimId, uint16_t damage, uint8_t weaponId);
 
@@ -251,6 +275,7 @@ private:
     bool connected;
     bool connecting;
     uint32_t clientId;
+    uint8_t assignedTeam = 0;
     uint32_t sequence;
 
     // Session bookkeeping
@@ -301,6 +326,8 @@ struct ServerPlayer {
     float shootCooldown;  // Shooting cooldown timer
     char mapName[32];     // Current map the player is on
     char machineId[MACHINE_ID_LENGTH] = {}; ///< stable id of the player's PC
+    uint8_t team = 0;     ///< 0 = Team A, 1 = Team B (assigned on connect)
+    uint8_t gameMode = 0; ///< last game mode the client reported
 };
 
 class NetworkServer {
@@ -327,7 +354,8 @@ public:
     void broadcastToMap(const std::string& mapName, const void* data, size_t size, uint32_t excludeId);
     void broadcastPlayerStateToMap(uint32_t playerId, const std::string& mapName,
                                     const glm::vec3& pos, const glm::vec3& vel,
-                                    float yaw, float pitch, float health, bool isDead);
+                                    float yaw, float pitch, float health, bool isDead,
+                                    bool includePlayer = false);
     void broadcastProjectileSpawnToMap(const std::string& mapName, const glm::vec3& pos,
                                         const glm::vec3& vel, float lifetime,
                                         uint8_t type, uint32_t ownerId);

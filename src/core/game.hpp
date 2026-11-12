@@ -786,6 +786,7 @@ private:
         float health;
         bool isDead;
         bool active;
+        uint8_t team = 0; ///< server-assigned team (0 = Team A, 1 = Team B)
     };
     static const int MAX_REMOTE_PLAYERS = 8;
     RemotePlayer remotePlayers[MAX_REMOTE_PLAYERS];
@@ -839,6 +840,9 @@ private:
     /// Player damage that is not tied to a projectile (explosions, contact).
     /// Applies the damage and resolves death on both ends of the session.
     void applyPlayerDamage(float damage);
+    /// Tell the server about damage this client applied to itself (own
+    /// grenade, fall, round explosion), so the authoritative death matches.
+    void reportLocalDamage(float damage, uint8_t weaponId = 0);
     /// Local death: stop the player and tell the server (it respawns us).
     void dieLocally();
     /// Respawn outside of a round cycle (multiplayer hit ENTER).
@@ -1168,9 +1172,9 @@ private:
     void startRound();
     
     /**
-     * @brief Update spectator camera
+     * @brief Update spectator camera (free-flying, like the map editor)
      */
-    void updateSpectator();
+    void updateSpectator(float deltaTime);
     
     /**
      * @brief Update round end timer (delay before next round)

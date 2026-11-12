@@ -266,6 +266,7 @@ void Game::applyPlayerDamage(float damage) {
     playerHealth -= damage;
     damageEffectTime = std::max(damageEffectTime, 1.0f);
     playSoundEffect("player_damage", playerPos + glm::vec3(0.0f, eyeHeight, 0.0f), 0.9f);
+    reportLocalDamage(damage);
 
     std::cout << "Player hit! Health: " << playerHealth << "/" << playerMaxHealth << std::endl;
 
@@ -275,10 +276,28 @@ void Game::applyPlayerDamage(float damage) {
     }
 }
 
+void Game::reportLocalDamage(float damage, uint8_t weaponId) {
+    // Damage resolved on this client (own grenade, falling, contact) is sent
+    // against ourselves. The server keeps the authoritative health/death; the
+    // victim's client would otherwise die locally while the server and the
+    // other clients still saw a living player.
+    if (damage <= 0.0f) return;
+    if (!networkClient || !networkClient->isConnected()) return;
+    const uint32_t self = networkClient->getClientId();
+    if (self == 0) return;
+    const float capped = std::min(damage, 65535.0f);
+    networkClient->sendPlayerDamage(self, static_cast<uint16_t>(capped), weaponId);
+}
+
 void Game::dieLocally() {
     if (isDead) return;
     isDead = true;
     playerVelocity = glm::vec3(0.0f);
+    // A dying player cannot finish planting/defusing.
+    isPlanting = false;
+    isDefusing = false;
+    plantProgress = 0.0f;
+    defuseProgress = 0.0f;
     playSoundEffect("player_death", playerPos + glm::vec3(0.0f, eyeHeight, 0.0f));
 
     if (bombDefusalMode) {
@@ -294,7 +313,8 @@ void Game::dieLocally() {
         const glm::vec3 eye = playerPos + glm::vec3(0.0f, eyeHeight, 0.0f);
         networkClient->sendPlayerInput(0.0f, 0.0f, camera.Yaw, camera.Pitch, false, false,
                                        static_cast<uint8_t>(currentWeapon),
-                                       eye.x, eye.y, eye.z);
+                                       eye.x, eye.y, eye.z, false,
+                                       static_cast<uint8_t>(currentGameMode));
     }
     std::cout << "Player defeated!" << std::endl;
 }
@@ -340,6 +360,7 @@ void Game::updatePlayerPhysics(float deltaTime) {
     if (playerPos.y < -20.0f && !isDead) {
         playerHealth = 0.0f;
         std::cout << "Player fell out of the world and died!" << std::endl;
+        reportLocalDamage(100.0f);
         dieLocally();
         return;
     }
@@ -427,6 +448,15 @@ bool Game::createProjectile(const glm::vec3& position, const glm::vec3& velocity
             // from a previous projectile in this slot don't cause false collisions.
             projectilePrevPosInitialized[i] = false;
             projectilePrevPos[i] = position;
+
+            // Our own shot: the other clients see exactly this projectile.
+            // Relaying the real spawn (instead of letting the server rebuild a
+            // shot from the input flags) keeps the type, pellet count and ammo
+            // use identical on every client.
+            if (owner == 0 && networkClient && networkClient->isConnected()) {
+                networkClient->sendProjectileSpawn(position, velocity, lifetime,
+                                                  static_cast<uint8_t>(type));
+            }
             return true;
         }
     }
@@ -743,8 +773,9 @@ void Game::updateProjectiles(float deltaTime) {
                     projectiles[i].active = false;
                     activeProjectiles--;
                     if (projectiles[i].type == 1) {
+                        // The blast itself reports damage to nearby remote
+                        // players (see createSimpleExplosion).
                         createSimpleExplosion(projectiles[i].position, &projectiles[i]);
-                        checkExplosionRemoteCollision(projectiles[i].position, 3.0f, 75.0f);
                     } else {
                         createFlashbangEffect(projectiles[i].position);
                     }
@@ -889,9 +920,11 @@ void Game::createSimpleExplosion(glm::vec3 position, const Projectile* source) {
         }
     }
     
-    // Explosions relayed from another player (source != our own grenade) are
-    // handled by updateRemotePlayerDeath / checkProjectilePlayerCollision.
-    if (networkClient && networkClient->isConnected() && (!source || source->owner != 0)) {
+    // A blast relayed from another player only draws its effect here: the
+    // thrower's client is the one that resolves the damage (see below) and
+    // reports it to the server.
+    const bool localBlast = !source || source->owner == 0;
+    if (networkClient && networkClient->isConnected() && !localBlast) {
         return;
     }
 
@@ -903,6 +936,13 @@ void Game::createSimpleExplosion(glm::vec3 position, const Projectile* source) {
         applyPlayerDamage(explosionDamage_ * damageMultiplier);
         damageEffectTime = std::max(damageEffectTime, 1.5f); // Longer screen effect
     }
+
+    // Our own grenade also has to hurt the remote players around the blast.
+    // Their clients only see the relayed projectile and deliberately do not
+    // apply blast damage themselves (the server is the single authority).
+    if (networkClient && networkClient->isConnected()) {
+        checkExplosionRemoteCollision(position, explosionRadius, explosionDamage_);
+    }
 }
 
 void Game::createFlashbangEffect(glm::vec3 position) {
@@ -910,15 +950,20 @@ void Game::createFlashbangEffect(glm::vec3 position) {
 
     playSoundEffect("flashbang_explode", position);
 
-    // Calculate distance from player to flashbang
-    float playerDistance = glm::length(position - playerPos);
+    // The flash is seen from the eyes, not the feet. Using the feet as the ray
+    // origin made a flashbang on lower ground (or on the floor below a ledge)
+    // look "blocked" even when the camera could see it directly.
+    const glm::vec3 eye = camera.Position;
+    float playerDistance = glm::length(position - eye);
     float flashRadius = 12.0f; // 12 unit flash radius (increased for more aggressive effect)
 
-    // Check if there's a wall between player and flashbang (but ignore walls very close to flashbang)
+    // Check if there's a wall between the eyes and the flashbang (but ignore
+    // walls very close to the flashbang itself).
     bool hasLineOfSight = true;
     if (currentMap) {
-        glm::vec3 rayDir = glm::normalize(position - playerPos);
-        float rayLength = playerDistance;
+        glm::vec3 toFlash = position - eye;
+        const float rayLength = glm::length(toFlash);
+        glm::vec3 rayDir = rayLength > 0.001f ? toFlash / rayLength : glm::vec3(0.0f);
         const std::vector<MapBlock>& blocks = currentMap->getBlocks();
 
         for (const MapBlock& block : blocks) {
@@ -932,8 +977,8 @@ void Game::createFlashbangEffect(glm::vec3 position) {
             float tMin = 0.0f, tMax = rayLength;
             for (int axis = 0; axis < 3; axis++) {
                 if (rayDir[axis] != 0.0f) {
-                    float t1 = (blockMin[axis] - playerPos[axis]) / rayDir[axis];
-                    float t2 = (blockMax[axis] - playerPos[axis]) / rayDir[axis];
+                    float t1 = (blockMin[axis] - eye[axis]) / rayDir[axis];
+                    float t2 = (blockMax[axis] - eye[axis]) / rayDir[axis];
                     tMin = std::max(tMin, std::min(t1, t2));
                     tMax = std::min(tMax, std::max(t1, t2));
                 }
@@ -958,7 +1003,7 @@ void Game::createFlashbangEffect(glm::vec3 position) {
     }
 
     // Calculate facing direction
-    glm::vec3 toFlash = position - camera.Position;
+    glm::vec3 toFlash = position - eye;
     float toLen = glm::length(toFlash);
     if (toLen < 0.001f) toLen = 0.001f;
     toFlash /= toLen;
@@ -1320,43 +1365,28 @@ void Game::updateEnemies(float deltaTime) {
 }
 
 void Game::checkProjectilePlayerCollision() {
-    // Damage immunity (set by damagePlayer) means a hit was just taken. The
-    // hit projectiles are still removed below, so no shot is wasted.
-    const bool immune = playerDamageCooldown > 0.0f;
-
+    // Hits are resolved once, by the shooter's client, against the same body
+    // box and reported to the server. The victim must not apply a second copy
+    // locally: that made the victim die on its own while the server (and the
+    // other clients) still saw a living player.
     for (int i = 0; i < MAX_PROJECTILES; i++) {
         if (!projectiles[i].active) continue;
         
         // Only check projectiles from other players (owner != 0 means remote player)
         if (projectiles[i].owner == 0) continue; // Skip own projectiles
-        
-        // Hit detection against the local player's body (feet position, with
-        // eye-level shots: the projectile IS the line of sight).
-        const bool bodyHit = pointHitsBody(projectiles[i].position, playerPos, bodyHitSlack);
 
         if (projectiles[i].type == 1 || projectiles[i].type == 2) {
-            // Relay of the thrower's blast. It stayed active in flight (the
-            // thrower removed its own copy), so the same projectile can no
-            // longer deal a second "hit" below: both victims are resolved by
-            // the blast itself.
-            playerDamageCooldown = std::max(playerDamageCooldown, pvpDuplicateHitWindow);
+            // Relayed grenade/flashbang: the blast is resolved by the thrower
+            // (damage) or applies its own local flash effect.
             continue;
         }
 
-        if (!bodyHit || immune) continue;
-        // A bullet stops on the first body it reaches.
-        float damage = 0.0f;
-        switch (projectiles[i].type) {
-            case 3:  damage = 10.0f; break;   // shotgun pellet
-            case 0:  damage = 25.0f; break;   // pistol
-            default: damage = 20.0f; break;   // anything else
+        // A relayed bullet ends where it visibly hits this body, but the
+        // damage packet comes from the shooter via the server.
+        if (pointHitsBody(projectiles[i].position, playerPos, bodyHitSlack)) {
+            projectiles[i].active = false;
+            activeProjectiles--;
         }
-
-        damagePlayer(damage);   // sets damageEffectTime + damagePlayer immunity
-        playSoundEffect("hit_flesh", projectiles[i].position, 0.8f);
-
-        projectiles[i].active = false;
-        activeProjectiles--;
     }
 }
 
@@ -1371,6 +1401,7 @@ void Game::damagePlayer(float damage) {
     
     std::cout << "Player hit! Health: " << playerHealth << "/" << playerMaxHealth << std::endl;
     playSoundEffect("player_damage", playerPos + glm::vec3(0.0f, eyeHeight, 0.0f), 0.9f);
+    reportLocalDamage(damage);
     
     if (playerHealth <= 0.0f) {
         dieLocally();
@@ -1424,17 +1455,10 @@ bool Game::checkProjectileRemoteCollision(Projectile& projectile) {
         // Hit detection uses the very box the remote player is drawn with.
         if (!pointHitsBody(projectile.position, remote.position, bodyHitSlack)) continue;
 
-        if (projectile.type == 1) {
-            // A granade can be relayed by the server: don't double-apply if
-            // the packet is already on its way to the victim.
-            const auto sinceShot = std::chrono::steady_clock::now() - lastLocalShot_;
-            if (std::chrono::duration<float>(sinceShot).count() < pvpShotTravelTime) continue;
-        }
-
         if (projectile.type == 1 || projectile.type == 2) {
-            // Our grenade/flashbang hit a body: the server relays the blast
-            // only when it hits the wall, so detonating on a body happens
-            // here. The relayed copy (owner != 0) is stopped on the victim.
+            // Our grenade/flashbang hit a body: the thrower resolves the
+            // blast here, and the relayed copy (owner != 0) only draws it on
+            // the other clients.
             return true;
         }
 
@@ -1571,9 +1595,15 @@ void Game::renderRemotePlayers() {
         glm::mat4 model = glm::mat4(1.0f);
         model = glm::translate(model, centre);
         model = glm::scale(model, size);
-        const glm::vec3 color = (remote.id % 2 == 0)
-                              ? glm::vec3(1.0f, 0.15f, 0.15f)
-                              : glm::vec3(0.15f, 0.9f, 0.2f);
+        // Team modes: teammates are blue, enemies red. Free-for-all modes
+        // have no teammates, so everybody else is red. (Previously the colour
+        // came from the client id, which looked random on every screen.)
+        const bool teamMode = (currentGameMode == TEAM_VS_TEAM ||
+                               currentGameMode == BOMB_DEFUSAL);
+        const bool teammate = teamMode && (remote.team == playerTeam);
+        const glm::vec3 color = teammate
+                              ? glm::vec3(0.15f, 0.4f, 1.0f)   // blue
+                              : glm::vec3(1.0f, 0.15f, 0.15f); // red
         renderer.drawCube(model, color);
     }
 }
@@ -1798,24 +1828,33 @@ void Game::startRound() {
     std::cout << "NEW ROUND STARTED! Attacking Team: " << (attackingTeam == 0 ? "Team A (Red)" : "Team B (Blue)") << std::endl;
 }
 
-void Game::updateSpectator() {
+void Game::updateSpectator(float deltaTime) {
     if (!spectatorMode) return;
-    
-    // Simple free camera for spectator
-    // (In a full implementation, this would cycle through living teammates)
-    float spectatorSpeed = 10.0f;
-    
-    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
-        playerPos += camera.Front * spectatorSpeed * 0.016f;
+
+    // Free-flying camera, like the map editor: no gravity, no collision.
+    // A spectator who died should be able to look around the map while the
+    // round continues, not fall to the floor as a body.
+    const float spectatorSpeed = 15.0f;
+    glm::vec3 moveDir(0.0f);
+
+    if (glfwGetKey(window, keyBindings.forward) == GLFW_PRESS)  moveDir += camera.Front;
+    if (glfwGetKey(window, keyBindings.backward) == GLFW_PRESS) moveDir -= camera.Front;
+    if (glfwGetKey(window, keyBindings.left) == GLFW_PRESS)     moveDir -= camera.Right;
+    if (glfwGetKey(window, keyBindings.right) == GLFW_PRESS)    moveDir += camera.Right;
+    if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)       moveDir += glm::vec3(0.0f, 1.0f, 0.0f);
+    if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
+        glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS) moveDir -= glm::vec3(0.0f, 1.0f, 0.0f);
+
+    if (glm::length(moveDir) > 0.0001f) {
+        moveDir = glm::normalize(moveDir);
+        camera.Position += moveDir * spectatorSpeed * deltaTime;
     }
-    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
-        playerPos -= camera.Front * spectatorSpeed * 0.016f;
-    }
-    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
-        playerPos -= camera.Right * spectatorSpeed * 0.016f;
-    }
-    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
-        playerPos += camera.Right * spectatorSpeed * 0.016f;
-    }
+
+    // Keep the stored body position in sync with the free camera. It is not
+    // used for collision (the body is dead) but keeps the network input
+    // interesting position sensible.
+    playerPos = camera.Position - glm::vec3(0.0f, eyeHeight, 0.0f);
+    playerVelocity = glm::vec3(0.0f);
+    camera.updateCameraVectors();
 }
 
