@@ -19,7 +19,8 @@ A multiplayer-enabled 3D first-person shooter game built with OpenGL and C++.
   - Ethernet cable connection
   - Direct cable-to-cable connection
   - Mobile hotspot
-- **Real-time multiplayer**: Up to 8 players
+- **Real-time multiplayer**: Up to 16 players
+- **Server-side bots**: Configurable count and accuracy, all game modes
 - **Server-authoritative**: Fair gameplay with server-side physics
 - **Low latency**: UDP protocol for responsive controls
 

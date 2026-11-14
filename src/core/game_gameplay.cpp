@@ -108,30 +108,52 @@ void Game::movePlayerBody(float dt, const glm::vec3& horizontalSpeed) {
 }
 
 void Game::horizontalSweep(glm::vec3& feet, glm::vec3& mn, glm::vec3& mx, float dx, float dz) {
-    // One axis at a time: X then Z. A blocked axis stops that component (so
-    // sliding along a wall keeps the other), and a blocked step also stops the
-    // body on this frame even if it would have fitted once further along.
-    if (dx != 0.0f) {
+    // One axis at a time: X then Z. A blocked axis either steps up onto a low
+    // ledge (stairs/kerbs) or stops that component (so sliding along a wall
+    // keeps the other). The step-up is what makes the authored staircases
+    // walkable without jumping on every stair.
+    auto tryMove = [&](int axis, float delta) -> bool {
+        if (delta == 0.0f) return true;
+
         glm::vec3 tmn = mn, tmx = mx;
-        tmn.x += dx; tmx.x += dx;
+        if (axis == 0) { tmn.x += delta; tmx.x += delta; }
+        else           { tmn.z += delta; tmx.z += delta; }
+
         glm::vec3 push;
         if (!currentMap->boxOverlapsBlock(tmn, tmx, push)) {
             mn = tmn; mx = tmx;
         } else {
-            playerVelocity.x = 0.0f;
+            // Try the same horizontal move lifted by one walkable step. A
+            // stair top must be no more than kGroundSnap above the feet, and
+            // the destination must still be clear after the lift.
+            const bool canStep = !isJumping && playerVelocity.y <= 0.0f &&
+                                 !bodyBlockedAt(feet) && isSupportedAt(feet);
+            if (!canStep) return false;
+
+            const float lift = kGroundSnap + 0.02f;
+            glm::vec3 lmn = mn, lmx = mx;
+            lmn.y += lift; lmx.y += lift;
+            if (axis == 0) { lmn.x += delta; lmx.x += delta; }
+            else           { lmn.z += delta; lmx.z += delta; }
+
+            if (currentMap->boxOverlapsBlock(lmn, lmx, push)) return false;
+
+            float support = 0.0f;
+            if (!currentMap->supportHeight(lmn, lmx, kGroundSnap + lift, support)) return false;
+            if (support <= mn.y + 0.02f) return false;          // not a step up
+            if (support > mn.y + lift + 0.02f) return false;    // too high
+
+            mn = lmn; mx = lmx;
+            mn.y = support;
+            mx.y = support + bodyHeight;
         }
-    }
-    if (dz != 0.0f) {
-        glm::vec3 tmn = mn, tmx = mx;
-        tmn.z += dz; tmx.z += dz;
-        glm::vec3 push;
-        if (!currentMap->boxOverlapsBlock(tmn, tmx, push)) {
-            mn = tmn; mx = tmx;
-        } else {
-            playerVelocity.z = 0.0f;
-        }
-    }
-    feet = glm::vec3((mn.x + mx.x) * 0.5f, mn.y, (mn.z + mx.z) * 0.5f);
+
+        feet = glm::vec3((mn.x + mx.x) * 0.5f, mn.y, (mn.z + mx.z) * 0.5f);
+        return true;
+    };
+
+    if (!tryMove(0, dx)) playerVelocity.x = 0.0f;
+    if (!tryMove(2, dz)) playerVelocity.z = 0.0f;
 }
 
 void Game::verticalSweep(glm::vec3& feet, glm::vec3& mn, glm::vec3& mx, float dy, bool falling) {
@@ -723,19 +745,26 @@ void Game::updateProjectiles(float deltaTime) {
                 prevGrenadePositions[i] = projectiles[i].position;
             }
             
-            // Simple boundary check (no bounce): treat edges/floor as walls
-            float boundary = 20.0f;
+            // World boundary: use the loaded map's real extent. The old fixed
+            // 20-unit box was inside the walls of the larger maps, so bullets
+            // and grenades vanished in mid-air. The +2 margin is only a
+            // fallback for maps without solid outer walls.
+            const glm::vec3 mapHalf = currentMap ? currentMap->getDimensions() * 0.5f
+                                                 : glm::vec3(20.0f);
+            const float boundX = mapHalf.x + 2.0f;
+            const float boundZ = mapHalf.z + 2.0f;
+            const float maxY = std::max(20.0f, mapHalf.y * 2.0f + 5.0f);
             bool hitBoundary =
-                projectiles[i].position.x > boundary || projectiles[i].position.x < -boundary ||
-                projectiles[i].position.z > boundary || projectiles[i].position.z < -boundary ||
-                projectiles[i].position.y <= -10.0f;
+                projectiles[i].position.x > boundX || projectiles[i].position.x < -boundX ||
+                projectiles[i].position.z > boundZ || projectiles[i].position.z < -boundZ ||
+                projectiles[i].position.y <= -10.0f || projectiles[i].position.y > maxY;
 
             if (hitBoundary) {
                 // Clamp so effects/holes spawn near the boundary, not far outside it.
                 glm::vec3 clamped = projectiles[i].position;
-                clamped.x = std::min(boundary, std::max(-boundary, clamped.x));
-                clamped.z = std::min(boundary, std::max(-boundary, clamped.z));
-                clamped.y = std::max(-9.8f, clamped.y);
+                clamped.x = std::min(boundX, std::max(-boundX, clamped.x));
+                clamped.z = std::min(boundZ, std::max(-boundZ, clamped.z));
+                clamped.y = std::max(-9.8f, std::min(maxY - 0.1f, clamped.y));
 
                 detonateAndDeactivate(clamped);
                 continue;
@@ -1104,15 +1133,21 @@ void Game::renderExplosions() {
 }
 
 bool Game::checkProjectileCollision(Projectile& projectile) {
-    // Simple boundary check - treat world edges as walls
-    float boundary = 50.0f;
+    // Use the map's real extent (plus a small margin) instead of a fixed box;
+    // on the larger maps a fixed boundary cut bullets short in open air.
+    const glm::vec3 mapHalf = currentMap ? currentMap->getDimensions() * 0.5f
+                                         : glm::vec3(50.0f);
+    const float boundX = mapHalf.x + 2.0f;
+    const float boundZ = mapHalf.z + 2.0f;
+    const float maxY = std::max(20.0f, mapHalf.y * 2.0f + 5.0f);
 
     // Only check boundaries if projectile has moved significantly from spawn
     float distanceFromPlayer = glm::length(projectile.position - camera.Position);
     if (distanceFromPlayer > 1.0f) { // Only check boundaries after moving 1 unit
-        if (abs(projectile.position.x) >= boundary ||
-            abs(projectile.position.z) >= boundary ||
-            projectile.position.y <= -10.0f) {
+        if (std::abs(projectile.position.x) >= boundX ||
+            std::abs(projectile.position.z) >= boundZ ||
+            projectile.position.y <= -10.0f ||
+            projectile.position.y >= maxY) {
             return true;
         }
     }
@@ -1823,6 +1858,12 @@ void Game::startRound() {
     
     // Reset players
     resetGame();
+
+    // Round-based multiplayer: tell the server so it revives the bots together
+    // with the human players at the start of the next round.
+    if (networkClient && networkClient->isConnected()) {
+        networkClient->sendRoundStart(static_cast<uint8_t>(currentGameMode));
+    }
 
     playUiSound("round_start");
     std::cout << "NEW ROUND STARTED! Attacking Team: " << (attackingTeam == 0 ? "Team A (Red)" : "Team B (Blue)") << std::endl;

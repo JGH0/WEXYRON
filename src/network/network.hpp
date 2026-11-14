@@ -58,7 +58,8 @@ enum PacketType : uint8_t {
     PACKET_MAP_CHANGE = 15,        // Client requesting map change
     PACKET_MAP_PLAYER_COUNT = 16,  // Server sending player counts per map
     PACKET_CONNECT_REJECT = 17,    // Server refusing a connection (reason follows)
-    PACKET_PLAYER_DAMAGE = 18      // Client reporting a hit on another player
+    PACKET_PLAYER_DAMAGE = 18,     // Client reporting a hit on another player
+    PACKET_ROUND_START = 19        // Round-based client starting the next round
 };
 
 /// Why a connection attempt was refused (PACKET_CONNECT_REJECT.reason).
@@ -140,6 +141,13 @@ struct PlayerDamagePacket {
     PacketHeader header;       ///< clientId = victim, sent by the shooter
     uint16_t damage;
     uint8_t  weaponId;         ///< projectile type that hit (0 bullet, 1 grenade, ...)
+};
+
+/// A round-based client started the next round. The server uses this to bring
+/// dead bots back at the same time as the human players.
+struct RoundStartPacket {
+    PacketHeader header;
+    uint8_t gameMode;          ///< 1 = teams, 2 = bomb defusal
 };
 
 // New player joined
@@ -257,6 +265,10 @@ public:
     // Send map change request to server
     void sendMapChange(const std::string& mapName);
 
+    /// Tell the server a new round started (round-based modes). Bots are
+    /// revived together with the human players.
+    void sendRoundStart(uint8_t gameMode);
+
     // Send a keepalive PING (update() does this on its own every second)
     void sendPing();
 
@@ -323,11 +335,13 @@ struct ServerPlayer {
     uint32_t lastInputSequence;
     float lastPingTime;
     float lastPacketTime = 0.0f; ///< seconds since the last packet (timeout)
+    float inputIdle = 999.0f;    ///< seconds since the last PlayerInput (menu)
     float shootCooldown;  // Shooting cooldown timer
     char mapName[32];     // Current map the player is on
     char machineId[MACHINE_ID_LENGTH] = {}; ///< stable id of the player's PC
     uint8_t team = 0;     ///< 0 = Team A, 1 = Team B (assigned on connect)
     uint8_t gameMode = 0; ///< last game mode the client reported
+    bool isBot = false;   ///< server-controlled player (no socket / timeout)
 };
 
 class NetworkServer {
@@ -366,12 +380,26 @@ public:
     // Change player's map
     void setPlayerMap(uint32_t playerId, const std::string& mapName);
 
+    /// Move a player (bot or human) to another map at `position` and send the
+    /// leave/join packets the clients on both maps need.
+    void movePlayerToMap(uint32_t playerId, const std::string& mapName,
+                         const glm::vec3& position);
+
+    /// Create a server-controlled player. Bots have no address, never time out
+    /// and are skipped by every broadcast. Returns the new id (0 on failure).
+    uint32_t addBot(const std::string& mapName, uint8_t team, const glm::vec3& position);
+    /// Remove a bot (broadcasts its leave).
+    void removeBot(uint32_t id);
+    bool isBot(uint32_t id) const;
+
     // Get connected players
     std::vector<ServerPlayer*> getPlayers();
     ServerPlayer* getPlayer(uint32_t id);
 
     // Get player count for a specific map
     int getPlayerCountOnMap(const std::string& mapName);
+    /// Connected humans (excludes server-controlled bots).
+    int getHumanPlayerCount() const;
 
     // Set server name for discovery
     void setServerName(const std::string& name) { serverName = name; }
@@ -395,12 +423,18 @@ public:
     std::function<void(uint32_t, const PlayerDamagePacket&)> onPlayerDamage;
     std::function<void(uint32_t)> onPlayerConnect;
     std::function<void(uint32_t)> onPlayerDisconnect;
+    /// A validated projectile spawn from a client (owner id, packet). The bot
+    /// host uses this to simulate flashbang detonations server-side.
+    std::function<void(uint32_t, const ProjectileSpawnPacket&)> onProjectileSpawned;
+    /// A client started the next round: map name and game mode.
+    std::function<void(const std::string&, int)> onRoundStarted;
     
 private:
     socket_t socketFd;
     sockaddr_in serverAddr;
     bool running;
     uint32_t nextClientId;
+    uint32_t nextBotId = 100000; ///< bots never collide with human ids
     std::map<uint32_t, ServerPlayer> players;
     std::string serverName;
     int maxPlayers;

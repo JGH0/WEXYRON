@@ -138,6 +138,37 @@ The server runs in terminal mode and supports:
 - **Ctrl+C**: Graceful shutdown
 - **Port Selection**: `./build/bin/server 7778` for different port
 
+## Server bots
+
+The dedicated server can fill a match with bots. They are configured in
+`server_config.json` (read by `./runServer.sh`):
+
+```json
+{
+  "bots": {
+    "count": 4,
+    "accuracy": 0.7
+  }
+}
+```
+
+- `count` – number of bots to spawn (`0` disables them). The server caps it at
+  8, because clients keep up to 16 remote bodies and real players need slots too.
+- `accuracy` – hit chance from `0.0` (almost never hits) to `1.0` (very
+  accurate). It also affects how much a bot misses grenade/flashbang throws.
+
+Bots are full server-controlled players: they walk and collide with the map,
+fight with pistols and shotguns, throw grenades and flashbangs, and respawn.
+They always follow the world and game mode of the players (bots are spread over
+the connected players, so two occupied maps both get bots). A flashbang blinds
+nearby bots; while blind they wander randomly and cannot aim or shoot. Bots
+fight in deathmatch, team vs team, and bomb defusal (they attack/hold bomb
+sites).
+
+Overrides, highest precedence first: command line (`./build/bin/server 7777
+name -1 6 0.8`), environment (`BOTS_COUNT`, `BOTS_ACCURACY`),
+`server_config.json`, built-in default (`0` bots).
+
 ## Multiple players on one PC
 
 Several game instances can run on the same PC and join the same server at the

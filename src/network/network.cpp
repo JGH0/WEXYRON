@@ -445,6 +445,20 @@ void NetworkClient::sendMapChange(const std::string& mapName) {
     std::cout << "Sent map change request: " << mapName << std::endl;
 }
 
+void NetworkClient::sendRoundStart(uint8_t gameMode) {
+    if (!connected) return;
+
+    RoundStartPacket packet{};
+    packet.header.magic = PACKET_MAGIC;
+    packet.header.type = PACKET_ROUND_START;
+    packet.header.sequence = sequence++;
+    packet.header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    packet.header.clientId = clientId;
+    packet.gameMode = gameMode;
+    sendPacket(&packet, sizeof(packet));
+}
+
 void NetworkClient::update() {
     if ((!connected && !connecting) || socketFd == SOCKET_INVALID) return;
 
@@ -717,7 +731,9 @@ void NetworkServer::update(float deltaTime) {
 void NetworkServer::removeTimedOutPlayers() {
     std::vector<uint32_t> timedOut;
     for (auto& pair : players) {
+        if (pair.second.isBot) continue;   // bots have no socket to time out
         pair.second.lastPacketTime += lastDeltaTime;
+        pair.second.inputIdle += lastDeltaTime;
         if (pair.second.lastPacketTime >= timeoutSeconds) {
             timedOut.push_back(pair.first);
         }
@@ -922,6 +938,7 @@ void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_
             if (players.find(id) != players.end()) {
                 ServerPlayer& player = players[id];
                 player.lastInputSequence = input->header.sequence;
+                player.inputIdle = 0.0f;
                 
                 // Notify game logic
                 if (onPlayerInput) {
@@ -973,6 +990,10 @@ void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_
             if (spawn->projectileType > 3) break;
             if (spawn->lifetime <= 0.0f || spawn->lifetime > 10.0f) break;
 
+            if (onProjectileSpawned) {
+                onProjectileSpawned(owner->id, *spawn);
+            }
+
             broadcastToMap(owner->mapName, spawn, sizeof(*spawn), owner->id);
             break;
         }
@@ -994,6 +1015,19 @@ void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_
 
         case PACKET_PONG: {
             // Update player ping/latency if needed
+            break;
+        }
+
+        case PACKET_ROUND_START: {
+            if (size < sizeof(RoundStartPacket)) return;
+            const RoundStartPacket* start = (const RoundStartPacket*)data;
+            ServerPlayer* player = findPlayerByAddress(from);
+            if (!player || !player->active) break;
+
+            player->gameMode = start->gameMode;
+            if (start->gameMode >= 1 && onRoundStarted) {
+                onRoundStarted(player->mapName, static_cast<int>(start->gameMode));
+            }
             break;
         }
 
@@ -1130,7 +1164,7 @@ void NetworkServer::sendPacket(const void* data, size_t size, const sockaddr_in&
 
 void NetworkServer::broadcastPacket(const void* data, size_t size, uint32_t excludeId) {
     for (auto& pair : players) {
-        if (pair.first != excludeId && pair.second.active) {
+        if (pair.first != excludeId && pair.second.active && !pair.second.isBot) {
             sendPacket(data, size, pair.second.address);
         }
     }
@@ -1164,7 +1198,7 @@ bool NetworkServer::sameMachine(const ServerPlayer& player, const sockaddr_in& a
 int NetworkServer::getPlayerCountForMachine(const sockaddr_in& addr, const char* machineId) const {
     int count = 0;
     for (const auto& pair : players) {
-        if (!pair.second.active) continue;
+        if (!pair.second.active || pair.second.isBot) continue;
         if (sameMachine(pair.second, addr, machineId)) ++count;
     }
     return count;
@@ -1172,7 +1206,7 @@ int NetworkServer::getPlayerCountForMachine(const sockaddr_in& addr, const char*
 
 void NetworkServer::broadcastToMap(const std::string& mapName, const void* data, size_t size, uint32_t excludeId) {
     for (auto& pair : players) {
-        if (pair.first != excludeId && pair.second.active) {
+        if (pair.first != excludeId && pair.second.active && !pair.second.isBot) {
             if (mapName == pair.second.mapName) {
                 sendPacket(data, size, pair.second.address);
             }
@@ -1275,6 +1309,113 @@ void NetworkServer::setPlayerMap(uint32_t playerId, const std::string& mapName) 
         strncpy(it->second.mapName, mapName.c_str(), sizeof(it->second.mapName) - 1);
         it->second.mapName[sizeof(it->second.mapName) - 1] = '\0';
     }
+}
+
+void NetworkServer::movePlayerToMap(uint32_t playerId, const std::string& mapName,
+                                    const glm::vec3& position) {
+    auto it = players.find(playerId);
+    if (it == players.end() || !it->second.active) return;
+
+    ServerPlayer& player = it->second;
+    const std::string oldMap(player.mapName);
+    player.position = position;
+    player.velocity = glm::vec3(0.0f);
+
+    if (oldMap == mapName) return;
+
+    strncpy(player.mapName, mapName.c_str(), sizeof(player.mapName) - 1);
+    player.mapName[sizeof(player.mapName) - 1] = '\0';
+
+    const uint32_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+
+    PlayerLeavePacket leave;
+    leave.header.magic = PACKET_MAGIC;
+    leave.header.type = PACKET_PLAYER_LEAVE;
+    leave.header.sequence = 0;
+    leave.header.timestamp = now;
+    leave.header.clientId = playerId;
+    leave.playerId = playerId;
+    broadcastToMap(oldMap, &leave, sizeof(leave), playerId);
+
+    PlayerJoinPacket join;
+    join.header.magic = PACKET_MAGIC;
+    join.header.type = PACKET_PLAYER_JOIN;
+    join.header.sequence = 0;
+    join.header.timestamp = now;
+    join.header.clientId = playerId;
+    join.playerId = playerId;
+    join.spawnX = position.x;
+    join.spawnY = position.y;
+    join.spawnZ = position.z;
+    join.team = player.team;
+    broadcastToMap(mapName, &join, sizeof(join), playerId);
+
+    broadcastMapPlayerCounts();
+}
+
+uint32_t NetworkServer::addBot(const std::string& mapName, uint8_t team,
+                               const glm::vec3& position) {
+    uint32_t id = nextBotId++;
+    while (players.find(id) != players.end()) id = nextBotId++;
+
+    ServerPlayer& player = players[id];
+    player = ServerPlayer{};
+    player.id = id;
+    memset(&player.address, 0, sizeof(player.address));
+    player.position = position;
+    player.velocity = glm::vec3(0.0f);
+    player.yaw = 0.0f;
+    player.pitch = 0.0f;
+    player.health = 100.0f;
+    player.isDead = false;
+    player.active = true;
+    player.lastInputSequence = 0;
+    player.lastPingTime = 0.0f;
+    player.lastPacketTime = 0.0f;
+    player.shootCooldown = 0.0f;
+    player.team = team;
+    player.gameMode = 0;
+    player.isBot = true;
+    std::strncpy(player.mapName, mapName.c_str(), sizeof(player.mapName) - 1);
+    player.mapName[sizeof(player.mapName) - 1] = '\0';
+
+    PlayerJoinPacket join;
+    join.header.magic = PACKET_MAGIC;
+    join.header.type = PACKET_PLAYER_JOIN;
+    join.header.sequence = 0;
+    join.header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    join.header.clientId = id;
+    join.playerId = id;
+    join.spawnX = position.x;
+    join.spawnY = position.y;
+    join.spawnZ = position.z;
+    join.team = team;
+    broadcastToMap(mapName, &join, sizeof(join), id);
+    broadcastMapPlayerCounts();
+
+    std::cout << "[Server] Bot " << id << " spawned on " << mapName << std::endl;
+    return id;
+}
+
+void NetworkServer::removeBot(uint32_t id) {
+    auto it = players.find(id);
+    if (it == players.end() || !it->second.isBot) return;
+    removePlayer(id);
+}
+
+bool NetworkServer::isBot(uint32_t id) const {
+    auto it = players.find(id);
+    return it != players.end() && it->second.isBot;
+}
+
+int NetworkServer::getHumanPlayerCount() const {
+    int count = 0;
+    for (const auto& pair : players) {
+        if (pair.second.active && !pair.second.isBot) ++count;
+    }
+    return count;
 }
 
 int NetworkServer::getPlayerCountOnMap(const std::string& mapName) {

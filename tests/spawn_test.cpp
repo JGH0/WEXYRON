@@ -97,6 +97,52 @@ int main() {
         CHECK(std::abs(vel.y) < 0.5f);
     }
 
+    // Walk (no jumping) up the staircases on the remade maps.
+    auto climbStairs = [&](const char* map, const glm::vec3& start, float yaw,
+                           float minRise, int frames) {
+        if (!game.debugStartMapForTest(map)) { ++failures; return; }
+        game.debugSetFeetForTest(start);
+        game.debugSetYawForTest(yaw);
+        game.debugStepForTest(2, kDt);
+        glm::vec3 feet, vel;
+        bool onGround = false;
+        game.debugPlayerState(feet, vel, onGround);
+        const float bottomY = feet.y;
+        game.debugStepWithInputForTest(frames, kDt, 1.0f, 0.0f);
+        game.debugPlayerState(feet, vel, onGround);
+        std::printf("%-16s stairs: y %.2f -> %.2f at z=%.2f stuck=%d\n",
+                    map, bottomY, feet.y, feet.z, game.debugPlayerStuck());
+        CHECK(feet.y > bottomY + minRise);
+        CHECK(!game.debugPlayerStuck());
+    };
+
+    climbStairs("simple.map", glm::vec3(0.0f, 0.0f, 8.0f), 270.0f, 0.8f, 80);
+    climbStairs("complex.map", glm::vec3(0.0f, 0.0f, 9.0f), 270.0f, 0.8f, 100);
+    climbStairs("custom.map", glm::vec3(0.0f, 0.0f, 14.2f), 270.0f, 1.8f, 180);
+    climbStairs("sniper.map", glm::vec3(0.0f, 0.0f, 12.2f), 270.0f, 1.0f, 100);
+
+    // ── Projectile world bounds ──────────────────────────────────────────────
+    // A bullet fired across a large map must not disappear at the old fixed
+    // 20-unit boundary; it has to reach the actual wall/edge of the map.
+    if (game.debugStartMapForTest("sniper.map")) {
+        game.debugSetFeetForTest(glm::vec3(-38.0f, 0.0f, 0.0f));
+        game.debugStepForTest(2, kDt);
+        game.createProjectile(glm::vec3(-38.0f, 1.6f, 0.0f),
+                              glm::vec3(120.0f, 0.0f, 0.0f), 3.0f, 0, 0);
+        game.debugStepForTest(12, kDt);   // 0.2 s => x about -14
+        glm::vec3 projectilePos(0.0f, 0.0f, 0.0f);
+        int projectileType = -1;
+        const bool alive = game.debugFirstProjectileForTest(projectilePos, projectileType);
+        std::printf("sniper bullet: alive=%d x=%.2f\n", alive, projectilePos.x);
+        CHECK(alive);
+        CHECK(projectilePos.x > -20.0f);
+
+        game.debugStepForTest(90, kDt);   // let it hit the far wall
+        CHECK(game.getActiveProjectiles() == 0);
+    } else {
+        ++failures;
+    }
+
     // Text checks for the reporter: none of these lines may appear.
     std::printf(failures ? "SPAWN TEST: %d FAILURES\n" : "SPAWN TEST: ALL OK\n", failures);
     std::printf("(UNSTUCK lines before this one: see above; there must be none)\n");

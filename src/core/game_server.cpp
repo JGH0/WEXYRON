@@ -175,14 +175,14 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
     };
 
     networkClient->onMapPlayerCount = [this](const MapPlayerCountPacket& packet) {
-        // Update map player counts
-        const char* mapFiles[] = {"simple.map", "large.map", "arena.map", "sniper.map", "complex.map", "team_arena.map"};
-        for (int i = 0; i < 6; i++) {
+        // Update map player counts. Use the dynamic map list so newly added
+        // maps (and custom.map) are shown too, not just a fixed six-map set.
+        for (size_t i = 0; i < mapPlayerCounts.size(); ++i) {
             mapPlayerCounts[i] = 0;
         }
-        for (int i = 0; i < packet.mapCount && i < 8; i++) {
-            std::string mapName(packet.maps[i].mapName);
-            for (int j = 0; j < 6; j++) {
+        for (int i = 0; i < packet.mapCount && i < 8; ++i) {
+            const std::string mapName(packet.maps[i].mapName);
+            for (size_t j = 0; j < mapFiles.size(); ++j) {
                 if (mapName == mapFiles[j]) {
                     mapPlayerCounts[j] = packet.maps[i].playerCount;
                     break;
@@ -250,7 +250,7 @@ void Game::disconnectFromServer() {
     }
 
     // Clear map population UI counts after disconnect
-    for (int i = 0; i < 6; i++) {
+    for (size_t i = 0; i < mapPlayerCounts.size(); ++i) {
         mapPlayerCounts[i] = 0;
     }
 }

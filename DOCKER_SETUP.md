@@ -69,6 +69,8 @@ The server can be configured using environment variables:
 | `ALLOW_MAP_CHANGE` | Allow players to change maps | true |
 | `FRIENDLY_FIRE` | Enable friendly fire | false |
 | `RESPAWN_TIME` | Respawn time in seconds | 5.0 |
+| `BOTS_COUNT` | Number of server-controlled bots (0 disables) | from `bots.count` |
+| `BOTS_ACCURACY` | Bot hit chance, `0`..`1` | from `bots.accuracy` |
 | `TICK_RATE` | Server tick rate | 60 |
 | `TIMEOUT` | Connection timeout in seconds | 30.0 |
 | `MAX_PING` | Maximum allowed ping in ms | 500 |

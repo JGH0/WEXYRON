@@ -1,0 +1,504 @@
+/**
+ * @file server_bots.cpp
+ * @brief Dedicated-server host for the portable bot AI (see server_bots.hpp)
+ */
+
+#include "server_bots.hpp"
+
+#include <algorithm>
+#include <cstddef>
+#include <fstream>
+#include <iostream>
+
+namespace {
+constexpr float kBotTick = 1.0f / 60.0f;
+constexpr float kProjectileGravity = 15.0f;
+constexpr float kGrenadeRadius = 4.0f;
+constexpr float kGrenadeDamage = 65.0f;
+
+float clampf(float value, float lo, float hi) {
+    return value < lo ? lo : (value > hi ? hi : value);
+}
+} // namespace
+
+struct ServerBotManager::Runtime {
+    uint32_t id = 0;
+    int slot = 0;
+    uint8_t team = 0;
+    std::string mapName;
+    int gameMode = 0;
+    std::unique_ptr<bots::Bot> ai;
+};
+
+ServerBotManager::ServerBotManager() = default;
+ServerBotManager::~ServerBotManager() = default;
+
+bool ServerBotManager::init(NetworkServer& server, const Config& config) {
+    config_ = config;
+    server_ = &server;
+    config_.count = std::max(0, std::min(config_.count, kMaxBots));
+    config_.accuracy = clampf(config_.accuracy, 0.0f, 1.0f);
+
+    if (config_.count <= 0) {
+        std::cout << "[Bots] Disabled (bots.count = 0)" << std::endl;
+        return true;
+    }
+
+    maps_.clear();
+    bots_.clear();
+    projectiles_.clear();
+    accumulator_ = 0.0f;
+
+    const bots::BotMap* map = getMap(config_.defaultMap);
+
+    // Balance the initial teams using the players already connected.
+    int teamCounts[2] = {0, 0};
+    for (const ServerPlayer* player : server.getPlayers()) {
+        if (player->active && !player->isBot) teamCounts[player->team & 1]++;
+    }
+
+    for (int i = 0; i < config_.count; ++i) {
+        const uint8_t team = static_cast<uint8_t>(teamCounts[0] <= teamCounts[1] ? 0 : 1);
+        teamCounts[team]++;
+
+        const bots::SpawnResult spawn = map->findSpawn(false, team, rng_);
+        const uint32_t id = server.addBot(config_.defaultMap, team, spawn.position);
+        if (id == 0) continue;
+
+        auto runtime = std::make_unique<Runtime>();
+        runtime->id = id;
+        runtime->slot = i;
+        runtime->team = team;
+        runtime->mapName = config_.defaultMap;
+        runtime->gameMode = 0;
+
+        // A little per-bot variation around the configured accuracy, so a
+        // group of bots is not a firing squad of identical aim.
+        std::uniform_real_distribution<float> jitter(-0.07f, 0.07f);
+        const float accuracy = clampf(config_.accuracy + jitter(rng_), 0.0f, 1.0f);
+        runtime->ai = std::make_unique<bots::Bot>(
+            id, team, accuracy, static_cast<uint32_t>(0x9E3779B9u * (i + 1) + 0x85EBCA6Bu));
+        runtime->ai->setGameMode(0);
+        runtime->ai->teleport(spawn.position, spawn.yaw, 0.0f, *map);
+
+        bots_.push_back(std::move(runtime));
+    }
+
+    std::cout << "[Bots] " << bots_.size() << " bot(s) active, accuracy "
+              << config_.accuracy << ", world " << config_.defaultMap << std::endl;
+    return true;
+}
+
+std::string ServerBotManager::resolveMapPath(const std::string& mapName) const {
+    std::vector<std::string> candidates;
+    if (!config_.mapDirectory.empty()) candidates.push_back(config_.mapDirectory + "/" + mapName);
+    candidates.push_back("assets/maps/" + mapName);
+    candidates.push_back(mapName);
+    for (const std::string& path : candidates) {
+        std::ifstream test(path);
+        if (test.good()) return path;
+    }
+    return std::string();
+}
+
+const bots::BotMap* ServerBotManager::getMap(const std::string& mapName) {
+    const std::string key = mapName.empty() ? config_.defaultMap : mapName;
+    auto found = maps_.find(key);
+    if (found != maps_.end()) return found->second.get();
+
+    auto map = std::make_unique<bots::BotMap>();
+    const std::string path = resolveMapPath(key);
+    if (path.empty() || !map->load(path)) {
+        std::cerr << "[Bots] Could not load map '" << key
+                  << "' - using a fallback floor" << std::endl;
+        *map = bots::BotMap::fallback(key);
+    }
+    const bots::BotMap* result = map.get();
+    maps_[key] = std::move(map);
+    return result;
+}
+
+void ServerBotManager::update(float deltaTime, NetworkServer& server) {
+    if (bots_.empty()) return;
+
+    // The main server loop can spin much faster than the game tick. Run the AI
+    // at a fixed rate so packets and CPU stay bounded.
+    accumulator_ += clampf(deltaTime, 0.0f, 0.25f);
+    int guard = 0;
+    while (accumulator_ >= kBotTick && guard++ < 8) {
+        tick(kBotTick, server);
+        accumulator_ -= kBotTick;
+    }
+    if (accumulator_ > 0.5f) accumulator_ = 0.0f;
+}
+
+void ServerBotManager::tick(float deltaTime, NetworkServer& server) {
+    // No human on the server: bots must not move, aim, shoot, throw or fight
+    // each other. They settle onto the floor and wait for a player to connect.
+    if (server.getHumanPlayerCount() == 0) {
+        if (!idle_) {
+            idle_ = true;
+            projectiles_.clear();
+            std::cout << "[Bots] Idle - no players connected" << std::endl;
+        }
+        for (std::unique_ptr<Runtime>& runtimePtr : bots_) {
+            Runtime& runtime = *runtimePtr;
+            ServerPlayer* player = server.getPlayer(runtime.id);
+            if (!player || player->isDead) continue;
+            const bots::BotMap* map = getMap(runtime.mapName);
+            runtime.ai->idle(deltaTime, map);
+            player->position = runtime.ai->position();
+            player->velocity = runtime.ai->velocity();
+            player->yaw = runtime.ai->yaw();
+            player->pitch = runtime.ai->pitch();
+        }
+        return;
+    }
+
+    if (idle_) {
+        idle_ = false;
+        std::cout << "[Bots] Active - player(s) connected" << std::endl;
+    }
+
+    std::vector<ServerPlayer*> humans;
+    for (ServerPlayer* player : server.getPlayers()) {
+        // Only players who are actually sending game input choose the bot
+        // world; a client sitting on a menu must not drag bots to its map.
+        if (player->active && !player->isBot && player->inputIdle <= 1.5f) {
+            humans.push_back(player);
+        }
+    }
+
+    // Detect the start of a new round. Round-based human clients resurrect
+    // themselves (resetGame + alive input) when the next round begins; bots
+    // have no client, so mirror that transition here. Without this, a dead bot
+    // would stay dead forever after the first round.
+    std::vector<std::pair<std::string, int>> startedRounds;
+    std::map<uint32_t, bool> nextDeadState;
+    for (ServerPlayer* human : humans) {
+        auto previous = humanWasDead_.find(human->id);
+        const bool wasDead = previous != humanWasDead_.end() && previous->second;
+        if (wasDead && !human->isDead && human->gameMode >= 1) {
+            startedRounds.push_back({human->mapName, static_cast<int>(human->gameMode)});
+        }
+        nextDeadState[human->id] = human->isDead;
+    }
+    humanWasDead_.swap(nextDeadState);
+    for (const auto& round : startedRounds) {
+        reviveBotsForNewRound(server, round.first, round.second);
+    }
+
+    for (std::unique_ptr<Runtime>& runtimePtr : bots_) {
+        Runtime& runtime = *runtimePtr;
+        ServerPlayer* player = server.getPlayer(runtime.id);
+        if (!player) continue;
+
+        // Follow the player world/game mode. Bots are spread over the human
+        // list, so if players are on two maps both maps get bots.
+        ServerPlayer* follow = nullptr;
+        if (!humans.empty()) {
+            follow = humans[static_cast<size_t>(runtime.slot) % humans.size()];
+        }
+
+        const std::string targetMap = follow
+            ? (follow->mapName[0] ? std::string(follow->mapName) : config_.defaultMap)
+            : runtime.mapName;
+        const int targetMode = follow
+            ? std::max(0, std::min(2, static_cast<int>(follow->gameMode)))
+            : runtime.gameMode;
+
+        if (targetMap != runtime.mapName) {
+            switchBotWorld(server, runtime, targetMap, targetMode);
+            player = server.getPlayer(runtime.id);
+            if (!player) continue;
+        }
+
+        runtime.gameMode = targetMode;
+        player->gameMode = static_cast<uint8_t>(targetMode);
+        runtime.ai->setGameMode(targetMode);
+
+        // Dead bots stay dead in round-based modes (like human players in
+        // spectator); they are revived only when a new round starts. In
+        // deathmatch they respawn after the normal short delay.
+        if (player->isDead) {
+            if (runtime.ai->alive()) {
+                runtime.ai->markDead(respawnDelayForMode(targetMode));
+            }
+
+            if (targetMode < 1) {
+                static const bots::World kEmptyWorld;
+                std::vector<bots::Action> noActions;
+                runtime.ai->update(deltaTime, kEmptyWorld, noActions);
+                if (runtime.ai->respawnTimer() <= 0.0f) {
+                    respawnBot(server, runtime);
+                    continue;
+                }
+            }
+
+            server.broadcastPlayerStateToMap(
+                runtime.id, runtime.mapName, player->position, player->velocity,
+                player->yaw, player->pitch, player->health, player->isDead, false);
+            continue;
+        }
+
+        // The server may have revived the record from outside (map switch).
+        const bots::BotMap* map = getMap(runtime.mapName);
+        if (!runtime.ai->alive()) {
+            runtime.ai->respawn(player->position, player->yaw, *map);
+        }
+
+        bots::World world;
+        world.map = map;
+        world.gameMode = targetMode;
+        world.friendlyFire = config_.friendlyFire;
+        for (ServerPlayer* other : server.getPlayers()) {
+            if (!other->active || other->isDead || other->id == player->id) continue;
+            if (std::string(other->mapName) != runtime.mapName) continue;
+            // Do not shoot players who are still in a menu / not sending game
+            // input yet (the server otherwise sees stale spawn positions).
+            if (!other->isBot && other->inputIdle > 1.5f) continue;
+            world.targets.push_back({other->id, other->position,
+                                     other->team, true, other->isBot});
+        }
+
+        std::vector<bots::Action> actions;
+        runtime.ai->update(deltaTime, world, actions);
+        applyActions(server, runtime, actions);
+
+        if (player->health <= 0.0f && !player->isDead) {
+            player->health = 0.0f;
+            player->isDead = true;
+            runtime.ai->markDead(respawnDelayForMode(targetMode));
+            std::cout << "[Server] Bot " << runtime.id << " died" << std::endl;
+        }
+
+        // The AI owns the body; copy it into the authoritative record.
+        player->position = runtime.ai->position();
+        player->velocity = runtime.ai->velocity();
+        player->yaw = runtime.ai->yaw();
+        player->pitch = runtime.ai->pitch();
+
+        server.broadcastPlayerStateToMap(
+            runtime.id, runtime.mapName, player->position, player->velocity,
+            player->yaw, player->pitch, player->health, player->isDead, false);
+    }
+
+    updateProjectiles(deltaTime, server);
+}
+
+void ServerBotManager::switchBotWorld(NetworkServer& server, Runtime& runtime,
+                                      const std::string& mapName, int gameMode) {
+    ServerPlayer* player = server.getPlayer(runtime.id);
+    if (!player) return;
+
+    const bots::BotMap* map = getMap(mapName);
+    const bots::SpawnResult spawn = map->findSpawn(gameMode >= 1, player->team, rng_);
+
+    server.movePlayerToMap(runtime.id, mapName, spawn.position);
+    player = server.getPlayer(runtime.id);
+    if (!player) return;
+
+    player->position = spawn.position;
+    player->velocity = glm::vec3(0.0f);
+    player->yaw = spawn.yaw;
+    player->pitch = 0.0f;
+    player->health = 100.0f;
+    player->isDead = false;
+    player->gameMode = static_cast<uint8_t>(gameMode);
+
+    runtime.mapName = mapName;
+    runtime.gameMode = gameMode;
+    runtime.ai->respawn(spawn.position, spawn.yaw, *map);
+
+    std::cout << "[Server] Bot " << runtime.id << " follows world " << mapName
+              << " (mode " << gameMode << ")" << std::endl;
+    server.broadcastPlayerStateToMap(
+        runtime.id, runtime.mapName, player->position, player->velocity,
+        player->yaw, player->pitch, player->health, player->isDead, true);
+}
+
+void ServerBotManager::respawnBot(NetworkServer& server, Runtime& runtime) {
+    ServerPlayer* player = server.getPlayer(runtime.id);
+    if (!player) return;
+
+    const bots::BotMap* map = getMap(runtime.mapName);
+    const bots::SpawnResult spawn = map->findSpawn(runtime.gameMode >= 1, player->team, rng_);
+
+    player->position = spawn.position;
+    player->velocity = glm::vec3(0.0f);
+    player->yaw = spawn.yaw;
+    player->pitch = 0.0f;
+    player->health = 100.0f;
+    player->isDead = false;
+    runtime.ai->respawn(spawn.position, spawn.yaw, *map);
+
+    std::cout << "[Server] Bot " << runtime.id << " respawned" << std::endl;
+    server.broadcastPlayerStateToMap(
+        runtime.id, runtime.mapName, player->position, player->velocity,
+        player->yaw, player->pitch, player->health, player->isDead, true);
+}
+
+void ServerBotManager::reviveBotsForNewRound(NetworkServer& server, const std::string& mapName,
+                                             int gameMode) {
+    const bots::BotMap* map = getMap(mapName);
+    for (std::unique_ptr<Runtime>& runtimePtr : bots_) {
+        Runtime& runtime = *runtimePtr;
+        if (runtime.mapName != mapName) continue;
+
+        ServerPlayer* player = server.getPlayer(runtime.id);
+        if (!player) continue;
+        if (!player->isDead && runtime.ai->alive()) continue;
+
+        const bots::SpawnResult spawn =
+            map->findSpawn(gameMode >= 1, player->team, rng_);
+
+        runtime.gameMode = gameMode;
+        runtime.ai->setGameMode(gameMode);
+        runtime.ai->respawn(spawn.position, spawn.yaw, *map);
+
+        player->position = spawn.position;
+        player->velocity = glm::vec3(0.0f);
+        player->yaw = spawn.yaw;
+        player->pitch = 0.0f;
+        player->health = 100.0f;
+        player->isDead = false;
+        player->gameMode = static_cast<uint8_t>(gameMode);
+
+        std::cout << "[Server] Bot " << runtime.id
+                  << " revived for a new round" << std::endl;
+        server.broadcastPlayerStateToMap(
+            runtime.id, runtime.mapName, player->position, player->velocity,
+            player->yaw, player->pitch, player->health, player->isDead, true);
+    }
+}
+
+void ServerBotManager::startRound(const std::string& mapName, int gameMode) {
+    if (!server_ || bots_.empty() || gameMode < 1) return;
+    reviveBotsForNewRound(*server_, mapName, gameMode);
+}
+
+void ServerBotManager::applyActions(NetworkServer& server, Runtime& runtime,
+                                    const std::vector<bots::Action>& actions) {
+    for (const bots::Action& action : actions) {
+        switch (action.type) {
+            case bots::Action::FireBullet:
+                server.broadcastProjectileSpawnToMap(
+                    runtime.mapName, action.origin, action.velocity, action.lifetime,
+                    action.projectileType, runtime.id);
+                break;
+
+            case bots::Action::ThrowGrenade:
+            case bots::Action::ThrowFlashbang: {
+                server.broadcastProjectileSpawnToMap(
+                    runtime.mapName, action.origin, action.velocity, action.lifetime,
+                    action.projectileType, runtime.id);
+
+                ServerProjectile projectile;
+                projectile.ownerId = runtime.id;
+                projectile.mapName = runtime.mapName;
+                projectile.position = action.origin;
+                projectile.velocity = action.velocity;
+                projectile.lifetime = action.lifetime;
+                projectile.type = action.projectileType;
+                projectiles_.push_back(projectile);
+                break;
+            }
+        }
+
+        if (action.victimId != 0 && action.damage > 0 && onDamage) {
+            onDamage(runtime.id, action.victimId, action.damage, action.weaponId);
+        }
+    }
+}
+
+void ServerBotManager::onProjectileSpawned(uint32_t ownerId,
+                                           const ProjectileSpawnPacket& packet) {
+    // Bot projectiles are already simulated (they are created locally by
+    // applyActions). Only a human flashbang needs a server-side copy so bots
+    // can be blinded. Grenade damage against bots is reported by the human
+    // shooter through PACKET_PLAYER_DAMAGE.
+    if (packet.projectileType != 2 || !server_) return;
+
+    ServerPlayer* owner = server_->getPlayer(ownerId);
+    if (!owner || owner->isBot) return;
+
+    ServerProjectile projectile;
+    projectile.ownerId = ownerId;
+    projectile.mapName = owner->mapName;
+    projectile.position = glm::vec3(packet.posX, packet.posY, packet.posZ);
+    projectile.velocity = glm::vec3(packet.velX, packet.velY, packet.velZ);
+    projectile.lifetime = packet.lifetime;
+    projectile.type = packet.projectileType;
+    projectiles_.push_back(projectile);
+}
+
+void ServerBotManager::updateProjectiles(float deltaTime, NetworkServer& server) {
+    for (size_t i = 0; i < projectiles_.size();) {
+        ServerProjectile& projectile = projectiles_[i];
+        const bots::BotMap* map = getMap(projectile.mapName);
+
+        const glm::vec3 previous = projectile.position;
+        projectile.velocity.y -= kProjectileGravity * deltaTime;
+        projectile.position += projectile.velocity * deltaTime;
+        projectile.lifetime -= deltaTime;
+
+        bool detonateNow = projectile.lifetime <= 0.0f;
+        if (!detonateNow && map) {
+            if (map->lineBlocked(previous, projectile.position)) detonateNow = true;
+            const glm::vec3 half = map->dimensions * 0.5f + glm::vec3(2.0f);
+            if (std::abs(projectile.position.x) > half.x ||
+                std::abs(projectile.position.z) > half.z ||
+                projectile.position.y < -10.0f) {
+                detonateNow = true;
+            }
+        }
+
+        if (detonateNow) {
+            detonate(projectile, server);
+            projectiles_.erase(projectiles_.begin() + static_cast<std::ptrdiff_t>(i));
+        } else {
+            ++i;
+        }
+    }
+}
+
+void ServerBotManager::detonate(const ServerProjectile& projectile, NetworkServer& server) {
+    if (projectile.type == 2) {
+        // Blind every bot on this map that can see the flash.
+        int blinded = 0;
+        for (std::unique_ptr<Runtime>& runtime : bots_) {
+            if (runtime->mapName != projectile.mapName) continue;
+            if (!runtime->ai->alive()) continue;
+            const bots::BotMap* map = getMap(runtime->mapName);
+            runtime->ai->applyFlash(projectile.position, *map);
+            if (runtime->ai->blinded()) ++blinded;
+        }
+        if (blinded > 0) {
+            std::cout << "[Bots] Flashbang blinded " << blinded << " bot(s)" << std::endl;
+        }
+        return;
+    }
+
+    if (projectile.type != 1) return;
+
+    ServerPlayer* owner = server.getPlayer(projectile.ownerId);
+    if (!owner || !owner->isBot) return; // human grenades are resolved client-side
+
+    const int gameMode = owner->gameMode;
+    for (ServerPlayer* victim : server.getPlayers()) {
+        if (!victim->active || victim->isDead || victim->id == owner->id) continue;
+        if (std::string(victim->mapName) != projectile.mapName) continue;
+        if (gameMode >= 1 && !config_.friendlyFire && victim->team == owner->team) continue;
+
+        const float distance = bots::distanceToBody(projectile.position, victim->position);
+        if (distance >= kGrenadeRadius) continue;
+
+        const float falloff = 1.0f - distance / kGrenadeRadius;
+        const uint16_t damage = static_cast<uint16_t>(std::max(1.0f, kGrenadeDamage * falloff));
+        if (onDamage) onDamage(owner->id, victim->id, damage, 1);
+    }
+}
+
+float ServerBotManager::respawnDelayForMode(int gameMode) {
+    return gameMode >= 1 ? 5.0f : 2.5f;
+}

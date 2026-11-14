@@ -58,26 +58,30 @@ SERVER_TARGET = $(BIN_DIR)/server
 CORE_SOURCES = $(CORE_DIR)/game.cpp $(CORE_DIR)/game_input.cpp $(CORE_DIR)/game_loop.cpp $(CORE_DIR)/game_gameplay.cpp $(CORE_DIR)/game_hud.cpp $(CORE_DIR)/game_menus.cpp $(CORE_DIR)/game_server.cpp $(CORE_DIR)/game_server_menu.cpp $(CORE_DIR)/game_audio.cpp $(CORE_DIR)/game_editor.cpp $(CORE_DIR)/settings.cpp $(CORE_DIR)/renderer.cpp $(CORE_DIR)/camera.cpp $(CORE_DIR)/map.cpp $(CORE_DIR)/map_loader.cpp $(CORE_DIR)/shader.cpp $(CORE_DIR)/texture.cpp
 SYSTEMS_SOURCES = $(SYSTEMS_DIR)/input.cpp $(SYSTEMS_DIR)/weapon.cpp $(SYSTEMS_DIR)/physics.cpp $(SYSTEMS_DIR)/enemy.cpp $(SYSTEMS_DIR)/projectile.cpp $(SYSTEMS_DIR)/player.cpp $(SYSTEMS_DIR)/game_state.cpp
 NETWORK_SOURCES = $(NETWORK_DIR)/network.cpp $(NETWORK_DIR)/server_config.cpp
+GAME_BOT_SOURCES = $(GAME_DIR)/bot.cpp
+SERVER_BOT_SOURCES = $(NETWORK_DIR)/server_bots.cpp
 UI_SOURCES = $(UI_DIR)/menu_core.cpp $(UI_DIR)/menu_draw.cpp $(UI_DIR)/menu_input.cpp $(UI_DIR)/menu_pages.cpp
 ENGINE_SOURCES = $(ENGINE_DIR)/audio_manager.cpp
 MINIAUDIO_SOURCES = third_party/miniaudio/miniaudio.c
 MAIN_SOURCES = $(SRC_DIR)/main.cpp
-SERVER_SOURCES = server_main.cpp $(NETWORK_SOURCES)
+SERVER_SOURCES = server_main.cpp $(NETWORK_SOURCES) $(GAME_BOT_SOURCES) $(SERVER_BOT_SOURCES)
 GLAD_SOURCES = glad.c
-ALL_SOURCES = $(CORE_SOURCES) $(SYSTEMS_SOURCES) $(NETWORK_SOURCES) $(UI_SOURCES) $(ENGINE_SOURCES) $(MINIAUDIO_SOURCES) $(MAIN_SOURCES) $(GLAD_SOURCES)
+ALL_SOURCES = $(CORE_SOURCES) $(SYSTEMS_SOURCES) $(NETWORK_SOURCES) $(GAME_BOT_SOURCES) $(UI_SOURCES) $(ENGINE_SOURCES) $(MINIAUDIO_SOURCES) $(MAIN_SOURCES) $(GLAD_SOURCES)
 
 # Object files
 CORE_OBJECTS = $(addprefix $(BUILD_DIR)/core/, $(notdir $(CORE_SOURCES:.cpp=.o)))
 SYSTEMS_OBJECTS = $(addprefix $(BUILD_DIR)/systems/, $(notdir $(SYSTEMS_SOURCES:.cpp=.o)))
 NETWORK_OBJECTS = $(addprefix $(BUILD_DIR)/network/, $(notdir $(NETWORK_SOURCES:.cpp=.o)))
+GAME_BOT_OBJECTS = $(addprefix $(BUILD_DIR)/game/, $(notdir $(GAME_BOT_SOURCES:.cpp=.o)))
+SERVER_BOT_OBJECTS = $(addprefix $(BUILD_DIR)/network/, $(notdir $(SERVER_BOT_SOURCES:.cpp=.o)))
 UI_OBJECTS = $(addprefix $(BUILD_DIR)/ui/, $(notdir $(UI_SOURCES:.cpp=.o)))
 ENGINE_OBJECTS = $(addprefix $(BUILD_DIR)/engine/, $(notdir $(ENGINE_SOURCES:.cpp=.o)))
 MAIN_OBJECT = $(BUILD_DIR)/main.o
 SERVER_MAIN_OBJECT = $(BUILD_DIR)/server_main.o
 GLAD_OBJECT = $(BUILD_DIR)/glad.o
 MINIAUDIO_OBJECT = $(BUILD_DIR)/third_party/miniaudio.o
-ALL_OBJECTS = $(CORE_OBJECTS) $(SYSTEMS_OBJECTS) $(NETWORK_OBJECTS) $(UI_OBJECTS) $(ENGINE_OBJECTS) $(MAIN_OBJECT) $(GLAD_OBJECT) $(MINIAUDIO_OBJECT)
-SERVER_OBJECTS = $(SERVER_MAIN_OBJECT) $(NETWORK_OBJECTS)
+ALL_OBJECTS = $(CORE_OBJECTS) $(SYSTEMS_OBJECTS) $(NETWORK_OBJECTS) $(GAME_BOT_OBJECTS) $(UI_OBJECTS) $(ENGINE_OBJECTS) $(MAIN_OBJECT) $(GLAD_OBJECT) $(MINIAUDIO_OBJECT)
+SERVER_OBJECTS = $(SERVER_MAIN_OBJECT) $(NETWORK_OBJECTS) $(GAME_BOT_OBJECTS) $(SERVER_BOT_OBJECTS)
 
 all: $(TARGET) $(SERVER_TARGET)
 
@@ -209,6 +213,7 @@ help:
 # Header dependency files produced by -MMD (included after the first target so
 # they never become the default goal).
 -include $(ALL_OBJECTS:.o=.d)
+-include $(SERVER_OBJECTS:.o=.d)
 
 .DELETE_ON_ERROR:
 

@@ -236,6 +236,8 @@ public:
     /// Teleport for physics tests: place the feet and set the vertical speed.
     void debugSetFeetForTest(const glm::vec3& feet) { playerPos = feet; }
     void debugSetVerticalVelocityForTest(float vy) { playerVelocity.y = vy; }
+    /// Face the camera in a known direction for movement tests (yaw in degrees).
+    void debugSetYawForTest(float yaw) { camera.Yaw = yaw; camera.updateCameraVectors(); }
     /// True when the player stands on a floor right now (feet on a surface).
     bool debugStandingOnFloorForTest() const { return isOnGround(); }
     /// Keys held during debugStepWithKeysForTest (empty = real keyboard).
@@ -247,6 +249,17 @@ public:
         return getRemotePlayerFeet(id, feet);
     }
 
+
+    /// First active projectile position (map/projectile boundary regression test).
+    bool debugFirstProjectileForTest(glm::vec3& position, int& type) const {
+        for (int i = 0; i < MAX_PROJECTILES; ++i) {
+            if (!projectiles[i].active) continue;
+            position = projectiles[i].position;
+            type = projectiles[i].type;
+            return true;
+        }
+        return false;
+    }
 
     /// Write the current settings to the settings file.
     bool saveSettings();
@@ -788,7 +801,7 @@ private:
         bool active;
         uint8_t team = 0; ///< server-assigned team (0 = Team A, 1 = Team B)
     };
-    static const int MAX_REMOTE_PLAYERS = 8;
+    static const int MAX_REMOTE_PLAYERS = 16;
     RemotePlayer remotePlayers[MAX_REMOTE_PLAYERS];
 
     /// Upright body box of a player standing at `feet` (feet = bottom centre).

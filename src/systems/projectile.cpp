@@ -2,6 +2,7 @@
 #include "../core/renderer.hpp"
 #include "../core/map.hpp"
 #include <glm/gtc/matrix_transform.hpp>
+#include <cmath>
 #include <iostream>
 
 ProjectileSystem::ProjectileSystem() : activeProjectiles(0) {
@@ -45,9 +46,13 @@ void ProjectileSystem::updateProjectiles(float deltaTime, Map* map) {
                 continue;
             }
             
-            // Boundary check as fallback
-            if (projectiles[i].position.y < -10.0f || projectiles[i].position.y > 20.0f ||
-                abs(projectiles[i].position.x) > 50.0f || abs(projectiles[i].position.z) > 50.0f) {
+            // Boundary check as fallback: use the loaded map's extent so
+            // projectiles do not vanish in mid-air on large maps.
+            const glm::vec3 half = map->getDimensions() * 0.5f;
+            if (projectiles[i].position.y < -10.0f ||
+                projectiles[i].position.y > half.y * 2.0f + 5.0f ||
+                std::abs(projectiles[i].position.x) > half.x + 2.0f ||
+                std::abs(projectiles[i].position.z) > half.z + 2.0f) {
                 projectiles[i].active = false;
                 activeProjectiles--;
                 std::cout << "Projectile out of bounds! Active: " << activeProjectiles << std::endl;

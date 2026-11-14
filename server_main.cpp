@@ -16,6 +16,7 @@
 #include <cmath>
 #include "../src/network/network.hpp"
 #include "../src/network/server_config.hpp"
+#include "../src/network/server_bots.hpp"
 
 NetworkServer* g_server = nullptr;
 
@@ -138,7 +139,7 @@ int main(int argc, char* argv[]) {
     // Settings: CLI args take precedence over environment variables, which
     // take precedence over server_config.json, which takes precedence over
     // the built-in defaults (see SettingSource above).
-    SettingSource srcPort, srcMax, srcPerMachine;
+    SettingSource srcPort, srcMax, srcPerMachine, srcBots, srcBotAccuracy;
 
     uint16_t port = static_cast<uint16_t>(settingInt(config, "SERVER_PORT", "server", "port", 7777, &srcPort));
     std::string serverName = settingString(config, "SERVER_NAME", "server", "name", "Cube Game Server");
@@ -150,6 +151,13 @@ int main(int argc, char* argv[]) {
     std::string region = settingString(config, "", "server", "region", "US-East");
     std::string description = settingString(config, "", "server", "description", "Custom game server");
     float timeout = settingFloat(config, "TIMEOUT", "network", "timeout", 10.0f);
+
+    // Bots (server-controlled players).
+    int botCount = settingInt(config, "BOTS_COUNT", "bots", "count", 0, &srcBots);
+    float botAccuracy = settingFloat(config, "BOTS_ACCURACY", "bots", "accuracy", 0.65f, &srcBotAccuracy);
+    std::string defaultMap = settingString(config, "DEFAULT_MAP", "gameplay", "defaultMap", "simple.map");
+    const bool friendlyFire = getEnvBool("FRIENDLY_FIRE",
+                                          config.getBool("gameplay.friendlyFire", false));
 
     // Override with command line arguments if provided (highest precedence)
     if (argc > 1) {
@@ -163,9 +171,22 @@ int main(int argc, char* argv[]) {
         maxPlayersPerMachine = std::atoi(argv[3]);
         srcPerMachine.origin = "command line";
     }
+    if (argc > 4) {
+        botCount = std::atoi(argv[4]);
+        srcBots.origin = "command line";
+    }
+    if (argc > 5) {
+        botAccuracy = static_cast<float>(std::atof(argv[5]));
+        srcBotAccuracy.origin = "command line";
+    }
 
     if (maxPlayers < 1) maxPlayers = 1;
     if (maxPlayersPerMachine < -1) maxPlayersPerMachine = -1;
+    if (botCount < 0) botCount = 0;
+    if (botCount > ServerBotManager::kMaxBots) botCount = ServerBotManager::kMaxBots;
+    if (botCount > maxPlayers) botCount = maxPlayers;
+    if (botAccuracy < 0.0f) botAccuracy = 0.0f;
+    if (botAccuracy > 1.0f) botAccuracy = 1.0f;
 
     std::cout << "========================================" << std::endl;
     std::cout << "  " << serverName << std::endl;
@@ -174,6 +195,9 @@ int main(int argc, char* argv[]) {
     std::cout << "Max Players: " << maxPlayers << "   (" << srcMax.origin << ")" << std::endl;
     std::cout << "Max Players Per Machine: " << perMachineText(maxPlayersPerMachine)
               << "   (" << srcPerMachine.origin << ")" << std::endl;
+    std::cout << "Bots: " << botCount << "   (" << srcBots.origin << ")" << std::endl;
+    std::cout << "Bot Accuracy: " << botAccuracy << "   (" << srcBotAccuracy.origin << ")" << std::endl;
+    std::cout << "Bots World: " << defaultMap << std::endl;
     std::cout << "Region: " << region << std::endl;
     std::cout << "Description: " << description << std::endl;
     if (configLoaded) {
@@ -212,7 +236,9 @@ int main(int argc, char* argv[]) {
     };
 
     server.onPlayerDisconnect = [&server](uint32_t id) {
-        std::cout << "[Server] Player " << id << " disconnected (" << server.getCurrentPlayerCount() << "/" << server.getMaxPlayers() << ")" << std::endl;
+        std::cout << "[Server] " << (server.isBot(id) ? "Bot " : "Player ")
+                  << id << " disconnected (" << server.getCurrentPlayerCount() << "/"
+                  << server.getMaxPlayers() << ")" << std::endl;
     };
     
     server.onPlayerInput = [&server](uint32_t id, const PlayerInputPacket& input) {
@@ -311,19 +337,21 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // ── PVP damage ───────────────────────────────────────────────────────────
-    // Hits are resolved by the shooter against the victim's body box, so they
-    // arrive already validated. The server applies them (clamped, so a bad
-    // packet cannot deal more than a hit worth), faces the victim towards the
-    // shooter and broadcasts the result.
-    server.onPlayerDamage = [&server](uint32_t shooterId, const PlayerDamagePacket& hit) {
-        ServerPlayer* victim = server.getPlayer(hit.header.clientId);
+    // ── Damage ───────────────────────────────────────────────────────────────
+    // Hits from clients are resolved by the shooter against the victim's body
+    // box, so they arrive already validated. Bot damage (bullets resolved by
+    // the AI, grenade blasts resolved server-side) goes through the same
+    // function, so death/broadcast behaviour is identical for both.
+    //
+    // Damage is clamped so a bad packet cannot deal more than a hit is worth;
+    // grenade / flashbang blasts stay lethal but are not stacked.
+    auto applyDamage = [&server](uint32_t shooterId, uint32_t victimId,
+                                 float damage, uint8_t weaponId) {
+        ServerPlayer* victim = server.getPlayer(victimId);
         if (!victim || victim->isDead) return;
 
-        float damage = static_cast<float>(hit.damage);
-        // A single shot never costs more than a full arsenal's worth;
-        // grenade / flashbang blasts stay lethal but are not stacked.
-        damage = hit.weaponId >= 1 ? std::min(damage, 75.0f) : std::min(damage, 100.0f);
+        damage = weaponId >= 1 ? std::min(damage, 75.0f) : std::min(damage, 100.0f);
+        if (damage <= 0.0f) return;
 
         victim->health -= damage;
         victim->velocity = glm::vec3(0.0f);
@@ -340,7 +368,8 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        std::cout << "[Server] Player " << victim->id << " hit by player "
+        std::cout << "[Server] " << (victim->isBot ? "Bot " : "Player ")
+                  << victim->id << " hit by " << (server.isBot(shooterId) ? "bot " : "player ")
                   << shooterId << " for " << damage
                   << " (health " << victim->health << ")"
                   << (victim->isDead ? " - DEAD" : "") << std::endl;
@@ -349,6 +378,33 @@ int main(int argc, char* argv[]) {
             victim->id, victim->mapName, victim->position, victim->velocity,
             victim->yaw, victim->pitch, victim->health, victim->isDead, true);
     };
+
+    server.onPlayerDamage = [applyDamage](uint32_t shooterId, const PlayerDamagePacket& hit) {
+        applyDamage(shooterId, hit.header.clientId, static_cast<float>(hit.damage), hit.weaponId);
+    };
+
+    // ── Server bots ──────────────────────────────────────────────────────────
+    ServerBotManager botManager;
+    botManager.onDamage = [applyDamage](uint32_t shooterId, uint32_t victimId,
+                                        uint16_t damage, uint8_t weaponId) {
+        applyDamage(shooterId, victimId, static_cast<float>(damage), weaponId);
+    };
+    server.onProjectileSpawned = [&botManager](uint32_t ownerId,
+                                               const ProjectileSpawnPacket& packet) {
+        botManager.onProjectileSpawned(ownerId, packet);
+    };
+    server.onRoundStarted = [&botManager](const std::string& mapName, int gameMode) {
+        botManager.startRound(mapName, gameMode);
+    };
+
+    if (botCount > 0) {
+        ServerBotManager::Config botConfig;
+        botConfig.count = botCount;
+        botConfig.accuracy = botAccuracy;
+        botConfig.defaultMap = defaultMap;
+        botConfig.friendlyFire = friendlyFire;
+        botManager.init(server, botConfig);
+    }
 
     // Main server loop
     auto lastTime = std::chrono::steady_clock::now();
@@ -368,10 +424,15 @@ int main(int argc, char* argv[]) {
         
         server.update(deltaTime);
 
+        // Bots run their own AI / movement / respawn bookkeeping.
+        botManager.update(deltaTime, server);
+
         // Respawn dead players after a short delay in deathmatch. Round-based
         // games (team vs team / bomb defusal) keep the body dead and invisible
         // until the client starts the next round and reports itself alive.
+        // Bots are excluded: the bot manager respawns them on every mode.
         for (ServerPlayer* player : server.getPlayers()) {
+            if (player->isBot) continue;
             if (!player->isDead) {
                 deadSince.erase(player->id);
                 continue;

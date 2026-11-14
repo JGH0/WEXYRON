@@ -130,6 +130,15 @@ set(NETWORK_SOURCES
     src/network/server_config.cpp
 )
 
+# Portable bot AI + its dedicated-server host. The AI has no GL/GLFW
+# dependency; server_bots.cpp is only linked into the headless server.
+set(BOT_AI_SOURCES
+    src/game/bot.cpp
+)
+set(SERVER_BOT_SOURCES
+    src/network/server_bots.cpp
+)
+
 set(UI_SOURCES
     src/ui/menu_core.cpp
     src/ui/menu_draw.cpp
@@ -162,6 +171,7 @@ add_executable(game
     ${CORE_SOURCES}
     ${SYSTEMS_SOURCES}
     ${NETWORK_SOURCES}
+    ${BOT_AI_SOURCES}
     ${UI_SOURCES}
     ${ENGINE_SOURCES}
     ${GLAD_SOURCES}
@@ -181,6 +191,8 @@ endif()
 add_executable(server
     ${SERVER_SOURCES}
     ${NETWORK_SOURCES}
+    ${BOT_AI_SOURCES}
+    ${SERVER_BOT_SOURCES}
 )
 
 target_include_directories(server PRIVATE
