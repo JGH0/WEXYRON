@@ -169,24 +169,11 @@ void ServerBotManager::tick(float deltaTime, NetworkServer& server) {
         }
     }
 
-    // Detect the start of a new round. Round-based human clients resurrect
-    // themselves (resetGame + alive input) when the next round begins; bots
-    // have no client, so mirror that transition here. Without this, a dead bot
-    // would stay dead forever after the first round.
-    std::vector<std::pair<std::string, int>> startedRounds;
-    std::map<uint32_t, bool> nextDeadState;
-    for (ServerPlayer* human : humans) {
-        auto previous = humanWasDead_.find(human->id);
-        const bool wasDead = previous != humanWasDead_.end() && previous->second;
-        if (wasDead && !human->isDead && human->gameMode >= 1) {
-            startedRounds.push_back({human->mapName, static_cast<int>(human->gameMode)});
-        }
-        nextDeadState[human->id] = human->isDead;
-    }
-    humanWasDead_.swap(nextDeadState);
-    for (const auto& round : startedRounds) {
-        reviveBotsForNewRound(server, round.first, round.second);
-    }
+    // NOTE: a round-based client only sends PACKET_ROUND_START from
+    // Game::startRound(). Do *not* infer a new round from a dead->alive
+    // transition of a human player: a lost damage packet (or any other
+    // resurrection of the server record) also flips that flag mid-round and
+    // used to revive every dead bot in the middle of a round.
 
     for (std::unique_ptr<Runtime>& runtimePtr : bots_) {
         Runtime& runtime = *runtimePtr;
@@ -242,15 +229,51 @@ void ServerBotManager::tick(float deltaTime, NetworkServer& server) {
         }
 
         // The server may have revived the record from outside (map switch).
+        // In a round-based mode a dead AI must stay dead: the only revival is
+        // the explicit next-round path (reviveBotsForNewRound).
         const bots::BotMap* map = getMap(runtime.mapName);
         if (!runtime.ai->alive()) {
-            runtime.ai->respawn(player->position, player->yaw, *map);
+            if (targetMode < 1) {
+                runtime.ai->respawn(player->position, player->yaw, *map);
+            } else {
+                player->isDead = true;
+                player->health = 0.0f;
+                server.broadcastPlayerStateToMap(
+                    runtime.id, runtime.mapName, player->position, player->velocity,
+                    player->yaw, player->pitch, player->health, true, true);
+                continue;
+            }
+        }
+
+        const BombInfo bomb = bombInfoProvider_
+                                  ? bombInfoProvider_(runtime.mapName)
+                                  : BombInfo{};
+        // Round ended / intermission: freeze the bot completely. No movement,
+        // aiming, shooting or throwables until the next round starts.
+        if (targetMode >= 1 && bomb.valid && !bomb.roundActive) {
+            runtime.ai->idle(deltaTime, map);
+            player->position = runtime.ai->position();
+            player->velocity = runtime.ai->velocity();
+            player->yaw = runtime.ai->yaw();
+            player->pitch = runtime.ai->pitch();
+            server.broadcastPlayerStateToMap(
+                runtime.id, runtime.mapName, player->position, player->velocity,
+                player->yaw, player->pitch, player->health, player->isDead, false);
+            continue;
         }
 
         bots::World world;
         world.map = map;
         world.gameMode = targetMode;
         world.friendlyFire = config_.friendlyFire;
+        if (bomb.valid) {
+            world.roundActive = bomb.roundActive;
+            world.bombPlanted = bomb.planted && !bomb.defused && !bomb.exploded;
+            world.bombDefused = bomb.defused;
+            world.bombPosition = bomb.position;
+            world.bombPlantingTeam = bomb.plantingTeam;
+            world.attackingTeam = bomb.attackingTeam;
+        }
         for (ServerPlayer* other : server.getPlayers()) {
             if (!other->active || other->isDead || other->id == player->id) continue;
             if (std::string(other->mapName) != runtime.mapName) continue;

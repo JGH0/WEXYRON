@@ -445,7 +445,7 @@ void NetworkClient::sendMapChange(const std::string& mapName) {
     std::cout << "Sent map change request: " << mapName << std::endl;
 }
 
-void NetworkClient::sendRoundStart(uint8_t gameMode) {
+void NetworkClient::sendRoundStart(uint8_t gameMode, uint8_t attackingTeam) {
     if (!connected) return;
 
     RoundStartPacket packet{};
@@ -456,6 +456,21 @@ void NetworkClient::sendRoundStart(uint8_t gameMode) {
         std::chrono::steady_clock::now().time_since_epoch()).count();
     packet.header.clientId = clientId;
     packet.gameMode = gameMode;
+    packet.attackingTeam = attackingTeam & 1u;
+    sendPacket(&packet, sizeof(packet));
+}
+
+void NetworkClient::sendBombInteract(uint8_t action) {
+    if (!connected) return;
+
+    BombInteractPacket packet{};
+    packet.header.magic = PACKET_MAGIC;
+    packet.header.type = PACKET_BOMB_INTERACT;
+    packet.header.sequence = sequence++;
+    packet.header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    packet.header.clientId = clientId;
+    packet.action = action;
     sendPacket(&packet, sizeof(packet));
 }
 
@@ -571,6 +586,12 @@ void NetworkClient::update() {
             case PACKET_MAP_PLAYER_COUNT:
                 if (connected && received >= sizeof(MapPlayerCountPacket) && onMapPlayerCount) {
                     onMapPlayerCount(*(MapPlayerCountPacket*)buffer);
+                }
+                break;
+
+            case PACKET_BOMB_STATE:
+                if (connected && received >= sizeof(BombStatePacket) && onBombState) {
+                    onBombState(*(BombStatePacket*)buffer);
                 }
                 break;
 
@@ -1026,8 +1047,20 @@ void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_
 
             player->gameMode = start->gameMode;
             if (start->gameMode >= 1 && onRoundStarted) {
-                onRoundStarted(player->mapName, static_cast<int>(start->gameMode));
+                onRoundStarted(player->mapName, static_cast<int>(start->gameMode),
+                               static_cast<int>(start->attackingTeam & 1u));
             }
+            break;
+        }
+
+        case PACKET_BOMB_INTERACT: {
+            if (size < sizeof(BombInteractPacket)) return;
+            const BombInteractPacket* request = (const BombInteractPacket*)data;
+            ServerPlayer* player = findPlayerByAddress(from);
+            if (!player || !player->active) break;
+            if (request->action != BOMB_INTERACT_PLANT &&
+                request->action != BOMB_INTERACT_DEFUSE) break;
+            if (onBombInteract) onBombInteract(player->id, request->action);
             break;
         }
 

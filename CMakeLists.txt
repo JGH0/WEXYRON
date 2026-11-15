@@ -137,6 +137,7 @@ set(BOT_AI_SOURCES
 )
 set(SERVER_BOT_SOURCES
     src/network/server_bots.cpp
+    src/network/server_bomb.cpp
 )
 
 set(UI_SOURCES

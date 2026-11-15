@@ -159,6 +159,16 @@ struct World {
     std::vector<Target> targets;
     int gameMode = 0;          ///< 0 = deathmatch, 1 = team vs team, 2 = bomb
     bool friendlyFire = false; ///< team modes: allow damaging teammates
+
+    // Server-authoritative bomb state (round-based modes). A bot that walks
+    // onto a site plants it, and a defending bot that reaches a planted bomb
+    // defuses it; the server advances the actual timers.
+    bool roundActive = true;
+    bool bombPlanted = false;
+    bool bombDefused = false;
+    glm::vec3 bombPosition{0.0f};
+    int bombPlantingTeam = -1;
+    int attackingTeam = 0;
 };
 
 /// Something a bot wants the host to do (damage is applied by the host).

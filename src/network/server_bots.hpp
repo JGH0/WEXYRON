@@ -52,6 +52,26 @@ public:
     /// that map are revived, matching the human clients.
     void startRound(const std::string& mapName, int gameMode);
 
+    /// Bomb state the bot AI needs for one map. Kept as a plain value so this
+    /// host stays independent of the concrete server bomb implementation.
+    struct BombInfo {
+        bool valid = false;
+        bool roundActive = true;
+        bool planted = false;
+        bool defused = false;
+        bool exploded = false;
+        glm::vec3 position{0.0f};
+        int plantingTeam = -1;
+        int attackingTeam = 0;
+    };
+    using BombInfoProvider = std::function<BombInfo(const std::string&)>;
+
+    /// Bots read the authoritative bomb to choose between sites, the planted
+    /// bomb, and guard positions. Unset in tests (they keep the neutral state).
+    void setBombInfoProvider(BombInfoProvider provider) {
+        bombInfoProvider_ = std::move(provider);
+    }
+
     /// Damage produced by a bot (bullets, or a grenade blast the server
     /// resolved). The server applies it like PACKET_PLAYER_DAMAGE.
     std::function<void(uint32_t shooterId, uint32_t victimId,
@@ -75,15 +95,13 @@ private:
 
     Config config_;
     NetworkServer* server_ = nullptr;
+    BombInfoProvider bombInfoProvider_;
     std::map<std::string, std::unique_ptr<bots::BotMap>> maps_;
     std::vector<std::unique_ptr<Runtime>> bots_;
     std::vector<ServerProjectile> projectiles_;
     std::mt19937 rng_{0xC0FFEEu};
     float accumulator_ = 0.0f;
     bool idle_ = false;  ///< no human connected: freeze all bot activity
-    /// Last known dead/alive state of each human, used to detect the start of
-    /// a new round (dead -> alive in a round-based game mode).
-    std::map<uint32_t, bool> humanWasDead_;
 
     /// Load (and cache) a map. Falls back to an empty floor map when missing.
     const bots::BotMap* getMap(const std::string& mapName);

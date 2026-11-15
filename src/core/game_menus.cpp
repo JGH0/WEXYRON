@@ -223,7 +223,13 @@ void Game::openMapSelection() {
     page.add(menu::separator("GAME MODE"));
     page.add(menu::cycle("MODE", {kModeNames[0], kModeNames[1], kModeNames[2]},
                          static_cast<int>(currentGameMode),
-                         [this](int index) { currentGameMode = static_cast<GameMode>(index); },
+                         [this](int index) {
+                             currentGameMode = static_cast<GameMode>(index);
+                             // Dropping out of a round mode must clear the
+                             // bomb sites/planted bomb immediately, even if
+                             // the current map is not reloaded.
+                             refreshBombSitesForMode();
+                         },
                          "LEFT/RIGHT change the mode"));
 
     openMenuView(mapMenu_, std::move(page));

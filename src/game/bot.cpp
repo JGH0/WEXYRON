@@ -790,35 +790,76 @@ const Target* Bot::selectTarget(const World& world) const {
 
 glm::vec3 Bot::chooseObjective(const World& world) {
     const BotMap* map = world.map;
+    const bool bombMode = world.gameMode >= 1;
 
-    if (world.gameMode == 2) {
-        // Bomb defusal: attackers head for a site, defenders hold one.
-        glm::vec3 site(5.0f, 0.0f, 5.0f);
+    if (bombMode) {
+        // Bomb planted: both teams converge on it. Defenders defuse (the
+        // server notices a defender standing at the bomb); attackers guard it.
+        if (world.bombPlanted && !world.bombDefused) {
+            glm::vec3 point = world.bombPosition;
+            const float angle = randomRange(0.0f, 6.28318f);
+            const float hold = (team_ == world.bombPlantingTeam) ? 1.2f : 0.35f;
+            point.x += std::cos(angle) * hold;
+            point.z += std::sin(angle) * hold;
+            float top = 0.0f;
+            if (map && map->topUnder(point.x, point.z, map->dimensions.y + 5.0f, top)) {
+                point.y = top;
+            }
+            return point;
+        }
+
+        // No bomb yet: attackers push a site and hold it so the server can
+        // plant; defenders hold a site too, waiting for the attackers.
         if (map && !map->bombSites.empty()) {
-            site = map->bombSites[static_cast<size_t>(random01() * map->bombSites.size()) % map->bombSites.size()].position;
-        } else if (random01() < 0.5f) {
-            site = glm::vec3(-5.0f, 0.0f, -5.0f);
+            // Attackers prefer the nearest site (short path, quicker plant);
+            // defenders spread over all sites.
+            size_t index = static_cast<size_t>(random01() * map->bombSites.size()) %
+                           map->bombSites.size();
+            if (team_ == world.attackingTeam) {
+                float best = std::numeric_limits<float>::max();
+                for (size_t i = 0; i < map->bombSites.size(); ++i) {
+                    const float distance = glm::length(
+                        glm::vec3(map->bombSites[i].position.x - position_.x, 0.0f,
+                                  map->bombSites[i].position.z - position_.z));
+                    if (distance < best) {
+                        best = distance;
+                        index = i;
+                    }
+                }
+            }
+
+            const glm::vec3 site = map->bombSites[index].position;
+            const float hold = team_ == world.attackingTeam ? 0.0f : 2.5f;
+            const float angle = randomRange(0.0f, 6.28318f);
+            glm::vec3 point = site + glm::vec3(std::cos(angle) * hold, 0.0f,
+                                               std::sin(angle) * hold);
+            float top = 0.0f;
+            if (map->topUnder(point.x, point.z, map->dimensions.y + 5.0f, top)) {
+                point.y = top;
+            }
+            return point;
         }
 
-        // Defenders hold back a little; attackers push the site.
-        const float hold = (team_ == 1) ? 3.0f : 0.0f;
-        const float angle = randomRange(0.0f, 6.28318f);
-        glm::vec3 point = site + glm::vec3(std::cos(angle) * hold, 0.0f, std::sin(angle) * hold);
-        float top = 0.0f;
-        if (map && map->topUnder(point.x, point.z, map->dimensions.y + 5.0f, top)) point.y = top;
-        return point;
-    }
-
-    if (world.gameMode == 1 && map) {
-        // Team vs team: push the enemy side / centre.
-        glm::vec3 enemySide(team_ == 0 ? map->dimensions.x * 0.30f : -map->dimensions.x * 0.30f, 0.0f, 0.0f);
-        for (const TeamSpawnPoint& spawn : map->teamSpawns) {
-            if (spawn.team != team_) { enemySide = spawn.position; break; }
+        if (world.gameMode == 1 && map) {
+            // Team map without bomb sites: push the enemy side as before.
+            glm::vec3 enemySide(team_ == 0 ? map->dimensions.x * 0.30f
+                                           : -map->dimensions.x * 0.30f,
+                                0.0f, 0.0f);
+            for (const TeamSpawnPoint& spawn : map->teamSpawns) {
+                if (spawn.team != team_) { enemySide = spawn.position; break; }
+            }
+            glm::vec3 point = enemySide + glm::vec3(randomRange(-4.0f, 4.0f), 0.0f,
+                                                   randomRange(-4.0f, 4.0f));
+            float top = 0.0f;
+            if (map->topUnder(point.x, point.z, map->dimensions.y + 5.0f, top)) {
+                point.y = top;
+            }
+            return point;
         }
-        glm::vec3 point = enemySide + glm::vec3(randomRange(-4.0f, 4.0f), 0.0f, randomRange(-4.0f, 4.0f));
-        float top = 0.0f;
-        if (map->topUnder(point.x, point.z, map->dimensions.y + 5.0f, top)) point.y = top;
-        return point;
+
+        glm::vec3 site(5.0f, 0.0f, 5.0f);
+        if (random01() < 0.5f) site = glm::vec3(-5.0f, 0.0f, -5.0f);
+        return site;
     }
 
     // Deathmatch / fallback: wander somewhere reachable.
@@ -1230,16 +1271,39 @@ void Bot::update(float dt, const World& world, std::vector<Action>& actions) {
             aimAt(lastSeenPos_ + glm::vec3(0.0f, kBodyCentre, 0.0f), dt);
         } else {
             objectiveTimer_ -= dt;
-            if (!hasObjective_ || objectiveTimer_ <= 0.0f ||
-                glm::length(glm::vec3(objective_.x - position_.x, 0.0f, objective_.z - position_.z)) < 1.2f) {
+
+            auto objectiveDistance = [&]() {
+                if (!hasObjective_) return std::numeric_limits<float>::max();
+                return glm::length(glm::vec3(objective_.x - position_.x, 0.0f,
+                                             objective_.z - position_.z));
+            };
+
+            float distance = objectiveDistance();
+            // In bomb modes an attacker standing on the site (or anyone
+            // standing at a planted bomb) must stop there long enough for the
+            // server to finish planting / defusing, instead of pathing around.
+            const bool bombObjective = world.gameMode >= 1 &&
+                ((world.bombPlanted && !world.bombDefused) ||
+                 team_ == world.attackingTeam);
+            const bool holding = bombObjective && hasObjective_ && distance < 1.6f;
+
+            if (!hasObjective_ || (!holding && (objectiveTimer_ <= 0.0f || distance < 1.2f))) {
                 objective_ = chooseObjective(world);
                 hasObjective_ = true;
                 objectiveTimer_ = randomRange(5.0f, 10.0f);
+                distance = objectiveDistance();
                 clearPath();
             }
-            moveDir = pathDirection(world.map, objective_, dt);
-            if (glm::length(moveDir) > 0.001f) {
-                aimAt(position_ + moveDir * 4.0f + glm::vec3(0.0f, kBodyCentre, 0.0f), dt);
+
+            const bool atObjective = world.gameMode >= 1 && hasObjective_ && distance < 1.6f;
+            if (atObjective) {
+                moveDir = glm::vec3(0.0f);
+                aimAt(objective_ + glm::vec3(0.0f, kBodyCentre, 0.0f), dt);
+            } else {
+                moveDir = pathDirection(world.map, objective_, dt);
+                if (glm::length(moveDir) > 0.001f) {
+                    aimAt(position_ + moveDir * 4.0f + glm::vec3(0.0f, kBodyCentre, 0.0f), dt);
+                }
             }
         }
     }

@@ -158,12 +158,31 @@ The dedicated server can fill a match with bots. They are configured in
   accurate). It also affects how much a bot misses grenade/flashbang throws.
 
 Bots are full server-controlled players: they walk and collide with the map,
-fight with pistols and shotguns, throw grenades and flashbangs, and respawn.
-They always follow the world and game mode of the players (bots are spread over
-the connected players, so two occupied maps both get bots). A flashbang blinds
+fight with pistols and shotguns, throw grenades and flashbangs, and respawn in
+deathmatch. In round-based modes (team vs team / bomb defusal) a dead bot stays
+dead until the next round starts, exactly like a human player. They always
+follow the world and game mode of the players (bots are spread over the
+connected players, so two occupied maps both get bots). A flashbang blinds
 nearby bots; while blind they wander randomly and cannot aim or shoot. Bots
-fight in deathmatch, team vs team, and bomb defusal (they attack/hold bomb
-sites).
+fight in deathmatch, team vs team, and bomb defusal; in the round modes they
+push a bomb site, plant the bomb when they get there, and defenders go to a
+planted bomb and defuse it.
+
+Bomb planting, defusing and the fuse are authoritative on the dedicated server
+(`ServerBombManager`), not just in the client. Clients send an intent when E is
+pressed; the server validates it, advances the timers, broadcasts the bomb
+state to every player on the map, and applies the explosion damage.
+
+Round results are server-authoritative and CS-style:
+
+- **Attackers win** when the bomb detonates, when every defender is eliminated,
+  or when the fuse burns out without a defuse.
+- **Defenders win** when they defuse the bomb, when every attacker is eliminated
+  before a plant, or when the plant-time clock (`ROUND_TIME`, default 115 s)
+  expires without a plant.
+- After a plant, killing all attackers does **not** end the round: the
+  defenders still have to defuse the bomb. The plant-time clock stops once the
+  bomb is planted and the fuse takes over.
 
 Overrides, highest precedence first: command line (`./build/bin/server 7777
 name -1 6 0.8`), environment (`BOTS_COUNT`, `BOTS_ACCURACY`),

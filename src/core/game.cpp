@@ -285,6 +285,10 @@ Game::Game(int width, int height)
       isDefusing(false),
       plantProgress(0.0f),
       defuseProgress(0.0f),
+      serverRoundEnded(false),
+      roundWinner(-1),
+      roundEndReason(ROUND_END_NONE),
+      roundTimeLeft(0.0f),
       shootCooldown(0.0f),
       pistolCooldown(0.0f),
       shotgunCooldown(0.0f),
@@ -657,34 +661,10 @@ void Game::installMap(std::unique_ptr<Map> loaded) {
     currentMap = loaded.release();
     if (!currentMap) return;
 
-    // Setup bomb defusal mode if in team mode or bomb defusal mode
-    if (currentGameMode == TEAM_VS_TEAM || currentGameMode == BOMB_DEFUSAL) {
-        bombDefusalMode = true;
-        activeBombSites = 0;
-
-        // Load bomb sites from map data
-        const auto& mapBombSites = currentMap->getBombSites();
-        for (const auto& site : mapBombSites) {
-            if (activeBombSites < MAX_BOMB_SITES) {
-                bombSites[activeBombSites] = {
-                    site.position,
-                    glm::vec3(2.0f, 0.2f, 2.0f),  // default size
-                    true,
-                    site.label
-                };
-                activeBombSites++;
-            }
-        }
-
-        // Fallback: add default bomb sites if none defined
-        if (activeBombSites == 0) {
-            bombSites[0] = {glm::vec3(5.0f, 0.1f, 5.0f), glm::vec3(2.0f, 0.2f, 2.0f), true, 'A'};
-            bombSites[1] = {glm::vec3(-5.0f, 0.1f, -5.0f), glm::vec3(2.0f, 0.2f, 2.0f), true, 'B'};
-            activeBombSites = 2;
-        }
-    } else {
-        bombDefusalMode = false;
-    }
+    // Setup (or clear) bomb defusal state for the current mode. This is also
+    // re-run when the menu changes the mode so stale sites disappear at once,
+    // and it re-arms the server-round guards for a fresh match.
+    refreshBombSitesForMode();
 
     resetGame();
 
@@ -697,6 +677,55 @@ void Game::installMap(std::unique_ptr<Map> loaded) {
     // in the constructor (vsync, FPS cap, performance, infinite ammo,
     // bindings) - no restart needed to see them take effect.
     applySettings();
+}
+
+void Game::refreshBombSitesForMode() {
+    // Changing mode must not leave a planted/defusing bomb or its sites behind.
+    isPlanting = false;
+    isDefusing = false;
+    plantProgress = 0.0f;
+    defuseProgress = 0.0f;
+    bomb.planted = false;
+    bomb.defused = false;
+    bomb.active = false;
+    bomb.plantTime = 0.0f;
+    bomb.defuseProgress = 0.0f;
+    bomb.plantingTeam = 0;
+    activeBombSites = 0;
+    serverRoundEnded = false;
+    roundWinner = -1;
+    roundEndReason = ROUND_END_NONE;
+    roundTimeLeft = 0.0f;
+    roundEndTimer = 0.0f;
+
+    const bool roundBased = currentGameMode == TEAM_VS_TEAM ||
+                            currentGameMode == BOMB_DEFUSAL;
+    bombDefusalMode = currentMap != nullptr && roundBased;
+    if (!bombDefusalMode) {
+        roundActive = false;
+        roundEndTimer = 0.0f;
+        return;
+    }
+
+    // Load the current map's authored bomb sites.
+    const auto& mapBombSites = currentMap->getBombSites();
+    for (const auto& site : mapBombSites) {
+        if (activeBombSites >= MAX_BOMB_SITES) break;
+        bombSites[activeBombSites] = {
+            site.position,
+            glm::vec3(2.0f, 0.2f, 2.0f),  // default size
+            true,
+            site.label
+        };
+        activeBombSites++;
+    }
+
+    // Fallback for maps without authored sites.
+    if (activeBombSites == 0) {
+        bombSites[0] = {glm::vec3(5.0f, 0.1f, 5.0f), glm::vec3(2.0f, 0.2f, 2.0f), true, 'A'};
+        bombSites[1] = {glm::vec3(-5.0f, 0.1f, -5.0f), glm::vec3(2.0f, 0.2f, 2.0f), true, 'B'};
+        activeBombSites = 2;
+    }
 }
 
 Map* Game::getCurrentMap() {
@@ -804,7 +833,9 @@ void Game::resetGame() {
     plantProgress        = 0.0f;
     defuseProgress       = 0.0f;
 
-    // Reset bomb state
+    // Reset bomb state. The server-event guards are cleared from the next
+    // authoritative "bomb reset" state packet, not here: a stale explosion
+    // packet from the round that just ended must not trigger endRound() again.
     bomb.planted = false;
     bomb.defused = false;
     bomb.active = false;

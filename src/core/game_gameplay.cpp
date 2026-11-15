@@ -1646,6 +1646,34 @@ void Game::renderRemotePlayers() {
 // Bomb Defusal Mode Functions
 void Game::updateBomb(float deltaTime) {
     if (!bombDefusalMode) return;
+
+    // Multiplayer: the dedicated server owns planting, defusing, the fuse and
+    // the round result (see ServerBombManager). The client only advances the
+    // visual countdown between state packets and plays the beeps; it must not
+    // plant/defuse/explode locally or clients would disagree.
+    const bool serverOwned = networkClient && networkClient->isConnected();
+    if (serverOwned) {
+        if (roundActive) {
+            roundTime += deltaTime;
+            // The server broadcasts the authoritative clock; interpolate
+            // between packets for a smooth HUD. Once planted, the bomb timer
+            // replaces it.
+            if (!bomb.planted) {
+                roundTimeLeft = std::max(0.0f, roundTimeLeft - deltaTime);
+            }
+        }
+        if (bomb.planted && !bomb.defused && roundActive) {
+            const float before = bomb.plantTime;
+            bomb.plantTime += deltaTime;
+            if (bomb.plantTime > bomb.explodeTime) bomb.plantTime = bomb.explodeTime;
+            const float remaining = bomb.explodeTime - bomb.plantTime;
+            const float beepInterval = remaining <= 5.0f ? 0.5f : 1.0f;
+            if (std::floor(before / beepInterval) != std::floor(bomb.plantTime / beepInterval)) {
+                playSoundEffect("bomb_beep", bomb.position, remaining <= 5.0f ? 1.0f : 0.7f);
+            }
+        }
+        return;
+    }
     
     // Update bomb timer if planted
     if (bomb.planted && !bomb.defused) {
@@ -1665,7 +1693,7 @@ void Game::updateBomb(float deltaTime) {
             playSoundEffect("bomb_explode", bomb.position);
             bomb.active = false;
             bomb.planted = false; // Prevent re-triggering
-            endRound(bomb.plantingTeam); // Planting team wins
+            endRound(bomb.plantingTeam, ROUND_END_BOMB_EXPLODED); // Attackers win
         }
     }
     
@@ -1704,7 +1732,7 @@ void Game::updateBomb(float deltaTime) {
                 bomb.active = false;
                 playSoundEffect("bomb_defuse", bomb.position);
                 std::cout << "BOMB DEFUSED!" << std::endl;
-                endRound(1 - bomb.plantingTeam); // Defusing team wins
+                endRound(1 - bomb.plantingTeam, ROUND_END_BOMB_DEFUSED); // Defenders win
             }
         }
     }
@@ -1724,6 +1752,10 @@ void Game::startPlanting() {
         isPlanting = true;
         plantProgress = 0.0f;
         playSoundEffect("bomb_plant", playerPos);
+        // The server validates the site/team again and advances the timer.
+        if (networkClient && networkClient->isConnected()) {
+            networkClient->sendBombInteract(BOMB_INTERACT_PLANT);
+        }
         std::cout << "Started planting bomb..." << std::endl;
     }
 }
@@ -1741,6 +1773,9 @@ void Game::startDefusing() {
         isDefusing = true;
         defuseProgress = 0.0f;
         playSoundEffect("bomb_defuse", playerPos);
+        if (networkClient && networkClient->isConnected()) {
+            networkClient->sendBombInteract(BOMB_INTERACT_DEFUSE);
+        }
         std::cout << "Started defusing bomb..." << std::endl;
     }
 }
@@ -1764,11 +1799,13 @@ bool Game::isNearBomb() {
     return distance < 2.0f; // Within 2 units of bomb
 }
 
-void Game::endRound(int winner) {
+void Game::endRound(int winner, RoundEndReason reason) {
     // Prevent re-entry if round already ended
     if (roundEndTimer > 0.0f) return;
     
     roundActive = false;
+    roundWinner = winner;
+    roundEndReason = reason;
     roundEndTimer = 4.0f; // 4 second delay before next round
     playUiSound("round_end");
     
@@ -1783,8 +1820,12 @@ void Game::endRound(int winner) {
     // Swap attacking team for next round
     attackingTeam = 1 - attackingTeam;
     
-    // Create a big explosion at the bomb position if bomb was planted
-    if (bomb.planted || bomb.active) {
+    // Create a big explosion only when the bomb actually detonated. A defuse
+    // or an elimination round end while the bomb is planted must not look
+    // like a detonation.
+    const bool bombExploded = reason == ROUND_END_BOMB_EXPLODED ||
+                              (reason == ROUND_END_NONE && (bomb.planted || bomb.active));
+    if (bombExploded) {
         // Create a massive explosion
         for (int i = 0; i < MAX_EXPLOSIONS; i++) {
             if (!explosions[i].active) {
@@ -1823,8 +1864,11 @@ void Game::endRound(int winner) {
         }
     }
     
-    // Also damage/kill the player if near the bomb explosion
-    if (bomb.planted || bomb.active) {
+    // Also damage/kill the player if near the bomb explosion. In multiplayer
+    // the server applies the blast to everyone (including us) and reports the
+    // authoritative health; applying it here as well would double the damage.
+    const bool serverOwnedBlast = networkClient && networkClient->isConnected();
+    if (!serverOwnedBlast && bombExploded) {
         float distToBomb = glm::length(playerPos - bomb.position);
         if (distToBomb < 12.0f) {
             float damage = (12.0f - distToBomb) / 12.0f * 100.0f;
@@ -1862,7 +1906,8 @@ void Game::startRound() {
     // Round-based multiplayer: tell the server so it revives the bots together
     // with the human players at the start of the next round.
     if (networkClient && networkClient->isConnected()) {
-        networkClient->sendRoundStart(static_cast<uint8_t>(currentGameMode));
+        networkClient->sendRoundStart(static_cast<uint8_t>(currentGameMode),
+                                      static_cast<uint8_t>(attackingTeam & 1));
     }
 
     playUiSound("round_start");

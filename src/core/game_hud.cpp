@@ -97,9 +97,12 @@ void Game::renderDeathScreen() {
     auto _b = UIHelpers::getBounds(window);
     float centerX = _b.centerX();
     float centerY = _b.centerY();
-    // Strong red background, then the label on top.
+    // Strong red background, then the label on top. Fit it to 80% of the
+    // viewport: the old scale 3.0 text was wider than the screen.
     renderer.submitOverlay(glm::vec3(0.8f, 0.0f, 0.0f), 1.0f);
-    renderer.drawTextCentered("YOU DIED", centerX, centerY, 3.0f);
+    const float maxWidth = (_b.right - _b.left) * 0.8f;
+    renderer.drawTextCenteredColored("YOU DIED", centerX, centerY - 20.0f,
+                                     1.4f, glm::vec3(1.0f), maxWidth);
 }
 
 void Game::renderBombSites() {
@@ -196,6 +199,14 @@ void Game::renderBombDefusalHUD() {
     auto _b = UIHelpers::getBounds(window);
     float left=_b.left, right=_b.right, top=_b.top, bottom=_b.bottom;
     double currentTime = glfwGetTime();
+
+    // Bottom HUD row: keep every label above the screen edge and use one
+    // compact text size (the old 0.8-1.0 scale ran off the bottom / looked
+    // oversized on 16:9 windows).
+    const float hudTextScale = 0.55f;
+    const float hudTextY = bottom - 42.0f;
+    const float hudBoxY = bottom - 29.0f;
+    const float hudBoxHeight = 30.0f;
     
     // UI is drawn as blended overlays by the batched renderer; no raw GL
     // state changes are needed here anymore.
@@ -225,14 +236,14 @@ void Game::renderBombDefusalHUD() {
         
         // Background bar
         glm::mat4 teamBg = glm::mat4(1.0f);
-        teamBg = glm::translate(teamBg, glm::vec3(left + 7.0f, bottom - 20.0f, 0.0f));
-        teamBg = glm::scale(teamBg, glm::vec3(200.0f, 22.0f, 1.0f));
+        teamBg = glm::translate(teamBg, glm::vec3(left + 127.0f, hudBoxY, 0.0f));
+        teamBg = glm::scale(teamBg, glm::vec3(250.0f, hudBoxHeight, 1.0f));
         glm::vec3 bgColor = teamColor * 0.3f;
         bgColor += glm::vec3(0.1f); // Slight brightness
         renderer.drawColoredQuad(teamBg, bgColor);
         
         // Team text
-        renderer.drawText(teamName, left + 10.0f, bottom - 18.0f, 0.8f);
+        renderer.drawTextFit(teamName, left + 10.0f, hudTextY, 235.0f, hudTextScale);
     }
     
     // ── Bomb status indicator (top-center) ──
@@ -241,8 +252,8 @@ void Game::renderBombDefusalHUD() {
         
         // Draw status box background
         glm::mat4 bombStatusBg = glm::mat4(1.0f);
-        bombStatusBg = glm::translate(bombStatusBg, glm::vec3(right - 160.0f, bottom - 20.0f, 0.0f));
-        bombStatusBg = glm::scale(bombStatusBg, glm::vec3(155.0f, 22.0f, 1.0f));
+        bombStatusBg = glm::translate(bombStatusBg, glm::vec3(right - 102.0f, hudBoxY, 0.0f));
+        bombStatusBg = glm::scale(bombStatusBg, glm::vec3(200.0f, hudBoxHeight, 1.0f));
         renderer.drawColoredQuad(bombStatusBg, glm::vec3(0.4f, 0.0f, 0.0f));
         
         // Timer text with color based on remaining time
@@ -252,21 +263,21 @@ void Game::renderBombDefusalHUD() {
         
         char bombStatus[32];
         snprintf(bombStatus, sizeof(bombStatus), "BOMB  %.0f", bombTimeLeft);
-        renderer.drawText(bombStatus, right - 155.0f, bottom - 18.0f, 0.8f);
+        renderer.drawTextFit(bombStatus, right - 196.0f, hudTextY, 188.0f, hudTextScale);
         
         // Bomb icon (small blinking square)
         float blink = static_cast<float>((sin(currentTime * 6.0f) + 1.0f) * 0.5f);
         glm::mat4 bombIcon = glm::mat4(1.0f);
-        bombIcon = glm::translate(bombIcon, glm::vec3(right - 15.0f, bottom - 10.0f, 0.0f));
+        bombIcon = glm::translate(bombIcon, glm::vec3(right - 12.0f, hudBoxY, 0.0f));
         bombIcon = glm::scale(bombIcon, glm::vec3(8.0f, 8.0f, 1.0f));
         renderer.drawColoredQuad(bombIcon, timerColor * (0.5f + blink * 0.5f));
     } else if (bomb.defused) {
         // Show "DEFUSED" notification
         glm::mat4 defusedBg = glm::mat4(1.0f);
-        defusedBg = glm::translate(defusedBg, glm::vec3(right - 160.0f, bottom - 20.0f, 0.0f));
-        defusedBg = glm::scale(defusedBg, glm::vec3(155.0f, 22.0f, 1.0f));
+        defusedBg = glm::translate(defusedBg, glm::vec3(right - 102.0f, hudBoxY, 0.0f));
+        defusedBg = glm::scale(defusedBg, glm::vec3(200.0f, hudBoxHeight, 1.0f));
         renderer.drawColoredQuad(defusedBg, glm::vec3(0.0f, 0.3f, 0.0f));
-        renderer.drawText("BOMB DEFUSED!", right - 155.0f, bottom - 18.0f, 0.8f);
+        renderer.drawTextFit("BOMB DEFUSED!", right - 196.0f, hudTextY, 188.0f, hudTextScale);
     }
     
     // ── Round end overlay ──
@@ -277,30 +288,76 @@ void Game::renderBombDefusalHUD() {
         overlay = glm::scale(overlay, glm::vec3(right - left, bottom - top, 1.0f));
         renderer.drawColoredQuad(overlay, glm::vec3(0.0f, 0.0f, 0.0f) * 0.4f);
         
-        // Big centered message
-        char roundEndMsg[64];
-        if (bomb.defused) {
-            snprintf(roundEndMsg, sizeof(roundEndMsg), "BOMB DEFUSED! Team %s wins!",
-                     (bomb.plantingTeam == 0 ? "B (Blue)" : "A (Red)"));
-        } else {
-            snprintf(roundEndMsg, sizeof(roundEndMsg), "BOMB EXPLODED! Team %s wins!",
-                     (bomb.plantingTeam == 0 ? "A (Red)" : "B (Blue)"));
+        // Two short centred lines, fitted to the screen width. The old single
+        // line was wider than the viewport and got clipped on both sides.
+        char reasonLine[64] = "ROUND OVER";
+        switch (roundEndReason) {
+            case ROUND_END_BOMB_EXPLODED:
+                snprintf(reasonLine, sizeof(reasonLine), "BOMB EXPLODED!");
+                break;
+            case ROUND_END_BOMB_DEFUSED:
+                snprintf(reasonLine, sizeof(reasonLine), "BOMB DEFUSED!");
+                break;
+            case ROUND_END_ATTACKERS_ELIMINATED:
+                snprintf(reasonLine, sizeof(reasonLine), "ATTACKERS ELIMINATED!");
+                break;
+            case ROUND_END_DEFENDERS_ELIMINATED:
+                snprintf(reasonLine, sizeof(reasonLine), "DEFENDERS ELIMINATED!");
+                break;
+            case ROUND_END_TIME_EXPIRED:
+                snprintf(reasonLine, sizeof(reasonLine), "TIME EXPIRED!");
+                break;
+            default:
+                snprintf(reasonLine, sizeof(reasonLine), "%s",
+                         bomb.defused ? "BOMB DEFUSED!" : "BOMB EXPLODED!");
+                break;
         }
-        renderer.drawTextCentered(roundEndMsg, (left + right) * 0.5f, (top + bottom) * 0.5f, 1.2f);
-        
+
+        int shownWinner = roundWinner;
+        if (shownWinner < 0 && roundEndReason == ROUND_END_NONE) {
+            shownWinner = bomb.defused ? 1 - bomb.plantingTeam : bomb.plantingTeam;
+        }
+        char teamLine[48];
+        if (shownWinner == 0) {
+            snprintf(teamLine, sizeof(teamLine), "TEAM A (RED) WINS");
+        } else if (shownWinner == 1) {
+            snprintf(teamLine, sizeof(teamLine), "TEAM B (BLUE) WINS");
+        } else {
+            snprintf(teamLine, sizeof(teamLine), "DRAW");
+        }
+
+        const float centreX = (left + right) * 0.5f;
+        const float centreY = (top + bottom) * 0.5f;
+        const float maxLineWidth = (right - left) * 0.82f;
+        renderer.drawTextCenteredColored(reasonLine, centreX, centreY - 24.0f,
+                                         1.0f, glm::vec3(1.0f), maxLineWidth);
+        renderer.drawTextCenteredColored(teamLine, centreX, centreY + 18.0f,
+                                         0.85f, glm::vec3(1.0f), maxLineWidth);
+
         // Countdown text
-        char countdownMsg[32];
-        snprintf(countdownMsg, sizeof(countdownMsg), "Next round in %d...", static_cast<int>(ceilf(roundEndTimer)));
-        renderer.drawTextCentered(countdownMsg, (left + right) * 0.5f, (top + bottom) * 0.5f - 40.0f, 0.7f);
+        char countdownMsg[48];
+        snprintf(countdownMsg, sizeof(countdownMsg), "Next round in %d...",
+                 static_cast<int>(ceilf(roundEndTimer)));
+        renderer.drawTextCenteredColored(countdownMsg, centreX, centreY + 58.0f,
+                                         0.6f, glm::vec3(0.85f),
+                                         (right - left) * 0.55f);
     }
     
     // ── Round timer (top-center) ──
-    if (roundActive) {
+    // Multiplayer uses the server's countdown to plant; singleplayer keeps
+    // showing elapsed round time.
+    if (roundActive && !bomb.planted) {
         char roundTimeStr[16];
-        int mins = static_cast<int>(roundTime) / 60;
-        int secs = static_cast<int>(roundTime) % 60;
+        int totalSeconds;
+        if (networkClient && networkClient->isConnected()) {
+            totalSeconds = static_cast<int>(ceilf(std::max(0.0f, roundTimeLeft)));
+        } else {
+            totalSeconds = static_cast<int>(roundTime);
+        }
+        int mins = totalSeconds / 60;
+        int secs = totalSeconds % 60;
         snprintf(roundTimeStr, sizeof(roundTimeStr), "%02d:%02d", mins, secs);
-        renderer.drawTextCentered(roundTimeStr, (left + right) * 0.5f, bottom - 18.0f, 1.0f);
+        renderer.drawTextCentered(roundTimeStr, (left + right) * 0.5f, hudTextY, 0.6f);
     }
     
     // ── Planting / Defusing progress bar (center of screen) ──
@@ -374,14 +431,14 @@ void Game::renderBombDefusalHUD() {
             if (nearestSite >= 0 && minDist > 5.0f && !isDead) {
                 char distStr[32];
                 snprintf(distStr, sizeof(distStr), "Site %c  %.0fm", bombSites[nearestSite].label, minDist);
-                renderer.drawText(distStr, left + 10.0f, bottom - 45.0f, 0.6f);
+                renderer.drawText(distStr, left + 10.0f, bottom - 66.0f, 0.55f);
             }
         } else if (bomb.planted && !bomb.defused && !isDead) {
             float dist = glm::length(playerPos - bomb.position);
             if (dist > 3.0f) {
                 char bombDistStr[32];
                 snprintf(bombDistStr, sizeof(bombDistStr), "Bomb %.0fm", dist);
-                renderer.drawText(bombDistStr, left + 10.0f, bottom - 45.0f, 0.6f);
+                renderer.drawText(bombDistStr, left + 10.0f, bottom - 66.0f, 0.55f);
             }
         }
     }

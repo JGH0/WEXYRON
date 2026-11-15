@@ -275,6 +275,22 @@ void Game::processGameInput(float deltaTime) {
     // shoot, switch weapons or plant/defuse while the round continues.
     if (spectatorMode) return;
 
+    // Between rounds nothing may move or shoot. This also cancels a plant /
+    // defuse that was in progress when the winning condition was reached.
+    const bool roundIntermission =
+        roundEndTimer > 0.0f &&
+        (currentGameMode == TEAM_VS_TEAM || currentGameMode == BOMB_DEFUSAL);
+    if (roundIntermission) {
+        playerVelocity.x = 0.0f;
+        playerVelocity.z = 0.0f;
+        inp.jumpHeld = false;
+        isPlanting = false;
+        isDefusing = false;
+        plantProgress = 0.0f;
+        defuseProgress = 0.0f;
+        return;
+    }
+
     bool inputProcessed = false;
     
     // Unstuck key (U) - move player to safe center position

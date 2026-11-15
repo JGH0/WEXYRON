@@ -927,6 +927,13 @@ private:
     bool isDefusing; // Whether player is currently defusing
     float plantProgress; // Progress of planting (0 to 3)
     float defuseProgress; // Progress of defusing (0 to 4)
+    /// Server-owned round results are applied once per round (client HUD /
+    /// effects must not fire endRound() again for every periodic state packet).
+    bool serverRoundEnded;
+    int roundWinner;
+    RoundEndReason roundEndReason;
+    /// Authoritative seconds left to plant (from BombStatePacket).
+    float roundTimeLeft;
 
     /// Editor mode (block placement vs shape creation)
     enum EditorMode {
@@ -1136,6 +1143,14 @@ private:
     void renderCrosshair();
     
     /**
+     * @brief Build/clear bomb sites from the current map and game mode.
+     *
+     * Called when a map is installed and when the mode is changed from the
+     * menu, so leaving bomb defusal removes the sites immediately.
+     */
+    void refreshBombSitesForMode();
+
+    /**
      * @brief Render bomb sites and bomb
      */
     void renderBombSites();
@@ -1177,7 +1192,7 @@ private:
      * @brief End current round and prepare for next
      * @param winner Winning team (0 = Team A, 1 = Team B, -1 = draw)
      */
-    void endRound(int winner);
+    void endRound(int winner, RoundEndReason reason = ROUND_END_NONE);
     
     /**
      * @brief Start a new round

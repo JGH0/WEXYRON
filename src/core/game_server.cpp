@@ -174,6 +174,55 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
         }
     };
 
+    networkClient->onBombState = [this](const BombStatePacket& packet) {
+        if (!bombDefusalMode) return;
+
+        // The server owns the bomb. Keep the local HUD/render state in sync;
+        // planting, defusing and the fuse are advanced server-side.
+        bomb.position = glm::vec3(packet.posX, packet.posY, packet.posZ);
+        bomb.planted = packet.planted != 0;
+        bomb.defused = packet.defused != 0;
+        bomb.active = bomb.planted && !bomb.defused && packet.exploded == 0;
+        bomb.plantingTeam = packet.plantingTeam <= 1 ? packet.plantingTeam : bomb.plantingTeam;
+        bomb.plantTime = bomb.planted
+                             ? std::max(0.0f, bomb.explodeTime - packet.timeLeft)
+                             : 0.0f;
+        bomb.defuseProgress = packet.defuseProgress;
+        roundTimeLeft = packet.roundTimeLeft;
+
+        if (packet.roundActive) roundActive = true;
+
+        // Progress bars follow the server's authoritative timers. A human
+        // pressing E only sends the request; the server starts the progress.
+        isPlanting = packet.plantProgress > 0.0f;
+        plantProgress = packet.plantProgress;
+        isDefusing = packet.defuseProgress > 0.0f;
+        defuseProgress = packet.defuseProgress;
+
+        if (packet.roundActive != 0 && packet.roundEnded == 0) {
+            // New/reset round: re-arm the one-shot round-result guard.
+            serverRoundEnded = false;
+            roundWinner = -1;
+            roundEndReason = ROUND_END_NONE;
+        }
+
+        // The server is authoritative for round wins: bomb explosion/defuse,
+        // team elimination, or the plant-time running out. Apply each result
+        // once, no matter how many periodic state packets repeat it.
+        if (packet.roundEnded != 0 && !serverRoundEnded) {
+            serverRoundEnded = true;
+            roundWinner = packet.roundWinner <= 1 ? packet.roundWinner : -1;
+            roundEndReason = static_cast<RoundEndReason>(packet.roundEndReason);
+            roundActive = false;
+            endRound(roundWinner, roundEndReason);
+        }
+
+        // The server already swapped the attacking team for the next round in
+        // the same packet that ended this one. Apply it *after* endRound()
+        // (which swaps locally) so the two do not cancel each other out.
+        if (packet.attackingTeam <= 1) attackingTeam = packet.attackingTeam;
+    };
+
     networkClient->onMapPlayerCount = [this](const MapPlayerCountPacket& packet) {
         // Update map player counts. Use the dynamic map list so newly added
         // maps (and custom.map) are shown too, not just a fixed six-map set.
@@ -235,6 +284,10 @@ void Game::disconnectFromServer() {
     }
     multiplayerMode = false;
     playerCount = 0;
+    serverRoundEnded = false;
+    roundWinner = -1;
+    roundEndReason = ROUND_END_NONE;
+    roundTimeLeft = 0.0f;
 
     // Clear remote players completely
     for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {

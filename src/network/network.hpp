@@ -59,7 +59,25 @@ enum PacketType : uint8_t {
     PACKET_MAP_PLAYER_COUNT = 16,  // Server sending player counts per map
     PACKET_CONNECT_REJECT = 17,    // Server refusing a connection (reason follows)
     PACKET_PLAYER_DAMAGE = 18,     // Client reporting a hit on another player
-    PACKET_ROUND_START = 19        // Round-based client starting the next round
+    PACKET_ROUND_START = 19,       // Round-based client starting the next round
+    PACKET_BOMB_INTERACT = 20,     // Client asking the server to plant / defuse
+    PACKET_BOMB_STATE = 21         // Server-authoritative bomb state for one map
+};
+
+/// Client action in BombInteractPacket.
+enum BombInteractAction : uint8_t {
+    BOMB_INTERACT_PLANT = 1,
+    BOMB_INTERACT_DEFUSE = 2
+};
+
+/// Why the server ended a round (BombStatePacket.roundEndReason).
+enum RoundEndReason : uint8_t {
+    ROUND_END_NONE = 0,
+    ROUND_END_BOMB_EXPLODED = 1,
+    ROUND_END_BOMB_DEFUSED = 2,
+    ROUND_END_ATTACKERS_ELIMINATED = 3,
+    ROUND_END_DEFENDERS_ELIMINATED = 4,
+    ROUND_END_TIME_EXPIRED = 5
 };
 
 /// Why a connection attempt was refused (PACKET_CONNECT_REJECT.reason).
@@ -144,10 +162,40 @@ struct PlayerDamagePacket {
 };
 
 /// A round-based client started the next round. The server uses this to bring
-/// dead bots back at the same time as the human players.
+/// dead bots back at the same time as the human players and to reset the bomb.
 struct RoundStartPacket {
     PacketHeader header;
     uint8_t gameMode;          ///< 1 = teams, 2 = bomb defusal
+    uint8_t attackingTeam;     ///< which team may plant this round
+};
+
+/// Client asks the server to start planting / defusing. The server validates
+/// the team, distance and round state before it begins the progress.
+struct BombInteractPacket {
+    PacketHeader header;
+    uint8_t action;            ///< BombInteractAction
+};
+
+/// Server-authoritative bomb state for a map. Broadcast on changes and a few
+/// times per second so joins and lost packets converge on the same state.
+struct BombStatePacket {
+    PacketHeader header;       ///< clientId == 0 (not tied to one player)
+    float posX, posY, posZ;
+    float timeLeft;            ///< seconds until the bomb explodes (0 when not planted)
+    float plantProgress;       ///< 0 .. plantTime, server-side planting progress
+    float defuseProgress;      ///< 0 .. defuseTime, server-side defusing progress
+    float roundTimeLeft;       ///< seconds left to plant (frozen after planting)
+    uint8_t planted;
+    uint8_t defused;
+    uint8_t exploded;
+    uint8_t roundActive;
+    uint8_t roundEnded;        ///< round outcome is final; clients show end screen
+    uint8_t roundWinner;       ///< 0 = Team A, 1 = Team B, 255 = draw
+    uint8_t roundEndReason;    ///< RoundEndReason
+    uint8_t attackingTeam;
+    uint8_t plantingTeam;      ///< 255 when no bomb has been planted
+    uint8_t siteIndex;         ///< index in the map's bomb-site list (255 = none)
+    uint8_t siteLabel;         ///< 'A' or 'B'
 };
 
 // New player joined
@@ -261,13 +309,18 @@ public:
     std::function<void(uint32_t)> onPlayerLeave;
     std::function<void(const ProjectileSpawnPacket&)> onProjectileSpawn;
     std::function<void(const MapPlayerCountPacket&)> onMapPlayerCount;
+    /// Authoritative bomb state for the map the client is on.
+    std::function<void(const BombStatePacket&)> onBombState;
 
     // Send map change request to server
     void sendMapChange(const std::string& mapName);
 
     /// Tell the server a new round started (round-based modes). Bots are
-    /// revived together with the human players.
-    void sendRoundStart(uint8_t gameMode);
+    /// revived together with the human players and the bomb is reset.
+    void sendRoundStart(uint8_t gameMode, uint8_t attackingTeam);
+
+    /// Ask the server to start planting / defusing the bomb (BombInteractAction).
+    void sendBombInteract(uint8_t action);
 
     // Send a keepalive PING (update() does this on its own every second)
     void sendPing();
@@ -426,8 +479,10 @@ public:
     /// A validated projectile spawn from a client (owner id, packet). The bot
     /// host uses this to simulate flashbang detonations server-side.
     std::function<void(uint32_t, const ProjectileSpawnPacket&)> onProjectileSpawned;
-    /// A client started the next round: map name and game mode.
-    std::function<void(const std::string&, int)> onRoundStarted;
+    /// A client started the next round: map name, game mode and attacking team.
+    std::function<void(const std::string&, int, int)> onRoundStarted;
+    /// A client asked to plant / defuse (validated sender id, action).
+    std::function<void(uint32_t, uint8_t)> onBombInteract;
     
 private:
     socket_t socketFd;

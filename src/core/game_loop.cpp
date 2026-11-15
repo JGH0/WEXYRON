@@ -24,11 +24,21 @@ void Game::update(float deltaTime) {
 
     if (gameState == PLAYING) {
         const bool spectating = spectatorMode && isDead;
+        // Round-end screen: the body is frozen (no movement, jump or shot).
+        const bool roundIntermission =
+            roundEndTimer > 0.0f &&
+            (currentGameMode == TEAM_VS_TEAM || currentGameMode == BOMB_DEFUSAL);
 
         if (spectating) {
             // Dead players fly freely (map-editor style) instead of running
             // gravity/collision on a body that is no longer in the round.
             updateSpectator(deltaTime);
+        } else if (roundIntermission) {
+            playerVelocity = glm::vec3(0.0f);
+            isPlanting = false;
+            isDefusing = false;
+            plantProgress = 0.0f;
+            defuseProgress = 0.0f;
         } else {
             // Update player physics (always run, client controls own movement in multiplayer)
             updatePlayerPhysics(deltaTime);
@@ -73,8 +83,9 @@ void Game::update(float deltaTime) {
             damageEffectTime -= deltaTime;
         }
 
-        // Update bomb in bomb defusal mode
-        updateBomb(deltaTime);
+        // Update bomb in bomb defusal mode (the winner is already decided
+        // while the round-end screen is showing).
+        if (!roundIntermission) updateBomb(deltaTime);
 
     } else if (gameState == DEAD) {
         // Update spectator camera in dead state
@@ -91,8 +102,11 @@ void Game::update(float deltaTime) {
     if (networkClient && networkClient->isConnected() &&
         (gameState == PLAYING || gameState == DEAD)) {
         const bool alive = (gameState == PLAYING) && !isDead && !spectatorMode;
+        const bool roundFrozen =
+            roundEndTimer > 0.0f &&
+            (currentGameMode == TEAM_VS_TEAM || currentGameMode == BOMB_DEFUSAL);
         float moveX = 0.0f, moveZ = 0.0f;
-        if (alive) {
+        if (alive && !roundFrozen) {
             if (glfwGetKey(window, keyBindings.forward) == GLFW_PRESS) {
                 moveX += cos(glm::radians(camera.Yaw));
                 moveZ += sin(glm::radians(camera.Yaw));
@@ -111,8 +125,10 @@ void Game::update(float deltaTime) {
             }
         }
 
-        const bool jump  = alive && glfwGetKey(window, keyBindings.jump) == GLFW_PRESS;
-        const bool shoot = alive && glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+        const bool jump  = alive && !roundFrozen &&
+                           glfwGetKey(window, keyBindings.jump) == GLFW_PRESS;
+        const bool shoot = alive && !roundFrozen &&
+                           glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
 
         // Send eye-level position for projectile spawning (playerPos + eye height)
         const glm::vec3 eyePos = playerPos + glm::vec3(0.0f, 1.6f, 0.0f);

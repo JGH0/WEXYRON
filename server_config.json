@@ -11,7 +11,8 @@
     "defaultMap": "simple.map",
     "allowMapChange": true,
     "friendlyFire": false,
-    "respawnTime": 5.0
+    "respawnTime": 5.0,
+    "roundTime": 115.0
   },
   "bots": {
     "count": 4,

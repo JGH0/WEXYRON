@@ -16,6 +16,7 @@
 #include <cmath>
 #include "../src/network/network.hpp"
 #include "../src/network/server_config.hpp"
+#include "../src/network/server_bomb.hpp"
 #include "../src/network/server_bots.hpp"
 
 NetworkServer* g_server = nullptr;
@@ -151,6 +152,8 @@ int main(int argc, char* argv[]) {
     std::string region = settingString(config, "", "server", "region", "US-East");
     std::string description = settingString(config, "", "server", "description", "Custom game server");
     float timeout = settingFloat(config, "TIMEOUT", "network", "timeout", 10.0f);
+    // Round time to plant the bomb (defenders win when it expires unplanted).
+    float roundTime = settingFloat(config, "ROUND_TIME", "gameplay", "roundTime", 115.0f);
 
     // Bots (server-controlled players).
     int botCount = settingInt(config, "BOTS_COUNT", "bots", "count", 0, &srcBots);
@@ -198,6 +201,7 @@ int main(int argc, char* argv[]) {
     std::cout << "Bots: " << botCount << "   (" << srcBots.origin << ")" << std::endl;
     std::cout << "Bot Accuracy: " << botAccuracy << "   (" << srcBotAccuracy.origin << ")" << std::endl;
     std::cout << "Bots World: " << defaultMap << std::endl;
+    std::cout << "Round Time: " << roundTime << "s" << std::endl;
     std::cout << "Region: " << region << std::endl;
     std::cout << "Description: " << description << std::endl;
     if (configLoaded) {
@@ -213,6 +217,7 @@ int main(int argc, char* argv[]) {
     signal(SIGTERM, signalHandler);
 
     NetworkServer server;
+    ServerBombManager bombManager;   // authoritative bomb state (per map)
     g_server = &server;
     server.setServerName(serverName);
     server.setMaxPlayers(maxPlayers);
@@ -235,7 +240,8 @@ int main(int argc, char* argv[]) {
         std::cout << "[Server] Player " << id << " connected (" << server.getCurrentPlayerCount() << "/" << server.getMaxPlayers() << ")" << std::endl;
     };
 
-    server.onPlayerDisconnect = [&server](uint32_t id) {
+    server.onPlayerDisconnect = [&server, &bombManager](uint32_t id) {
+        bombManager.onPlayerDisconnected(id);
         std::cout << "[Server] " << (server.isBot(id) ? "Bot " : "Player ")
                   << id << " disconnected (" << server.getCurrentPlayerCount() << "/"
                   << server.getMaxPlayers() << ")" << std::endl;
@@ -383,8 +389,37 @@ int main(int argc, char* argv[]) {
         applyDamage(shooterId, hit.header.clientId, static_cast<float>(hit.damage), hit.weaponId);
     };
 
+    // ── Server-authoritative bomb ────────────────────────────────────────────
+    // The client only asks to plant/defuse; the server validates and advances
+    // the bomb, then broadcasts its state to every player on the map. This
+    // also makes the bomb visible to other clients and usable by bots.
+    ServerBombManager::Config bombConfig;
+    bombConfig.mapDirectory = "assets/maps";
+    bombConfig.roundTime = roundTime;
+    bombManager.init(server, bombConfig);
+    bombManager.onDamage = [applyDamage](uint32_t shooterId, uint32_t victimId,
+                                         uint16_t damage, uint8_t weaponId) {
+        applyDamage(shooterId, victimId, static_cast<float>(damage), weaponId);
+    };
+    server.onBombInteract = [&bombManager](uint32_t playerId, uint8_t action) {
+        bombManager.onBombInteract(playerId, action);
+    };
+
     // ── Server bots ──────────────────────────────────────────────────────────
     ServerBotManager botManager;
+    botManager.setBombInfoProvider([&bombManager](const std::string& mapName) {
+        const ServerBombManager::Snapshot bomb = bombManager.snapshot(mapName);
+        ServerBotManager::BombInfo info;
+        info.valid = bomb.valid;
+        info.roundActive = bomb.roundActive;
+        info.planted = bomb.planted;
+        info.defused = bomb.defused;
+        info.exploded = bomb.exploded;
+        info.position = bomb.position;
+        info.plantingTeam = bomb.plantingTeam;
+        info.attackingTeam = bomb.attackingTeam;
+        return info;
+    });
     botManager.onDamage = [applyDamage](uint32_t shooterId, uint32_t victimId,
                                         uint16_t damage, uint8_t weaponId) {
         applyDamage(shooterId, victimId, static_cast<float>(damage), weaponId);
@@ -393,7 +428,9 @@ int main(int argc, char* argv[]) {
                                                const ProjectileSpawnPacket& packet) {
         botManager.onProjectileSpawned(ownerId, packet);
     };
-    server.onRoundStarted = [&botManager](const std::string& mapName, int gameMode) {
+    server.onRoundStarted = [&botManager, &bombManager](const std::string& mapName,
+                                                        int gameMode, int attackingTeam) {
+        bombManager.onRoundStart(mapName, gameMode, attackingTeam);
         botManager.startRound(mapName, gameMode);
     };
 
@@ -424,13 +461,19 @@ int main(int argc, char* argv[]) {
         
         server.update(deltaTime);
 
-        // Bots run their own AI / movement / respawn bookkeeping.
+        // The bomb is authoritative: advance plant/defuse timers, explode /
+        // defuse, and broadcast the new state before the bots make decisions
+        // from it. Bots auto-interact once they reach a site / the bomb.
+        bombManager.update(deltaTime, server);
+
+        // Bots run their own AI / movement / respawn bookkeeping. In round
+        // based modes dead bots stay dead until the next explicit round start.
         botManager.update(deltaTime, server);
 
         // Respawn dead players after a short delay in deathmatch. Round-based
         // games (team vs team / bomb defusal) keep the body dead and invisible
         // until the client starts the next round and reports itself alive.
-        // Bots are excluded: the bot manager respawns them on every mode.
+        // Bots are excluded: the bot manager owns their respawns.
         for (ServerPlayer* player : server.getPlayers()) {
             if (player->isBot) continue;
             if (!player->isDead) {
