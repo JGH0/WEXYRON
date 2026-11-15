@@ -21,6 +21,7 @@
 #include <cstring>
 #include "camera.hpp"
 #include "renderer.hpp"
+#include "humanoid.hpp"
 #include "map.hpp"
 #include "map_loader.hpp"
 #include "thread_pool.hpp"
@@ -665,12 +666,14 @@ private:
         float lifetime;
     };
 
-    /// Enemy structure for AI opponents (simplified for debugging)
+    /// Enemy structure for AI opponents (practice targets)
     struct Enemy {
-        float x, y, z;  // Position
+        float x, y, z;  // feet position
         float health;
         bool active;
         bool alive;
+        float yaw = 0.0f;               ///< facing direction (camera convention)
+        humanoid::Anim anim;            ///< walk / flinch / attack animation
     };
     
     /// Explosion structure for grenade effects
@@ -839,6 +842,7 @@ private:
         bool isDead;
         bool active;
         uint8_t team = 0; ///< server-assigned team (0 = Team A, 1 = Team B)
+        humanoid::Anim anim; ///< walk / air / flinch / shooting animation
     };
     static const int MAX_REMOTE_PLAYERS = 16;
     RemotePlayer remotePlayers[MAX_REMOTE_PLAYERS];
@@ -907,6 +911,8 @@ private:
 
     void checkExplosionRemoteCollision(const glm::vec3& position, float radius, float damage);
     void renderRemotePlayers();
+    /// Advance remote players' walk / air / hit / shooting animation state.
+    void updateRemoteAnimations(float deltaTime);
     
     /// Server connection
     std::string serverAddress;

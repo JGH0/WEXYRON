@@ -78,8 +78,13 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
             for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
                 if (!remotePlayers[i].active || remotePlayers[i].id == packet.playerId) {
                     // A (re)appearing player starts its bookkeeping clean.
-                    if (!remotePlayers[i].active || remotePlayers[i].id != packet.playerId) {
+                    const bool isNew = !remotePlayers[i].active ||
+                                       remotePlayers[i].id != packet.playerId;
+                    const float oldHealth = isNew ? packet.health
+                                                  : remotePlayers[i].health;
+                    if (isNew) {
                         pvpRemotes_[i] = PvpRemote{};
+                        remotePlayers[i].anim = humanoid::Anim{};
                     }
                     remotePlayers[i].id       = packet.playerId;
                     remotePlayers[i].position = glm::vec3(packet.posX, packet.posY, packet.posZ);
@@ -90,6 +95,10 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
                     remotePlayers[i].isDead   = packet.isDead;
                     remotePlayers[i].active   = true;
                     remotePlayers[i].team     = packet.team;
+                    // A health drop caused by anyone's shot flinches the body.
+                    if (!isNew && packet.health < oldHealth - 0.5f) {
+                        remotePlayers[i].anim.damage = 1.0f;
+                    }
                     // The server confirmed health got through: no need to
                     // re-send the damage we reported for this player.
                     pvpRemotes_[i].damageSent = 0;
@@ -134,6 +143,7 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
                 remotePlayers[i].isDead         = false;
                 remotePlayers[i].active         = true;
                 remotePlayers[i].team           = packet.team;
+                remotePlayers[i].anim           = humanoid::Anim{};
                 playerCount++; // Update player count
                 break;
             }
@@ -171,6 +181,13 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
                 packet.ownerId,
                 packet.projectileType // Use the projectile type from the packet
             );
+            // Show the owner firing: their next body frame raises both arms.
+            for (int i = 0; i < MAX_REMOTE_PLAYERS; ++i) {
+                if (remotePlayers[i].active && remotePlayers[i].id == packet.ownerId) {
+                    remotePlayers[i].anim.shoot = 1.0f;
+                    break;
+                }
+            }
         }
     };
 

@@ -900,16 +900,6 @@ void Game::updateProjectiles(float deltaTime) {
 void Game::createSimpleExplosion(glm::vec3 position, const Projectile* source) {
     std::cout << "BOOM! Grenade exploded at: (" << position.x << ", " << position.y << ", " << position.z << ")" << std::endl;
 
-    // Grenades are thrown from eye level, so the impact point has the height
-    // of the throw vector, not of the victim. A blast only counts as "on the
-    // body" when it is within the body's height range AND horizontally close to
-    // it; otherwise the real distance (used below) decides the damage.
-    glm::vec3 boxMin, boxMax;
-    bodyBox(playerPos, boxMin, boxMax);
-    const bool insideBodyHeight = position.y >= boxMin.y && position.y <= boxMax.y;
-    const glm::vec2 horizontal = glm::vec2(position.x, position.z) - glm::vec2(playerPos.x, playerPos.z);
-    const bool detonatedOnBody = insideBodyHeight && glm::length(horizontal) <= bodyWidth * 0.5f + 0.25f;
-
     // 3D boom at the blast position (attenuated/panned from the camera).
     playSoundEffect("explosion", position);
     
@@ -934,20 +924,18 @@ void Game::createSimpleExplosion(glm::vec3 position, const Projectile* source) {
     model = glm::scale(model, glm::vec3(2.0f)); // Big 2-unit cube
     renderer.drawCube(model, glm::vec3(1.0f, 0.0f, 0.0f)); // RED color for explosion
     
-    // Damage nearby enemies
+    // Damage nearby enemies. Explosions have no distance falloff: touching the
+    // blast (within its radius) always deals the same damage.
     const float explosionRadius = explosionRadius_;
-    const float explosionDamage = 75.0f;
-    
     for (int j = 0; j < MAX_ENEMIES; j++) {
         if (enemies[j].active && enemies[j].alive) {
             glm::vec3 enemyFeet(enemies[j].x, enemies[j].y, enemies[j].z);
             float distance = distanceToBody(position, enemyFeet);
             if (distance < explosionRadius) {
-                // Damage enemy based on distance
-                float damageMultiplier = 1.0f - (distance / explosionRadius);
-                enemies[j].health -= explosionDamage * 0.75f * damageMultiplier;
+                enemies[j].health -= explosionDamage_;
+                enemies[j].anim.damage = 1.0f;
                 std::cout << "Enemy hit by explosion! Health: " << enemies[j].health << std::endl;
-                
+
                 if (enemies[j].health <= 0.0f) {
                     enemies[j].alive = false;
                     enemies[j].active = false;
@@ -967,12 +955,12 @@ void Game::createSimpleExplosion(glm::vec3 position, const Projectile* source) {
         return;
     }
 
-    // Damage the local player if too close. A grenade that detonated on a
-    // body hits that body directly, whichever end of it the blast is at.
-    const float playerDistance = detonatedOnBody ? 0.0f : distanceToBody(position, playerPos);
+    // Damage the local player if the blast reaches the body. No falloff: a hit
+    // always deals the same explosion damage (only the hit zone is ignored,
+    // because an explosion has no "head shot").
+    const float playerDistance = distanceToBody(position, playerPos);
     if (playerDistance < explosionRadius) {
-        const float damageMultiplier = 1.0f - (playerDistance / explosionRadius);
-        applyPlayerDamage(explosionDamage_ * damageMultiplier);
+        applyPlayerDamage(explosionDamage_);
         damageEffectTime = std::max(damageEffectTime, 1.5f); // Longer screen effect
     }
 
@@ -1308,16 +1296,23 @@ void Game::spawnEnemy(const glm::vec3& position) {
     // Find an inactive enemy slot
     for (int i = 0; i < MAX_ENEMIES; i++) {
         if (!enemies[i].active) {
-            // Initialize enemy with simplified struct
-            enemies[i].x = position.x;
-            enemies[i].y = position.y;
-            enemies[i].z = position.z;
+            // Spawn with the feet on a real surface: the body model and its
+            // hit zones start at the feet, so a target buried in the floor
+            // would be invisible and impossible to headshot.
+            glm::vec3 feet = position;
+            placeAtSafePosition(feet);
+
+            enemies[i].x = feet.x;
+            enemies[i].y = feet.y;
+            enemies[i].z = feet.z;
             enemies[i].health = 50.0f;
             enemies[i].active = true;
             enemies[i].alive = true;
+            enemies[i].yaw = 0.0f;
+            enemies[i].anim = humanoid::Anim{};
             activeEnemies++;
 
-            std::cout << "Spawned enemy at: (" << position.x << ", " << position.y << ", " << position.z << ")" << std::endl;
+            std::cout << "Spawned enemy at: (" << enemies[i].x << ", " << enemies[i].y << ", " << enemies[i].z << ")" << std::endl;
             break;
         }
     }
@@ -1333,11 +1328,24 @@ bool Game::checkProjectileEnemyCollision(Projectile& projectile) {
             // Enemies stand with their feet on their spawn position.
             glm::vec3 enemyFeet(enemies[i].x, enemies[i].y, enemies[i].z);
             if (pointHitsBody(projectile.position, enemyFeet, bodyHitSlack)) {
-                // Damage the enemy
-                enemies[i].health -= 25.0f; // 25 damage per hit
+                // Grenades/flashbangs do not deal their bullet damage on
+                // contact: the throwable branch detonates them, and the blast
+                // applies its own fixed damage.
+                if (projectile.type == 1 || projectile.type == 2) {
+                    return true;
+                }
+
+                const humanoid::HitZone zone =
+                    humanoid::hitZone(projectile.position, enemyFeet, enemies[i].yaw);
+                const float damage = humanoid::projectileBaseDamage(projectile.type) *
+                                     humanoid::damageMultiplier(zone);
+                enemies[i].health -= damage;
+                enemies[i].anim.damage = 1.0f;
                 playSoundEffect("hit_flesh", projectile.position, 0.8f);
-                std::cout << "Enemy hit! Health: " << enemies[i].health << std::endl;
-                
+                std::cout << "Enemy hit (" << humanoid::hitZoneName(zone) << ", x"
+                          << humanoid::damageMultiplier(zone) << ")! Health: "
+                          << enemies[i].health << std::endl;
+
                 if (enemies[i].health <= 0.0f) {
                     enemies[i].alive = false;
                     enemies[i].active = false;
@@ -1345,6 +1353,10 @@ bool Game::checkProjectileEnemyCollision(Projectile& projectile) {
                     kills_++;
                     std::cout << "Enemy defeated!" << std::endl;
                 }
+                // Bullets stop at the body they hit (throwables are handled
+                // above and must stay active until the caller detonates them).
+                projectile.active = false;
+                activeProjectiles--;
                 return true; // Hit detected
             }
         }
@@ -1364,6 +1376,8 @@ void Game::checkEnemyPlayerCollision(float deltaTime) {
             glm::vec3 enemyPos(enemies[i].x, enemies[i].y, enemies[i].z);
             float distance = glm::length(enemyPos - playerPos);
             if (distance < 1.5f) { // Damage radius of 1.5 units
+                // The target swipes at us: reuse the shooting pose as a punch.
+                enemies[i].anim.shoot = 1.0f;
                 // Damage player
                 playerHealth -= 10.0f; // 10 damage per hit
                 playerDamageCooldown = 1.0f; // 1 second cooldown
@@ -1391,15 +1405,25 @@ void Game::updateEnemies(float deltaTime) {
             glm::vec3 enemyPos(enemies[i].x, enemies[i].y, enemies[i].z);
             glm::vec3 direction = playerPos - enemyPos;
             float distance = glm::length(direction);
-            
+
+            float vx = 0.0f, vy = 0.0f, vz = 0.0f;
             if (distance > 0.1f) { // Avoid division by zero
                 // Normalize direction and move towards player (2.0 units per second)
                 direction = glm::normalize(direction);
-                glm::vec3 velocity = direction * 2.0f * deltaTime;
-                enemies[i].x += velocity.x;
-                enemies[i].y += velocity.y;
-                enemies[i].z += velocity.z;
+                vx = direction.x * 2.0f;
+                vy = direction.y * 2.0f;
+                vz = direction.z * 2.0f;
+                enemies[i].x += vx * deltaTime;
+                enemies[i].y += vy * deltaTime;
+                enemies[i].z += vz * deltaTime;
+                // Face the direction of travel (camera-yaw convention).
+                if (std::abs(vx) + std::abs(vz) > 0.01f) {
+                    enemies[i].yaw = glm::degrees(std::atan2(vz, vx));
+                }
             }
+            // Practice targets walk on the floor; the animation still reacts to
+            // their own movement speed and direction.
+            enemies[i].anim.advance(deltaTime, vx, 0.0f, vz, true);
         }
     }
 }
@@ -1514,12 +1538,13 @@ bool Game::checkProjectileRemoteCollision(Projectile& projectile) {
             if (d < nearestDistance) { nearest = &other; nearestDistance = d; nearestIndex = j; }
         }
 
-        float damage = 0.0f;
-        switch (projectile.type) {
-            case 0:  damage = 25.0f; break;   // pistol
-            case 3:  damage = 10.0f; break;   // shotgun pellet
-            default: damage = 20.0f; break;
-        }
+        // Hit zone: head 2x, torso 1x, arms/legs/feet 0.5x. The multiplier is
+        // applied by the shooter, so the server and the victim receive the
+        // final damage exactly as resolved here.
+        const humanoid::HitZone zone =
+            humanoid::hitZone(projectile.position, nearest->position, nearest->yaw);
+        const float damage = humanoid::projectileBaseDamage(projectile.type) *
+                             humanoid::damageMultiplier(zone);
 
         // A shotgun blast hits one target with several pellets per frame: the
         // pellets are separate damage, not a duplicate hit.
@@ -1532,9 +1557,12 @@ bool Game::checkProjectileRemoteCollision(Projectile& projectile) {
         book.damageSent += static_cast<int>(damage);
         book.pending = true;
         book.sentAt  = std::chrono::steady_clock::now();
+        nearest->anim.damage = 1.0f;
 
         playSoundEffect("hit_flesh", projectile.position, 0.8f);
-        std::cout << "Hit remote player " << nearest->id << " for " << damage << std::endl;
+        std::cout << "Hit remote player " << nearest->id << " (" << humanoid::hitZoneName(zone)
+                  << ", x" << humanoid::damageMultiplier(zone) << ")"
+                  << " for " << damage << std::endl;
 
         projectile.active = false;
         activeProjectiles--;
@@ -1557,7 +1585,9 @@ void Game::checkExplosionRemoteCollision(const glm::vec3& position, float radius
         float distance = distanceToBody(position, remote.position);
         if (distance >= radius) continue;
 
-        const float amount = damage * (1.0f - distance / radius);
+        // Explosions do not fall off with distance: any body the blast reaches
+        // takes the full explosion damage.
+        const float amount = damage;
         networkClient->sendPlayerDamage(remote.id, static_cast<uint16_t>(amount), 1);
         PvpRemote& book = pvpRemotes_[i];
         book.lastHitTime = static_cast<float>(glfwGetTime());
@@ -1614,6 +1644,31 @@ void Game::updateRemotePlayerDeath(float deltaTime) {
     }
 }
 
+void Game::updateRemoteAnimations(float deltaTime) {
+    for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
+        RemotePlayer& remote = remotePlayers[i];
+        if (!remote.active) continue;
+        // Positions arrive at the packet rate, not every frame. A change in
+        // height marks a jump/fall and keeps the air pose alive briefly, so
+        // walking on an elevated platform is not mistaken for falling (the
+        // server's velY is not reliable ground information there).
+        if (!remote.anim.hasLastY) {
+            remote.anim.lastY = remote.position.y;
+            remote.anim.hasLastY = true;
+        }
+        const float dy = remote.position.y - remote.anim.lastY;
+        remote.anim.lastY = remote.position.y;
+        if (std::abs(dy) > 0.002f) {
+            remote.anim.airHold = 0.25f;
+        } else {
+            remote.anim.airHold = std::max(0.0f, remote.anim.airHold - deltaTime);
+        }
+        const bool grounded = remote.anim.airHold <= 0.0f;
+        remote.anim.advance(deltaTime, remote.velocity.x, remote.velocity.y,
+                            remote.velocity.z, grounded);
+    }
+}
+
 void Game::renderRemotePlayers() {
     for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
         RemotePlayer& remote = remotePlayers[i];
@@ -1633,26 +1688,18 @@ void Game::renderRemotePlayers() {
             remote.renderPosition.y = remote.position.y;
         }
 
-        // The body is drawn with the same box the hits are checked against,
-        // centred on the box (feet position + half the body height).
-        glm::vec3 boxMin, boxMax;
-        bodyBox(remote.renderPosition, boxMin, boxMax);
-        const glm::vec3 centre = (boxMin + boxMax) * 0.5f;
-        const glm::vec3 size   = boxMax - boxMin;
-
-        glm::mat4 model = glm::mat4(1.0f);
-        model = glm::translate(model, centre);
-        model = glm::scale(model, size);
         // Team modes: teammates are blue, enemies red. Free-for-all modes
-        // have no teammates, so everybody else is red. (Previously the colour
-        // came from the client id, which looked random on every screen.)
+        // have no teammates, so everybody else is red.
         const bool teamMode = (currentGameMode == TEAM_VS_TEAM ||
                                currentGameMode == BOMB_DEFUSAL);
         const bool teammate = teamMode && (remote.team == playerTeam);
         const glm::vec3 color = teammate
                               ? glm::vec3(0.15f, 0.4f, 1.0f)   // blue
                               : glm::vec3(1.0f, 0.15f, 0.15f); // red
-        renderer.drawCube(model, color);
+
+        const float healthPct = glm::clamp(remote.health / 100.0f, 0.0f, 1.0f);
+        humanoid::render(renderer, remote.renderPosition, remote.yaw, color,
+                         healthPct, remote.anim, remote.pitch, true);
     }
 }
 
@@ -1889,10 +1936,9 @@ void Game::endRound(int winner, RoundEndReason reason) {
     if (!serverOwnedBlast && bombExploded) {
         float distToBomb = glm::length(playerPos - bomb.position);
         if (distToBomb < 12.0f) {
-            float damage = (12.0f - distToBomb) / 12.0f * 100.0f;
-            // damagePlayer() already resolves death; don't force it twice
-            // (that used to skip the server notification / spectator setup).
-            damagePlayer(damage);
+            // A blast that reaches the body always deals the full damage; it
+            // does not taper off towards the edge of the radius.
+            damagePlayer(100.0f);
         }
     }
 }

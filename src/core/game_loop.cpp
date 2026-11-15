@@ -158,6 +158,7 @@ void Game::update(float deltaTime) {
         checkProjectilePlayerCollision();
         checkPlayerPlayerCollision();
         updateRemotePlayerDeath(deltaTime);
+        updateRemoteAnimations(deltaTime);
     }
 }
 

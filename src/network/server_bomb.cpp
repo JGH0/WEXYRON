@@ -367,12 +367,10 @@ void ServerBombManager::explode(MapState& state, const std::string& mapName,
             if (!sameMap(*victim, mapName)) continue;
             const float distance = bots::distanceToBody(state.position, victim->position);
             if (distance >= radius) continue;
-            const float falloff = 1.0f - distance / radius;
-            const uint16_t damage = static_cast<uint16_t>(std::max(1.0f, 100.0f * falloff));
-            // Weapon id 0 = the unclamped (100) damage path in server_main;
-            // a blast grenade id would be capped at 75 and leave a player at
-            // the centre alive while the client-side explosion killed them.
-            onDamage(0, victim->id, damage, 0);
+            // No distance falloff: any body inside the blast radius takes the
+            // same damage. Weapon id 0 = the unclamped (100) damage path in
+            // server_main.
+            onDamage(0, victim->id, 100, 0);
         }
     }
 

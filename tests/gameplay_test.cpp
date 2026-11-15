@@ -68,13 +68,14 @@ int main() {
 
     // ── Grenade blast ────────────────────────────────────────────────────────
     // A fresh life on a flat map; the blast is placed at measured distances
-    // from the player. Damage falls off with the distance to the body edge.
+    // from the player. Explosions have no distance falloff: every body the
+    // blast reaches takes the full explosion damage (65).
     struct Case { float distance; float minDamage; float maxDamage; const char* label; };
     const Case cases[] = {
-        {0.0f, 55.0f, 70.0f, "on the feet"},
-        {1.0f, 45.0f, 56.0f, "1 unit away"},
-        {2.0f,  0.0f, 40.0f, "2 units away"},          // mostly survives
-        {3.0f,  0.0f, 25.0f, "3 units away"},          // grazing
+        {0.0f, 65.0f, 65.0f, "on the feet"},
+        {1.0f, 65.0f, 65.0f, "1 unit away"},
+        {2.0f, 65.0f, 65.0f, "2 units away"},
+        {3.0f, 65.0f, 65.0f, "3 units away"},
         {4.5f,  0.0f,  0.0f, "out of range"},
         {6.0f,  0.0f,  0.0f, "across the room"},
     };

@@ -15,7 +15,7 @@
     "roundTime": 115.0
   },
   "bots": {
-    "count": 40,
+    "count": 4,
     "accuracy": 0.7
   },
   "network": {

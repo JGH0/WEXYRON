@@ -516,8 +516,8 @@ void ServerBotManager::detonate(const ServerProjectile& projectile, NetworkServe
         const float distance = bots::distanceToBody(projectile.position, victim->position);
         if (distance >= kGrenadeRadius) continue;
 
-        const float falloff = 1.0f - distance / kGrenadeRadius;
-        const uint16_t damage = static_cast<uint16_t>(std::max(1.0f, kGrenadeDamage * falloff));
+        // Explosions have no distance falloff.
+        const uint16_t damage = static_cast<uint16_t>(std::max(1.0f, kGrenadeDamage));
         if (onDamage) onDamage(owner->id, victim->id, damage, 1);
     }
 }

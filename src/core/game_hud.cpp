@@ -22,11 +22,14 @@ void Game::renderFlashbangEffect() {
 void Game::renderEnemies() {
     for (int i = 0; i < MAX_ENEMIES; i++) {
         if (enemies[i].active && enemies[i].alive) {
-            // Create a larger red cube for the enemy
-            glm::mat4 model = glm::mat4(1.0f);
-            model = glm::translate(model, glm::vec3(enemies[i].x, enemies[i].y, enemies[i].z));
-            model = glm::scale(model, glm::vec3(0.8f, 1.2f, 0.8f)); // Much larger size
-            renderer.drawCube(model, glm::vec3(1.0f, 0.0f, 0.0f)); // Red color
+            // Practice targets use the same blocky body as remote players.
+            // Their health is 50, so it drives the :) -> :| -> :( face too.
+            const float healthPct = glm::clamp(enemies[i].health / 50.0f, 0.0f, 1.0f);
+            humanoid::render(renderer,
+                             glm::vec3(enemies[i].x, enemies[i].y, enemies[i].z),
+                             enemies[i].yaw,
+                             glm::vec3(0.95f, 0.18f, 0.15f),
+                             healthPct, enemies[i].anim, 0.0f, false);
         }
     }
 }
