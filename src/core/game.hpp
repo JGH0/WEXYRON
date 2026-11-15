@@ -216,6 +216,10 @@ public:
     /// Renderer diagnostics for the rendering test: map draws in the last frame.
     int debugWorldDrawsLastFrame() const { return renderer.debugWorldDrawsLastFrame(); }
     size_t debugMapInstancesLastFrame() const { return renderer.debugMapInstancesLastFrame(); }
+    /// Faces submitted for the held weapon viewmodel in the last frame.
+    size_t debugViewmodelInstancesLastFrame() const {
+        return renderer.debugViewmodelInstancesLastFrame();
+    }
     /// Press jump exactly like a key press does: a fresh press that starts the
     /// jump (a test helper, so several jumps can follow each other).
     void debugJumpForTest() { isJumping = false; handleJump(); }
@@ -223,6 +227,20 @@ public:
     void debugExplodeForTest(const glm::vec3& at);
     /// Current player health (grenade test).
     float debugPlayerHealth() const { return playerHealth; }
+    /// HUD match statistics (tests can verify kills/deaths and round counters).
+    int debugKills() const { return kills_; }
+    int debugDeaths() const { return deaths_; }
+    int debugRoundNumber() const { return roundNumber_; }
+    /// Current held weapon id (see Game::WeaponType).
+    int debugCurrentWeapon() const { return static_cast<int>(currentWeapon); }
+    /// Ammo of the held weapon (weapon-system value, not the legacy mirror).
+    int debugCurrentAmmo() const {
+        return currentWeaponInstance ? currentWeaponInstance->getAmmo() : 0;
+    }
+    /// Switch the held weapon like pressing 1-4 (viewmodel screenshots/tests).
+    void debugSelectWeaponForTest(int index) {
+        switchWeapon(static_cast<WeaponType>(index & 3));
+    }
     /// Current bindings (key test).
     int debugJumpKey() const { return keyBindings.jump; }
     int debugGrenadeKey() const { return keyBindings.grenade; }
@@ -727,6 +745,27 @@ private:
     float playerMaxHealth;
     float playerDamageCooldown;
 
+    // ── Match statistics (HUD) ─────────────────────────────────────────────
+    /// Kills credited to the local player: practice bots plus remote players
+    /// this client finished off. Reset when a map/match is installed.
+    int kills_ = 0;
+    /// Deaths of the local player in the current match.
+    int deaths_ = 0;
+    /// Round currently being played (1-based) and round wins per team.
+    int roundNumber_ = 1;
+    int teamAScore_ = 0;
+    int teamBScore_ = 0;
+
+    // ── First-person weapon viewmodel ──────────────────────────────────────
+    float weaponBobTime_ = 0.0f;     ///< walk-cycle phase
+    float weaponBobAmount_ = 0.0f;   ///< 0..1, eased by movement speed
+    float weaponRecoil_ = 0.0f;      ///< 0..1 kick that decays after a shot
+    float weaponSwitch_ = 0.0f;      ///< 0..1 lower-the-gun switch animation
+    float weaponSwayX_ = 0.0f;       ///< smoothed mouse-look sway
+    float weaponSwayY_ = 0.0f;
+    float lastViewYaw_ = 0.0f;       ///< previous frame's look direction
+    float lastViewPitch_ = 0.0f;
+
     // ── Player body ───────────────────────────────────────────────────────────
     // Player positions (local, remote, bots) are feet positions; the camera
     // sits eyeHeight above them and the body box spans the whole character.
@@ -1154,6 +1193,27 @@ private:
      * @brief Render bomb sites and bomb
      */
     void renderBombSites();
+
+    /**
+     * @brief Render the always-on gameplay HUD.
+     *
+     * Health panel, weapon + ammo, round details and the local kill/death
+     * counter. Drawn in every gameplay mode; the bomb-defusal HUD on top only
+     * adds mode-specific elements.
+     */
+    void renderGameHUD();
+
+    /**
+     * @brief Render the first-person weapon viewmodel.
+     *
+     * The weapon is built from a handful of boxes in camera space and drawn in
+     * its own pass (after the world, with a fresh depth buffer), so it never
+     * clips into walls and keeps a consistent size on screen.
+     */
+    void renderWeaponViewmodel();
+
+    /// Advance weapon bob/sway/recoil and the weapon-switch animation.
+    void updateWeaponViewmodel(float deltaTime);
 
     /**
      * @brief Render bomb defusal HUD (team, bomb status, progress)

@@ -192,25 +192,402 @@ void Game::renderBombSites() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Always-on gameplay HUD
+// ---------------------------------------------------------------------------
+void Game::renderGameHUD() {
+    if (!window) return;
+
+    UIHelpers::setProjection(renderer, window);
+    const UIHelpers::UIBounds b = UIHelpers::getBounds(window);
+    const float left = b.left, right = b.right, top = b.top, bottom = b.bottom;
+
+    // Solid (not blended) panels: the UI compositor paints opaque elements
+    // before translucent ones, so a translucent panel would cover the text
+    // submitted after it. Dark solid panels keep every label readable.
+    auto panel = [&](float cx, float cy, float w, float h, const glm::vec3& color) {
+        glm::mat4 m = glm::translate(glm::mat4(1.0f), glm::vec3(cx, cy, 0.0f));
+        m = glm::scale(m, glm::vec3(w, h, 1.0f));
+        renderer.drawColoredQuad(m, color);
+    };
+    auto textRight = [&](const std::string& text, float rightX, float y,
+                         float scale, const glm::vec3& color) {
+        renderer.drawTextColored(text, rightX - renderer.getTextWidth(text, scale),
+                                 y, scale, color);
+    };
+
+    const glm::vec3 kPanel(0.045f, 0.055f, 0.070f);
+    const glm::vec3 kPanelLine(0.12f, 0.14f, 0.17f);
+    const glm::vec3 kLabel(0.72f, 0.76f, 0.82f);
+    const glm::vec3 kGold(1.0f, 0.82f, 0.30f);
+    const glm::vec3 kGreen(0.25f, 0.90f, 0.35f);
+    const glm::vec3 kRed(0.95f, 0.22f, 0.22f);
+
+    // ── Health (bottom-left) ────────────────────────────────────────────────
+    const float healthPct = glm::clamp(
+        playerMaxHealth > 0.0f ? playerHealth / playerMaxHealth : 0.0f, 0.0f, 1.0f);
+    glm::vec3 healthColor = (healthPct > 0.5f)
+        ? glm::mix(glm::vec3(1.0f, 0.80f, 0.10f), kGreen, (healthPct - 0.5f) * 2.0f)
+        : glm::mix(kRed, glm::vec3(1.0f, 0.80f, 0.10f), healthPct * 2.0f);
+
+    const float healthW = 220.0f, healthH = 66.0f;
+    const float healthX = left + 14.0f;
+    const float healthY = bottom - healthH - 14.0f;
+    panel(healthX + healthW * 0.5f, healthY + healthH * 0.5f, healthW, healthH, kPanel);
+    panel(healthX + healthW * 0.5f, healthY + 1.0f, healthW, 2.0f, healthColor * 0.9f);
+
+    // Small cross icon next to the label.
+    panel(healthX + 19.0f, healthY + 17.0f, 13.0f, 4.0f, healthColor);
+    panel(healthX + 19.0f, healthY + 17.0f, 4.0f, 13.0f, healthColor);
+
+    renderer.drawTextColored("HEALTH", healthX + 34.0f, healthY + 8.0f, 0.34f, kLabel);
+    char healthBuf[24];
+    snprintf(healthBuf, sizeof(healthBuf), "%d", static_cast<int>(std::ceil(playerHealth)));
+    textRight(healthBuf, healthX + healthW - 12.0f, healthY + 2.0f, 0.62f, healthColor);
+
+    const float healthBarX = healthX + 10.0f;
+    const float healthBarY = healthY + 40.0f;
+    const float healthBarW = healthW - 20.0f;
+    const float healthBarH = 14.0f;
+    panel(healthBarX + healthBarW * 0.5f, healthBarY + healthBarH * 0.5f,
+          healthBarW, healthBarH, glm::vec3(0.08f, 0.09f, 0.11f));
+    if (healthPct > 0.0f) {
+        const float fillW = (healthBarW - 4.0f) * healthPct;
+        panel(healthBarX + 2.0f + fillW * 0.5f,
+              healthBarY + 2.0f + (healthBarH - 4.0f) * 0.5f,
+              fillW, healthBarH - 4.0f, healthColor);
+    }
+
+    // ── Weapon + ammo (bottom-right) ────────────────────────────────────────
+    static const char* const kWeaponNames[4] = {"PISTOL", "SHOTGUN", "GRENADE", "FLASHBANG"};
+    static const char* const kSlotNames[4]   = {"PISTOL", "SHOTGUN", "GRENADE", "FLASH"};
+    const int weaponIndex = static_cast<int>(currentWeapon) & 3;
+
+    const float weaponW = 250.0f, weaponH = 112.0f;
+    const float weaponX = right - weaponW - 14.0f;
+    const float weaponY = bottom - weaponH - 14.0f;
+    panel(weaponX + weaponW * 0.5f, weaponY + weaponH * 0.5f, weaponW, weaponH, kPanel);
+    panel(weaponX + 1.0f, weaponY + weaponH * 0.5f, 2.0f, weaponH - 16.0f, kGold);
+
+    renderer.drawTextFit(kWeaponNames[weaponIndex], weaponX + 12.0f, weaponY + 7.0f,
+                         weaponW - 24.0f, 0.46f);
+
+    std::string ammoStr;
+    if (infiniteAmmoMode) {
+        ammoStr = "INF";
+    } else if (weaponIndex == static_cast<int>(PISTOL) ||
+               weaponIndex == static_cast<int>(PUMP_SHOTGUN)) {
+        ammoStr = std::to_string(currentWeaponInstance ? currentWeaponInstance->getAmmo() : 0);
+    } else {
+        ammoStr = "x" + std::to_string(currentWeaponInstance ? currentWeaponInstance->getAmmo() : 0);
+    }
+    renderer.drawTextColored("AMMO", weaponX + 12.0f, weaponY + 33.0f, 0.32f, kLabel);
+    textRight(ammoStr, weaponX + weaponW - 12.0f, weaponY + 23.0f, 0.90f, kGold);
+
+    // 2 x 2 weapon slots (the keys 1-4 work exactly like this list).
+    for (int i = 0; i < 4; ++i) {
+        const float slotW = 112.0f, slotH = 18.0f;
+        const float slotX = weaponX + 10.0f + static_cast<float>(i % 2) * 116.0f;
+        const float slotY = weaponY + 68.0f + static_cast<float>(i / 2) * 20.0f;
+        const bool selected = (i == weaponIndex);
+        panel(slotX + slotW * 0.5f, slotY + slotH * 0.5f, slotW, slotH,
+              selected ? glm::vec3(0.30f, 0.24f, 0.07f) : kPanelLine);
+        if (selected) {
+            panel(slotX + 2.0f, slotY + slotH * 0.5f, 3.0f, slotH - 4.0f, kGold);
+        }
+        char slotBuf[32];
+        snprintf(slotBuf, sizeof(slotBuf), "%d %s", i + 1, kSlotNames[i]);
+        renderer.drawTextFit(slotBuf, slotX + 8.0f, slotY + 4.0f, slotW - 14.0f,
+                             selected ? 0.33f : 0.30f);
+    }
+
+    // ── Kills / deaths (top-right) ──────────────────────────────────────────
+    const float statsW = 180.0f, statsH = 58.0f;
+    const float statsX = right - statsW - 14.0f;
+    const float statsY = top + 12.0f;
+    panel(statsX + statsW * 0.5f, statsY + statsH * 0.5f, statsW, statsH, kPanel);
+    panel(statsX + statsW * 0.5f, statsY + statsH - 1.0f, statsW, 2.0f,
+          glm::vec3(0.18f, 0.20f, 0.24f));
+
+    renderer.drawTextColored("KILLS", statsX + 12.0f, statsY + 7.0f, 0.30f, kLabel);
+    renderer.drawTextColored("DEATHS", statsX + statsW * 0.5f + 8.0f,
+                             statsY + 7.0f, 0.30f, kLabel);
+    char killsBuf[16], deathsBuf[16];
+    snprintf(killsBuf, sizeof(killsBuf), "%d", kills_);
+    snprintf(deathsBuf, sizeof(deathsBuf), "%d", deaths_);
+    renderer.drawTextColored(killsBuf, statsX + 12.0f, statsY + 22.0f, 0.75f, kGreen);
+    renderer.drawTextColored(deathsBuf, statsX + statsW * 0.5f + 8.0f,
+                             statsY + 22.0f, 0.75f, kRed);
+
+    // ── Round details (top-centre) ──────────────────────────────────────────
+    const bool roundBased = (currentGameMode == TEAM_VS_TEAM ||
+                             currentGameMode == BOMB_DEFUSAL);
+    const float roundW = 270.0f, roundH = 72.0f;
+    const float roundX = (left + right) * 0.5f - roundW * 0.5f;
+    const float roundY = top + 12.0f;
+    panel(roundX + roundW * 0.5f, roundY + roundH * 0.5f, roundW, roundH, kPanel);
+    panel(roundX + roundW * 0.5f, roundY + 1.0f, roundW, 2.0f,
+          roundBased ? kGold * 0.8f : glm::vec3(0.35f, 0.55f, 0.85f));
+
+    std::string header;
+    std::string timerText;
+    std::string detail;
+    glm::vec3 timerColor(1.0f);
+
+    if (roundBased) {
+        header = "ROUND " + std::to_string(roundNumber_);
+
+        if (bombDefusalMode && bomb.planted && !bomb.defused) {
+            const int secs = static_cast<int>(std::ceil(
+                std::max(0.0f, bomb.explodeTime - bomb.plantTime)));
+            timerText = "BOMB " + std::to_string(secs);
+            timerColor = (secs <= 5) ? kRed : glm::vec3(1.0f, 0.85f, 0.20f);
+        } else {
+            int totalSeconds;
+            if (networkClient && networkClient->isConnected()) {
+                totalSeconds = static_cast<int>(std::ceil(std::max(0.0f, roundTimeLeft)));
+            } else {
+                totalSeconds = static_cast<int>(roundTime);
+            }
+            char clock[16];
+            snprintf(clock, sizeof(clock), "%02d:%02d",
+                     totalSeconds / 60, totalSeconds % 60);
+            timerText = clock;
+            if (networkClient && networkClient->isConnected() && totalSeconds <= 10) {
+                timerColor = kRed;
+            }
+        }
+
+        char scoreBuf[64];
+        snprintf(scoreBuf, sizeof(scoreBuf), "A %d   :   %d B",
+                 teamAScore_, teamBScore_);
+        detail = scoreBuf;
+    } else {
+        int totalSeconds = static_cast<int>(roundTime);
+        char clock[16];
+        snprintf(clock, sizeof(clock), "%02d:%02d",
+                 totalSeconds / 60, totalSeconds % 60);
+        header = "DEATHMATCH";
+        timerText = clock;
+        if (multiplayerMode) {
+            detail = "PLAYERS " + std::to_string(std::max(1, playerCount));
+        } else {
+            detail = "SOLO PRACTICE";
+        }
+    }
+
+    renderer.drawTextCentered(header, roundX + roundW * 0.5f, roundY + 6.0f, 0.38f);
+    renderer.drawTextCenteredColored(timerText, roundX + roundW * 0.5f,
+                                     roundY + 22.0f, 0.62f, timerColor,
+                                     roundW - 20.0f);
+    renderer.drawTextCenteredColored(detail, roundX + roundW * 0.5f,
+                                     roundY + 50.0f, 0.34f, kLabel,
+                                     roundW - 20.0f);
+}
+
+// ---------------------------------------------------------------------------
+// First-person weapon viewmodel
+// ---------------------------------------------------------------------------
+void Game::updateWeaponViewmodel(float deltaTime) {
+    if (deltaTime <= 0.0f) return;
+
+    // Recoil kicks up immediately and settles over a fraction of a second.
+    if (weaponRecoil_ > 0.0f) {
+        weaponRecoil_ = std::max(0.0f, weaponRecoil_ - deltaTime * 7.0f);
+    }
+    // Switching weapons lowers the old gun and raises the new one.
+    if (weaponSwitch_ > 0.0f) {
+        weaponSwitch_ = std::max(0.0f, weaponSwitch_ - deltaTime * 4.5f);
+    }
+
+    // Walk bob follows the actual horizontal speed, and only while grounded.
+    const float speed = std::sqrt(playerVelocity.x * playerVelocity.x +
+                                  playerVelocity.z * playerVelocity.z);
+    const bool movingOnGround = !spectatorMode && !isDead && speed > 0.15f && isOnGround();
+    const float bobTarget = movingOnGround ? std::min(1.0f, speed / 5.0f) : 0.0f;
+    weaponBobAmount_ += (bobTarget - weaponBobAmount_) *
+                        std::min(1.0f, deltaTime * 8.0f);
+    if (weaponBobAmount_ > 0.01f) {
+        weaponBobTime_ += deltaTime * std::max(0.8f, speed) * 1.7f;
+    }
+
+    // Look sway: a small lag opposite to the mouse movement. Wrapping the yaw
+    // delta keeps a turn across the ±180° seam from snapping the gun sideways.
+    float dyaw = camera.Yaw - lastViewYaw_;
+    while (dyaw > 180.0f) dyaw -= 360.0f;
+    while (dyaw < -180.0f) dyaw += 360.0f;
+    const float dpitch = camera.Pitch - lastViewPitch_;
+
+    const float swayTargetX = glm::clamp(-dyaw * 0.010f, -0.045f, 0.045f);
+    const float swayTargetY = glm::clamp(dpitch * 0.006f, -0.030f, 0.030f);
+    const float swayBlend = std::min(1.0f, deltaTime * 10.0f);
+    weaponSwayX_ += (swayTargetX - weaponSwayX_) * swayBlend;
+    weaponSwayY_ += (swayTargetY - weaponSwayY_) * swayBlend;
+
+    lastViewYaw_ = camera.Yaw;
+    lastViewPitch_ = camera.Pitch;
+}
+
+void Game::renderWeaponViewmodel() {
+    if (!window || spectatorMode || isDead || !currentWeaponInstance) return;
+
+    int fbW = 800, fbH = 600;
+    glfwGetFramebufferSize(window, &fbW, &fbH);
+    if (fbW <= 0) fbW = 800;
+    if (fbH <= 0) fbH = 600;
+    const float aspect = static_cast<float>(fbW) / static_cast<float>(fbH);
+
+    // The weapon is submitted directly in view space (camera at the origin,
+    // looking down -Z), so the view matrix is the identity: the gun stays
+    // glued to the eye no matter where the player looks. A slightly wider FOV
+    // than the world keeps it from filling the screen.
+    const glm::mat4 view = glm::mat4(1.0f);
+    const glm::mat4 projection = glm::perspective(glm::radians(58.0f), aspect, 0.01f, 10.0f);
+    renderer.setViewmodelCamera(view, projection);
+
+    // Animation: bob, look sway, recoil and weapon-switch drop.
+    const float bobX = std::sin(weaponBobTime_) * 0.012f * weaponBobAmount_;
+    const float bobY = -std::abs(std::cos(weaponBobTime_)) * 0.012f * weaponBobAmount_;
+    // The gun sits in the lower-right quadrant but above the weapon HUD panel,
+    // so both stay readable. The slight inward yaw shows the side of the model
+    // instead of looking straight down the barrel.
+    const glm::vec3 base(
+        0.23f + bobX + weaponSwayX_,
+        -0.11f + bobY + weaponSwayY_ - weaponSwitch_ * 0.18f,
+        -0.64f + weaponRecoil_ * 0.07f);
+
+    glm::mat4 model = glm::translate(glm::mat4(1.0f), base);
+    model = glm::rotate(model, glm::radians(18.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+    model = glm::rotate(model, glm::radians(weaponRecoil_ * 8.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+    model = glm::rotate(model, glm::radians(weaponRecoil_ * 2.5f), glm::vec3(0.0f, 0.0f, 1.0f));
+    // The model is authored roughly at world scale; shrink it as a whole so it
+    // reads as a held first-person weapon instead of a wall-sized prop.
+    model = glm::scale(model, glm::vec3(0.55f));
+
+    // Add one box in weapon-local coordinates. `rotation` is applied around the
+    // part's own centre (grips/stock angles).
+    auto add = [&](const glm::vec3& center, const glm::vec3& size,
+                   const glm::vec3& color, const glm::vec3& rotation = glm::vec3(0.0f)) {
+        glm::mat4 local = glm::translate(model, center);
+        if (rotation.x != 0.0f) local = glm::rotate(local, glm::radians(rotation.x), glm::vec3(1, 0, 0));
+        if (rotation.y != 0.0f) local = glm::rotate(local, glm::radians(rotation.y), glm::vec3(0, 1, 0));
+        if (rotation.z != 0.0f) local = glm::rotate(local, glm::radians(rotation.z), glm::vec3(0, 0, 1));
+        const glm::vec3 ax = glm::vec3(local[0]) * size.x;
+        const glm::vec3 ay = glm::vec3(local[1]) * size.y;
+        const glm::vec3 az = glm::vec3(local[2]) * size.z;
+        renderer.submitViewBoxOriented(glm::vec3(local[3]), ax, ay, az, color);
+    };
+
+    // Hands / sleeve are shared by every weapon so the gun is actually held.
+    // A dark glove reads better than a large skin-coloured block at this scale.
+    const glm::vec3 glove(0.32f, 0.26f, 0.20f);
+    const glm::vec3 sleeve(0.16f, 0.21f, 0.17f);
+    auto addHands = [&](bool longArm) {
+        add(glm::vec3(0.040f, -0.095f, 0.030f), glm::vec3(0.085f, 0.115f, 0.105f),
+            glove, glm::vec3(-12.0f, 0.0f, -4.0f));
+        // Fingers curling around the front of the grip.
+        add(glm::vec3(-0.012f, -0.070f, 0.005f), glm::vec3(0.034f, 0.055f, 0.075f),
+            glove, glm::vec3(-18.0f, 0.0f, 0.0f));
+        add(glm::vec3(0.060f, longArm ? -0.170f : -0.160f, 0.105f),
+            glm::vec3(0.115f, 0.110f, longArm ? 0.20f : 0.15f),
+            sleeve, glm::vec3(-8.0f, 0.0f, -3.0f));
+    };
+
+    switch (currentWeapon) {
+        case PISTOL: {
+            const glm::vec3 metal(0.40f, 0.42f, 0.46f);
+            const glm::vec3 dark(0.20f, 0.20f, 0.22f);
+            add(glm::vec3(0.0f, 0.025f, -0.16f), glm::vec3(0.075f, 0.065f, 0.36f), metal);
+            add(glm::vec3(0.0f, -0.015f, -0.05f), glm::vec3(0.070f, 0.045f, 0.20f), dark);
+            add(glm::vec3(0.0f, 0.025f, -0.365f), glm::vec3(0.040f, 0.040f, 0.070f), dark);
+            add(glm::vec3(0.0f, -0.100f, 0.035f), glm::vec3(0.078f, 0.180f, 0.090f),
+                glm::vec3(0.24f, 0.20f, 0.14f), glm::vec3(-12.0f, 0.0f, 0.0f));
+            add(glm::vec3(0.0f, -0.105f, 0.040f), glm::vec3(0.060f, 0.115f, 0.055f),
+                glm::vec3(0.42f, 0.29f, 0.15f), glm::vec3(-12.0f, 0.0f, 0.0f));
+            add(glm::vec3(0.0f, 0.070f, -0.315f), glm::vec3(0.014f, 0.020f, 0.022f),
+                glm::vec3(0.62f));
+            add(glm::vec3(0.0f, 0.070f, 0.005f), glm::vec3(0.050f, 0.018f, 0.020f),
+                glm::vec3(0.50f));
+            add(glm::vec3(0.0f, 0.060f, 0.060f), glm::vec3(0.028f, 0.035f, 0.028f), dark);
+            // Trigger guard.
+            add(glm::vec3(0.0f, -0.050f, -0.020f), glm::vec3(0.055f, 0.012f, 0.095f), dark);
+            add(glm::vec3(0.0f, -0.072f, -0.065f), glm::vec3(0.050f, 0.032f, 0.012f), dark);
+            addHands(false);
+            if (weaponRecoil_ > 0.40f) {
+                add(glm::vec3(0.0f, 0.025f, -0.43f), glm::vec3(0.10f, 0.10f, 0.12f),
+                    glm::vec3(1.0f, 0.78f, 0.22f));
+            }
+            break;
+        }
+        case PUMP_SHOTGUN: {
+            const glm::vec3 metal(0.22f, 0.23f, 0.25f);
+            const glm::vec3 dark(0.10f, 0.10f, 0.11f);
+            const glm::vec3 wood(0.38f, 0.23f, 0.12f);
+            add(glm::vec3(0.0f, 0.030f, -0.31f), glm::vec3(0.055f, 0.055f, 0.62f), metal);
+            add(glm::vec3(0.0f, -0.005f, -0.28f), glm::vec3(0.045f, 0.045f, 0.52f), dark);
+            add(glm::vec3(0.0f, 0.020f, -0.02f), glm::vec3(0.090f, 0.090f, 0.28f), metal);
+            add(glm::vec3(0.0f, 0.000f, -0.20f), glm::vec3(0.100f, 0.075f, 0.20f), wood);
+            add(glm::vec3(0.0f, -0.020f, 0.160f), glm::vec3(0.085f, 0.120f, 0.30f),
+                wood, glm::vec3(8.0f, 0.0f, 0.0f));
+            add(glm::vec3(0.0f, -0.100f, 0.030f), glm::vec3(0.070f, 0.160f, 0.090f),
+                wood, glm::vec3(-12.0f, 0.0f, 0.0f));
+            add(glm::vec3(0.052f, 0.030f, -0.04f), glm::vec3(0.010f, 0.030f, 0.10f), dark);
+            add(glm::vec3(0.0f, 0.065f, -0.590f), glm::vec3(0.018f, 0.018f, 0.018f),
+                glm::vec3(1.0f, 0.80f, 0.20f));
+            add(glm::vec3(0.0f, -0.050f, -0.010f), glm::vec3(0.055f, 0.012f, 0.095f), dark);
+            add(glm::vec3(0.0f, -0.072f, -0.055f), glm::vec3(0.050f, 0.032f, 0.012f), dark);
+            addHands(true);
+            if (weaponRecoil_ > 0.55f) {
+                add(glm::vec3(0.0f, 0.030f, -0.66f), glm::vec3(0.14f, 0.14f, 0.16f),
+                    glm::vec3(1.0f, 0.72f, 0.16f));
+            }
+            break;
+        }
+        case GRENADE: {
+            add(glm::vec3(0.0f, -0.010f, -0.060f), glm::vec3(0.100f, 0.130f, 0.100f),
+                glm::vec3(0.20f, 0.35f, 0.15f));
+            add(glm::vec3(0.0f, 0.070f, -0.060f), glm::vec3(0.060f, 0.035f, 0.060f),
+                glm::vec3(0.35f, 0.36f, 0.38f));
+            add(glm::vec3(0.045f, 0.045f, -0.060f), glm::vec3(0.018f, 0.018f, 0.090f),
+                glm::vec3(0.55f, 0.56f, 0.58f));
+            add(glm::vec3(0.078f, 0.055f, -0.060f), glm::vec3(0.014f, 0.014f, 0.060f),
+                glm::vec3(0.62f));
+            add(glm::vec3(0.040f, 0.055f, -0.010f), glm::vec3(0.030f, 0.012f, 0.012f),
+                glm::vec3(0.62f));
+            addHands(false);
+            break;
+        }
+        case FLASHBANG: {
+            add(glm::vec3(0.0f, -0.010f, -0.060f), glm::vec3(0.075f, 0.140f, 0.075f),
+                glm::vec3(0.58f, 0.59f, 0.62f));
+            add(glm::vec3(0.0f, 0.015f, -0.060f), glm::vec3(0.080f, 0.022f, 0.080f),
+                glm::vec3(0.25f, 0.26f, 0.28f));
+            add(glm::vec3(0.0f, -0.040f, -0.060f), glm::vec3(0.080f, 0.018f, 0.080f),
+                glm::vec3(0.25f, 0.26f, 0.28f));
+            add(glm::vec3(0.0f, 0.078f, -0.060f), glm::vec3(0.040f, 0.040f, 0.040f),
+                glm::vec3(0.35f, 0.36f, 0.38f));
+            add(glm::vec3(0.045f, 0.052f, -0.060f), glm::vec3(0.016f, 0.016f, 0.085f),
+                glm::vec3(0.55f));
+            add(glm::vec3(0.075f, 0.062f, -0.060f), glm::vec3(0.013f, 0.013f, 0.055f),
+                glm::vec3(0.62f));
+            addHands(false);
+            break;
+        }
+    }
+}
+
 void Game::renderBombDefusalHUD() {
     if (!bombDefusalMode) return;
     
     UIHelpers::setProjection(renderer, window);
     auto _b = UIHelpers::getBounds(window);
     float left=_b.left, right=_b.right, top=_b.top, bottom=_b.bottom;
-    double currentTime = glfwGetTime();
 
-    // Bottom HUD row: keep every label above the screen edge and use one
-    // compact text size (the old 0.8-1.0 scale ran off the bottom / looked
-    // oversized on 16:9 windows).
-    const float hudTextScale = 0.55f;
-    const float hudTextY = bottom - 42.0f;
-    const float hudBoxY = bottom - 29.0f;
-    const float hudBoxHeight = 30.0f;
-    
-    // UI is drawn as blended overlays by the batched renderer; no raw GL
-    // state changes are needed here anymore.
-    
+    // The general HUD owns the bottom-left health panel, the bottom-right
+    // weapon panel, the top-right K/D counters and the top-centre round
+    // panel. The mode-specific elements here use the remaining corners so
+    // nothing overlaps at any aspect ratio.
+
     // ── Team + Role indicator (top-left corner) ──
     {
         std::string teamName;
@@ -222,7 +599,7 @@ void Game::renderBombDefusalHUD() {
             teamName = "TEAM B  [";
             teamColor = glm::vec3(0.2f, 0.4f, 1.0f);
         }
-        
+
         // Role string
         std::string roleStr;
         if (isDead || spectatorMode) {
@@ -233,53 +610,25 @@ void Game::renderBombDefusalHUD() {
             roleStr = "DEFENDING";
         }
         teamName += roleStr + "]";
-        
+
+        const float teamWidth = 250.0f;
+        const float teamHeight = 30.0f;
+        const float teamX = left + 14.0f;
+        const float teamY = top + 12.0f;
+
         // Background bar
         glm::mat4 teamBg = glm::mat4(1.0f);
-        teamBg = glm::translate(teamBg, glm::vec3(left + 127.0f, hudBoxY, 0.0f));
-        teamBg = glm::scale(teamBg, glm::vec3(250.0f, hudBoxHeight, 1.0f));
+        teamBg = glm::translate(teamBg, glm::vec3(teamX + teamWidth * 0.5f,
+                                                 teamY + teamHeight * 0.5f, 0.0f));
+        teamBg = glm::scale(teamBg, glm::vec3(teamWidth, teamHeight, 1.0f));
         glm::vec3 bgColor = teamColor * 0.3f;
         bgColor += glm::vec3(0.1f); // Slight brightness
         renderer.drawColoredQuad(teamBg, bgColor);
-        
+
         // Team text
-        renderer.drawTextFit(teamName, left + 10.0f, hudTextY, 235.0f, hudTextScale);
+        renderer.drawTextFit(teamName, teamX + 10.0f, teamY + 6.0f, teamWidth - 20.0f, 0.45f);
     }
-    
-    // ── Bomb status indicator (top-center) ──
-    if (bomb.planted && !bomb.defused) {
-        float bombTimeLeft = bomb.explodeTime - bomb.plantTime;
-        
-        // Draw status box background
-        glm::mat4 bombStatusBg = glm::mat4(1.0f);
-        bombStatusBg = glm::translate(bombStatusBg, glm::vec3(right - 102.0f, hudBoxY, 0.0f));
-        bombStatusBg = glm::scale(bombStatusBg, glm::vec3(200.0f, hudBoxHeight, 1.0f));
-        renderer.drawColoredQuad(bombStatusBg, glm::vec3(0.4f, 0.0f, 0.0f));
-        
-        // Timer text with color based on remaining time
-        glm::vec3 timerColor = (bombTimeLeft < 5.0f)
-            ? glm::vec3(1.0f, 0.2f, 0.2f)  // Red when < 5s
-            : glm::vec3(1.0f, 0.8f, 0.2f); // Yellow otherwise
-        
-        char bombStatus[32];
-        snprintf(bombStatus, sizeof(bombStatus), "BOMB  %.0f", bombTimeLeft);
-        renderer.drawTextFit(bombStatus, right - 196.0f, hudTextY, 188.0f, hudTextScale);
-        
-        // Bomb icon (small blinking square)
-        float blink = static_cast<float>((sin(currentTime * 6.0f) + 1.0f) * 0.5f);
-        glm::mat4 bombIcon = glm::mat4(1.0f);
-        bombIcon = glm::translate(bombIcon, glm::vec3(right - 12.0f, hudBoxY, 0.0f));
-        bombIcon = glm::scale(bombIcon, glm::vec3(8.0f, 8.0f, 1.0f));
-        renderer.drawColoredQuad(bombIcon, timerColor * (0.5f + blink * 0.5f));
-    } else if (bomb.defused) {
-        // Show "DEFUSED" notification
-        glm::mat4 defusedBg = glm::mat4(1.0f);
-        defusedBg = glm::translate(defusedBg, glm::vec3(right - 102.0f, hudBoxY, 0.0f));
-        defusedBg = glm::scale(defusedBg, glm::vec3(200.0f, hudBoxHeight, 1.0f));
-        renderer.drawColoredQuad(defusedBg, glm::vec3(0.0f, 0.3f, 0.0f));
-        renderer.drawTextFit("BOMB DEFUSED!", right - 196.0f, hudTextY, 188.0f, hudTextScale);
-    }
-    
+
     // ── Round end overlay ──
     if (roundEndTimer > 0.0f) {
         // Semi-transparent dark overlay
@@ -341,23 +690,6 @@ void Game::renderBombDefusalHUD() {
         renderer.drawTextCenteredColored(countdownMsg, centreX, centreY + 58.0f,
                                          0.6f, glm::vec3(0.85f),
                                          (right - left) * 0.55f);
-    }
-    
-    // ── Round timer (top-center) ──
-    // Multiplayer uses the server's countdown to plant; singleplayer keeps
-    // showing elapsed round time.
-    if (roundActive && !bomb.planted) {
-        char roundTimeStr[16];
-        int totalSeconds;
-        if (networkClient && networkClient->isConnected()) {
-            totalSeconds = static_cast<int>(ceilf(std::max(0.0f, roundTimeLeft)));
-        } else {
-            totalSeconds = static_cast<int>(roundTime);
-        }
-        int mins = totalSeconds / 60;
-        int secs = totalSeconds % 60;
-        snprintf(roundTimeStr, sizeof(roundTimeStr), "%02d:%02d", mins, secs);
-        renderer.drawTextCentered(roundTimeStr, (left + right) * 0.5f, hudTextY, 0.6f);
     }
     
     // ── Planting / Defusing progress bar (center of screen) ──
@@ -431,14 +763,14 @@ void Game::renderBombDefusalHUD() {
             if (nearestSite >= 0 && minDist > 5.0f && !isDead) {
                 char distStr[32];
                 snprintf(distStr, sizeof(distStr), "Site %c  %.0fm", bombSites[nearestSite].label, minDist);
-                renderer.drawText(distStr, left + 10.0f, bottom - 66.0f, 0.55f);
+                renderer.drawText(distStr, left + 14.0f, bottom - 104.0f, 0.5f);
             }
         } else if (bomb.planted && !bomb.defused && !isDead) {
             float dist = glm::length(playerPos - bomb.position);
             if (dist > 3.0f) {
                 char bombDistStr[32];
                 snprintf(bombDistStr, sizeof(bombDistStr), "Bomb %.0fm", dist);
-                renderer.drawText(bombDistStr, left + 10.0f, bottom - 66.0f, 0.55f);
+                renderer.drawText(bombDistStr, left + 14.0f, bottom - 104.0f, 0.5f);
             }
         }
     }

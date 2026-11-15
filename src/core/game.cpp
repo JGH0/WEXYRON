@@ -680,6 +680,15 @@ void Game::installMap(std::unique_ptr<Map> loaded) {
 }
 
 void Game::refreshBombSitesForMode() {
+    // A mode change (or a freshly installed map) starts a fresh match: clear
+    // the HUD statistics and round bookkeeping together with the bomb state.
+    kills_ = 0;
+    deaths_ = 0;
+    roundNumber_ = 1;
+    teamAScore_ = 0;
+    teamBScore_ = 0;
+    roundTime = 0.0f;
+
     // Changing mode must not leave a planted/defusing bomb or its sites behind.
     isPlanting = false;
     isDefusing = false;
@@ -705,6 +714,13 @@ void Game::refreshBombSitesForMode() {
         roundActive = false;
         roundEndTimer = 0.0f;
         return;
+    }
+
+    // Local round modes have no server sending the round clock. Start the
+    // round here so the HUD timer runs and round end -> next round works. On a
+    // live server the authoritative BombStatePacket decides instead.
+    if (!(networkClient && networkClient->isConnected())) {
+        roundActive = true;
     }
 
     // Load the current map's authored bomb sites.
@@ -943,6 +959,12 @@ void Game::resetGame() {
     shotgunCooldown  = 0.0f;
     grenadeCooldown  = 0.0f;
     flashbangCooldown= 0.0f;
+    // Fresh viewmodel pose: a spawn is not a weapon switch mid-aim.
+    weaponRecoil_    = 0.0f;
+    weaponSwitch_    = 1.0f;
+    weaponBobAmount_ = 0.0f;
+    weaponSwayX_     = 0.0f;
+    weaponSwayY_     = 0.0f;
 
     // Ammo
     pistolAmmo    = 999;

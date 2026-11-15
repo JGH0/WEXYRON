@@ -314,6 +314,7 @@ void Game::reportLocalDamage(float damage, uint8_t weaponId) {
 void Game::dieLocally() {
     if (isDead) return;
     isDead = true;
+    deaths_++;
     playerVelocity = glm::vec3(0.0f);
     // A dying player cannot finish planting/defusing.
     isPlanting = false;
@@ -488,6 +489,13 @@ bool Game::createProjectile(const glm::vec3& position, const glm::vec3& velocity
 void Game::shoot() {
     if (currentWeaponInstance && currentWeaponInstance->canShoot()) {
         currentWeaponInstance->shoot(this);
+        // Weapon viewmodel kick: pistols snap a little, the pump shotgun kicks
+        // hard, throwables barely move the hand.
+        float kick = 0.45f;
+        if (currentWeapon == PUMP_SHOTGUN)      kick = 0.95f;
+        else if (currentWeapon == GRENADE ||
+                 currentWeapon == FLASHBANG)    kick = 0.25f;
+        weaponRecoil_ = std::min(1.0f, weaponRecoil_ + kick);
     }
 }
 
@@ -500,6 +508,7 @@ void Game::switchWeapon(WeaponType weapon) {
     }
 
     currentWeapon = weapon;
+    weaponSwitch_ = 1.0f;   // lower the old gun / raise the new one
 
     switch (weapon) {
         case PISTOL:
@@ -943,6 +952,7 @@ void Game::createSimpleExplosion(glm::vec3 position, const Projectile* source) {
                     enemies[j].alive = false;
                     enemies[j].active = false;
                     activeEnemies--;
+                    kills_++;
                     std::cout << "Enemy killed by explosion!" << std::endl;
                 }
             }
@@ -1332,6 +1342,7 @@ bool Game::checkProjectileEnemyCollision(Projectile& projectile) {
                     enemies[i].alive = false;
                     enemies[i].active = false;
                     activeEnemies--;
+                    kills_++;
                     std::cout << "Enemy defeated!" << std::endl;
                 }
                 return true; // Hit detected
@@ -1362,16 +1373,10 @@ void Game::checkEnemyPlayerCollision(float deltaTime) {
                 
                 if (playerHealth <= 0.0f && !isDead) {
                     playerHealth = 0.0f;
-                    isDead = true;
-                    playSoundEffect("player_death", playerPos + glm::vec3(0.0f, 1.6f, 0.0f));
-                    
-                    if (bombDefusalMode) {
-                        spectatorMode = true;
-                        std::cout << "Player died! Entering spectator mode." << std::endl;
-                    } else {
-                        gameState = DEAD;
-                    }
-                    std::cout << "Player defeated!" << std::endl;
+                    // One shared death path: it plays the sound, enters
+                    // spectator mode in round modes, reports the death to the
+                    // server and updates the HUD death counter.
+                    dieLocally();
                 }
                 break; // Only one enemy can damage per frame
             }
@@ -1555,6 +1560,7 @@ void Game::checkExplosionRemoteCollision(const glm::vec3& position, float radius
         const float amount = damage * (1.0f - distance / radius);
         networkClient->sendPlayerDamage(remote.id, static_cast<uint16_t>(amount), 1);
         PvpRemote& book = pvpRemotes_[i];
+        book.lastHitTime = static_cast<float>(glfwGetTime());
         book.health = std::max(0.0f, book.health - amount);
         book.damageSent += static_cast<int>(amount);
         book.pending = true;
@@ -1581,7 +1587,14 @@ void Game::updateRemotePlayerDeath(float deltaTime) {
 
         if (remote.isDead) {
             // The server has killed this player: everything we claimed is
-            // settled.
+            // settled. If one of our hits landed shortly before the death,
+            // credit the kill on the local HUD (the server has no scoreboard
+            // yet; this is the shooter's view of the exchange).
+            const float sinceHit = static_cast<float>(glfwGetTime()) - book.lastHitTime;
+            if (book.lastHitTime > 0.0f && sinceHit >= 0.0f && sinceHit < 3.0f) {
+                kills_++;
+                std::cout << "Player " << remote.id << " eliminated - kill credited" << std::endl;
+            }
             book = PvpRemote{};
             continue;
         }
@@ -1647,6 +1660,10 @@ void Game::renderRemotePlayers() {
 void Game::updateBomb(float deltaTime) {
     if (!bombDefusalMode) return;
 
+    // Elapsed round time drives the HUD in local play (and the server-owned
+    // path keeps it in sync as a fallback between state packets).
+    if (roundActive) roundTime += deltaTime;
+
     // Multiplayer: the dedicated server owns planting, defusing, the fuse and
     // the round result (see ServerBombManager). The client only advances the
     // visual countdown between state packets and plays the beeps; it must not
@@ -1654,7 +1671,6 @@ void Game::updateBomb(float deltaTime) {
     const bool serverOwned = networkClient && networkClient->isConnected();
     if (serverOwned) {
         if (roundActive) {
-            roundTime += deltaTime;
             // The server broadcasts the authoritative clock; interpolate
             // between packets for a smooth HUD. Once planted, the bomb timer
             // replaces it.
@@ -1807,6 +1823,8 @@ void Game::endRound(int winner, RoundEndReason reason) {
     roundWinner = winner;
     roundEndReason = reason;
     roundEndTimer = 4.0f; // 4 second delay before next round
+    if (winner == 0)      teamAScore_++;
+    else if (winner == 1) teamBScore_++;
     playUiSound("round_end");
     
     if (winner == 0) {
@@ -1891,6 +1909,7 @@ void Game::updateRoundEndTimer(float deltaTime) {
 void Game::startRound() {
     roundActive = true;
     roundTime = 0.0f;
+    roundNumber_++;
     teamADeaths = 0;
     teamBDeaths = 0;
     

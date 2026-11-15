@@ -93,6 +93,23 @@ public:
     /// Drawn last, blended, with depth testing off.
     void submitOverlay(const glm::vec3& color, float alpha);
 
+    // ── First-person viewmodel ───────────────────────────────────────────────
+
+    /// Set the camera used for the viewmodel pass. Boxes are submitted in view
+    /// space (the game passes an identity view), and this camera may use its
+    /// own near plane / FOV independent of the world camera.
+    void setViewmodelCamera(const glm::mat4& view, const glm::mat4& projection);
+
+    /// Submit an axis-aligned box in viewmodel (camera) space.
+    void submitViewBox(const glm::vec3& center, const glm::vec3& size,
+                       const glm::vec3& color);
+
+    /// Submit an oriented box in viewmodel space. `axisX/Y/Z` are the full
+    /// edge vectors, so the box can be rotated around any of its own axes.
+    void submitViewBoxOriented(const glm::vec3& center,
+                               const glm::vec3& axisX, const glm::vec3& axisY,
+                               const glm::vec3& axisZ, const glm::vec3& color);
+
     /// Flush all queued instances to the GPU. Call once at the end of a frame.
     void endFrame();
 
@@ -215,7 +232,8 @@ private:
     enum BatchId {
         WORLD_OPAQUE = 0,
         WORLD_ALPHA,
-        UI_SCRATCH,    ///< rebuilt per UI slot in drawUi()
+        WORLD_VIEWMODEL, ///< held weapon, drawn after the world into cleared depth
+        UI_SCRATCH,      ///< rebuilt per UI slot in drawUi()
         BATCH_COUNT
     };
 
@@ -276,6 +294,8 @@ private:
     glm::mat4 projection_{1.0f};
     glm::mat4 worldView_{1.0f};          ///< last 3D camera view
     glm::mat4 worldProjection_{1.0f};    ///< last 3D camera projection
+    glm::mat4 viewmodelView_{1.0f};      ///< camera basis for the held weapon
+    glm::mat4 viewmodelProjection_{1.0f};
 
     std::vector<int> mapTextureLayers_;
     std::vector<std::pair<unsigned int, int>> glTextureLayers_; ///< GL texture id -> array layer
@@ -303,6 +323,7 @@ private:
     glm::vec3 lastUiExtent_{800.0f, 600.0f, 1.0f}; ///< ortho canvas size for overlays
     int worldDrawsThisFrame_ = 0;      ///< map batch draws in the current frame
     size_t mapInstancesLastFrame_ = 0; ///< map batch size at frame end
+    size_t viewmodelInstancesLastFrame_ = 0; ///< held-weapon faces submitted
 
 public:
     /// How many times the map batch was drawn during the last frame. It must be
@@ -310,6 +331,9 @@ public:
     int debugWorldDrawsLastFrame() const { return worldDrawsThisFrame_; }
     /// The map batch instance count at the end of the last frame.
     size_t debugMapInstancesLastFrame() const { return mapInstancesLastFrame_; }
+    /// Faces submitted for the first-person weapon in the last frame (0 when
+    /// no viewmodel was drawn).
+    size_t debugViewmodelInstancesLastFrame() const { return viewmodelInstancesLastFrame_; }
 };
 
 #endif // RENDERER_HPP

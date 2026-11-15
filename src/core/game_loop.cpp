@@ -23,6 +23,10 @@ void Game::update(float deltaTime) {
     updateAudio(deltaTime);
 
     if (gameState == PLAYING) {
+        // Deathmatch has no round cycle; the HUD shows elapsed match time.
+        // Round modes advance their own clock in updateBomb().
+        if (currentGameMode == DEATHMATCH) roundTime += deltaTime;
+
         const bool spectating = spectatorMode && isDead;
         // Round-end screen: the body is frozen (no movement, jump or shot).
         const bool roundIntermission =
@@ -77,6 +81,10 @@ void Game::update(float deltaTime) {
 
         // Update flashbang effect
         updateFlashbangEffect(deltaTime);
+
+        // Weapon bob / sway / recoil animation (kept running between rounds so
+        // the gun settles instead of freezing mid-kick).
+        updateWeaponViewmodel(deltaTime);
 
         // Update damage effect
         if (damageEffectTime > 0.0f) {
@@ -246,6 +254,9 @@ void Game::render() {
             renderRemotePlayers();
         }
 
+        // First-person weapon (its own pass, after the world)
+        if (!spectatorMode && !isDead) renderWeaponViewmodel();
+
         // Render crosshair
         if (!spectatorMode) renderCrosshair();
 
@@ -257,6 +268,9 @@ void Game::render() {
 
         // Render flashbang effect
         renderFlashbangEffect();
+
+        // Always-on gameplay HUD (health, weapon/ammo, round, K/D)
+        renderGameHUD();
 
         // Render bomb defusal HUD (team, bomb timer, progress)
         renderBombDefusalHUD();

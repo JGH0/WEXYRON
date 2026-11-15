@@ -209,6 +209,10 @@ static void runMenuTest(Game& game, const char* script) {
             // Start a real single-player match on this map (screenshot aid).
             game.debugStartMapForTest(step.substr(4));
             game.debugRunFrames(30);
+        } else if (step.rfind("weapon:", 0) == 0) {
+            // Select the held weapon (0 pistol .. 3 flashbang) for a screenshot.
+            game.debugSelectWeaponForTest(std::atoi(step.c_str() + 7));
+            game.debugRunFrames(10);
         } else if (step == "dump") {
             game.debugMenuDump();
         } else if (step == "shot") {

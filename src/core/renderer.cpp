@@ -365,6 +365,10 @@ void Renderer::beginFrame() {
     batches_[WORLD_ALPHA].instances.clear();
     batches_[WORLD_ALPHA].dirty = true;
 
+    // The held weapon is rebuilt every frame (bob/sway/recoil animate it).
+    batches_[WORLD_VIEWMODEL].instances.clear();
+    batches_[WORLD_VIEWMODEL].needsUpload = true;
+    batches_[WORLD_VIEWMODEL].dirty = true;
 
     inUi_ = false;
     setCamera(glm::mat4(1.0f), glm::mat4(1.0f));
@@ -549,6 +553,28 @@ void Renderer::submitOverlay(const glm::vec3& color, float alpha) {
                glm::vec3(0.0f, half.y, 0.0f), glm::vec4(color, alpha));
 }
 
+void Renderer::setViewmodelCamera(const glm::mat4& view, const glm::mat4& projection) {
+    viewmodelView_ = view;
+    viewmodelProjection_ = projection;
+}
+
+void Renderer::submitViewBox(const glm::vec3& center, const glm::vec3& size,
+                             const glm::vec3& color) {
+    submitViewBoxOriented(center,
+                          glm::vec3(size.x, 0.0f, 0.0f),
+                          glm::vec3(0.0f, size.y, 0.0f),
+                          glm::vec3(0.0f, 0.0f, size.z),
+                          color);
+}
+
+void Renderer::submitViewBoxOriented(const glm::vec3& center,
+                                     const glm::vec3& axisX, const glm::vec3& axisY,
+                                     const glm::vec3& axisZ, const glm::vec3& color) {
+    pushBoxFaces(WORLD_VIEWMODEL, center, axisX, axisY, axisZ,
+                 glm::vec4(color, 1.0f), glm::vec4(0, 0, 1, 1),
+                 glm::vec4(1.0f), glm::vec4(0.0f, 0.0f, 0.0f, 0.0f));
+}
+
 void Renderer::submitQuad(const glm::vec2& center, const glm::vec2& size,
                           const glm::vec3& color, float alpha, BlendMode mode) {
     const BatchId id = UI_SCRATCH;
@@ -707,6 +733,7 @@ void Renderer::endFrame() {
     // overlays (the damage/flash screens) are blended afterwards on the UI pass.
     uploadBatch(WORLD_OPAQUE);
     uploadBatch(WORLD_ALPHA);
+    uploadBatch(WORLD_VIEWMODEL);
     setFrameMatrix(worldProjection_ * worldView_);
 
     applyBlendState(BlendMode::Opaque);
@@ -719,6 +746,20 @@ void Renderer::endFrame() {
     glFrontFace(GL_CCW);
     drawBatch(WORLD_OPAQUE);
     drawBatch(WORLD_ALPHA);
+
+    // ── First-person weapon ──
+    // Its camera space is independent of where the player stands, and the depth
+    // buffer is cleared first so the gun is always visible instead of being
+    // swallowed by a wall the camera is close to (the near plane would also cut
+    // it in half). Nothing else is drawn after this point, so clearing depth is
+    // safe.
+    viewmodelInstancesLastFrame_ = 0;
+    if (!batches_[WORLD_VIEWMODEL].instances.empty()) {
+        viewmodelInstancesLastFrame_ = batches_[WORLD_VIEWMODEL].instances.size();
+        glClear(GL_DEPTH_BUFFER_BIT);
+        setFrameMatrix(viewmodelProjection_ * viewmodelView_);
+        drawBatch(WORLD_VIEWMODEL);
+    }
     glDisable(GL_CULL_FACE);
 
     // ── 2D: composite the UI in submission order ──
