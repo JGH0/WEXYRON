@@ -79,6 +79,8 @@ inline uint16_t glyphPattern(char c) {
         case ':': return 0b000010000010000;
         case ';': return 0b000010000010100;
         case '|': return 0b010010010010010;
+        case ']': return 0b110010010010110;
+        case '[': return 0b011010010010011;
         case '(': return 0b010100100100010;
         case ')': return 0b010001001001010;
         case '~': return 0b000010111000000;

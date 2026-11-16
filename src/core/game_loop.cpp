@@ -200,9 +200,16 @@ void Game::render() {
     renderer.beginFrame();
 
     if (gameState == PLAYING) {
+        // The far plane follows the loaded map: the large maps are wider than
+        // the old fixed 100 units, and the opposite corner must stay visible
+        // instead of being clipped away.
+        float farPlane = 100.0f;
+        if (currentMap) {
+            farPlane = std::max(farPlane, glm::length(currentMap->getDimensions()) * 1.5f);
+        }
         glm::mat4 view       = camera.GetViewMatrix();
         glm::mat4 projection = glm::perspective(glm::radians(camera.Zoom),
-                                                (float)fbW / (float)fbH, 0.1f, 100.0f);
+                                                (float)fbW / (float)fbH, 0.1f, farPlane);
         renderer.setCamera(view, projection);
 
         // Map geometry is persistent in the WORLD_OPAQUE batch and is drawn
