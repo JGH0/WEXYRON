@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.10)
 project(CubeGame VERSION 1.0 LANGUAGES C CXX)
 
+enable_testing()
+
 set(CMAKE_CXX_STANDARD 17)   # std::filesystem, std::make_unique (also used by the Makefiles)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -81,13 +83,17 @@ if(NOT glm_FOUND)
     message(STATUS "Using FetchContent glm")
 endif()
 
+# Reusable engine library (game-agnostic). The game links it; the server does
+# not need it.
+add_subdirectory(engine)
+
 # Include directories
 include_directories(
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/include/stb
+    ${CMAKE_SOURCE_DIR}/engine/include
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/core
-    ${CMAKE_SOURCE_DIR}/src/engine
     ${CMAKE_SOURCE_DIR}/src/game
     ${CMAKE_SOURCE_DIR}/src/network
     ${CMAKE_SOURCE_DIR}/src/systems
@@ -107,12 +113,6 @@ set(CORE_SOURCES
     src/core/game_audio.cpp
     src/core/game_editor.cpp
     src/core/settings.cpp
-    src/core/renderer.cpp
-    src/core/camera.cpp
-    src/core/map.cpp
-    src/core/map_loader.cpp
-    src/core/shader.cpp
-    src/core/texture.cpp
 )
 
 set(SYSTEMS_SOURCES
@@ -147,13 +147,6 @@ set(UI_SOURCES
     src/ui/menu_pages.cpp
 )
 
-# Engine systems. audio_manager.cpp + the vendored miniaudio implementation
-# (third_party/miniaudio) are the sound engine; nothing else is in here yet.
-set(ENGINE_SOURCES
-    src/engine/audio_manager.cpp
-    third_party/miniaudio/miniaudio.c
-)
-
 set(MAIN_SOURCES
     src/main.cpp
 )
@@ -162,11 +155,8 @@ set(SERVER_SOURCES
     server_main.cpp
 )
 
-set(GLAD_SOURCES
-    glad.c
-)
-
-# Client executable
+# Client executable. Rendering, maps, audio and GLAD are provided by the
+# extracted cube_engine library.
 add_executable(game
     ${MAIN_SOURCES}
     ${CORE_SOURCES}
@@ -174,11 +164,10 @@ add_executable(game
     ${NETWORK_SOURCES}
     ${BOT_AI_SOURCES}
     ${UI_SOURCES}
-    ${ENGINE_SOURCES}
-    ${GLAD_SOURCES}
 )
 
 target_link_libraries(game PRIVATE
+    cube_engine
     OpenGL::GL
     glfw
     Threads::Threads

@@ -1,0 +1,120 @@
+/**
+ * @file engine_smoke_test.cpp
+ * @brief Verifies that the extracted engine works without any game code.
+ *
+ * The test includes only engine headers. It deliberately avoids OpenGL calls
+ * (no window/context is needed); the game build and its scripted UI test cover
+ * the renderer in a real context.
+ */
+
+#include "engine/engine.hpp"
+
+#include <cmath>
+#include <cstdio>
+#include <future>
+#include <vector>
+
+namespace {
+
+int failures = 0;
+
+void check(bool condition, const char* expression, int line) {
+    if (!condition) {
+        std::printf("FAIL line %d: %s\n", line, expression);
+        ++failures;
+    }
+}
+
+#define CHECK(expr) check((expr), #expr, __LINE__)
+
+void testCamera() {
+    Camera camera;
+    CHECK(std::isfinite(camera.Position.x));
+    CHECK(std::isfinite(camera.Yaw));
+
+    const float oldYaw = camera.Yaw;
+    camera.ProcessMouseMovement(12.0f, 3.0f);
+    CHECK(camera.Yaw != oldYaw);
+
+    camera.ProcessKeyboard(0, 0.016f);
+    const glm::mat4 view = camera.GetViewMatrix();
+    CHECK(std::isfinite(view[0][0]));
+    CHECK(std::isfinite(view[3][3]));
+}
+
+void testThreadPool() {
+    ThreadPool pool(2);
+    CHECK(pool.threadCount() >= 1);
+
+    std::vector<std::future<int>> futures;
+    futures.reserve(8);
+    for (int i = 0; i < 8; ++i) {
+        futures.push_back(pool.submit([i] { return i; }));
+    }
+
+    int sum = 0;
+    for (auto& future : futures) {
+        sum += future.get();
+    }
+    CHECK(sum == 28);
+}
+
+void testMap() {
+    Map map("");
+    CHECK(!map.getBlocks().empty());
+
+    const glm::vec3 position(1000.0f, 1000.0f, 1000.0f);
+    map.addBlock(MapBlock(position, glm::vec3(1.0f), 0, 0, true));
+    CHECK(map.findBlockAt(position) >= 0);
+    CHECK(map.checkCollision(position, 0.1f));
+
+    MapBlock rotated(position, glm::vec3(2.0f, 1.0f, 1.0f), 0, 0, true,
+                     glm::vec3(1.0f), 45.0f, 0.0f);
+    CHECK(!rotated.isAxisAligned());
+    glm::vec3 x, y, z;
+    mapBlockBasis(rotated, x, y, z);
+    CHECK(std::fabs(glm::length(x) - 1.0f) < 1e-4f);
+    CHECK(std::fabs(glm::length(y) - 1.0f) < 1e-4f);
+    CHECK(std::fabs(glm::length(z) - 1.0f) < 1e-4f);
+    CHECK(std::fabs(glm::dot(x, y)) < 1e-4f);
+
+    CHECK(map.deleteBlockAt(position));
+    CHECK(map.findBlockAt(position) < 0);
+}
+
+void testFontAtlas() {
+    CHECK(font_atlas::kGlyphCount == 98);
+    CHECK(font_atlas::glyphPattern('A') != 0);
+    CHECK(font_atlas::glyphPattern(' ') == 0);
+}
+
+void testAudioLifecycle() {
+    AudioManager audio;
+    audio.setMasterVolume(0.25f);
+    audio.setSFXVolume(0.5f);
+    audio.setMusicVolume(0.75f);
+    CHECK(std::fabs(audio.getMasterVolume() - 0.25f) < 1e-6f);
+    CHECK(std::fabs(audio.getSFXVolume() - 0.5f) < 1e-6f);
+    CHECK(std::fabs(audio.getMusicVolume() - 0.75f) < 1e-6f);
+    audio.shutdown();
+}
+
+} // namespace
+
+int main() {
+    std::printf("cube engine: %s\n", cubeEngineName());
+
+    testCamera();
+    testThreadPool();
+    testMap();
+    testFontAtlas();
+    testAudioLifecycle();
+
+    if (failures == 0) {
+        std::printf("ENGINE SMOKE TEST: ALL OK\n");
+        return 0;
+    }
+
+    std::printf("ENGINE SMOKE TEST: %d FAILURE(S)\n", failures);
+    return 1;
+}

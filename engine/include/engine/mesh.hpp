@@ -27,7 +27,7 @@ struct Vertex {
 /**
  * @brief Structure to hold texture information
  */
-struct Texture {
+struct MeshTexture {
     unsigned int id;
     std::string type;
     std::string path;
@@ -41,10 +41,10 @@ public:
     // Mesh data
     std::vector<Vertex> vertices;
     std::vector<unsigned int> indices;
-    std::vector<Texture> textures;
+    std::vector<MeshTexture> textures;
 
     // Constructor
-    Mesh(std::vector<Vertex> vertices, std::vector<unsigned int> indices, std::vector<Texture> textures);
+    Mesh(std::vector<Vertex> vertices, std::vector<unsigned int> indices, std::vector<MeshTexture> textures);
 
     // Render the mesh
     void Draw(unsigned int shaderProgram);

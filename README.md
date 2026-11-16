@@ -240,15 +240,19 @@ make run-server
 ## File Structure
 ```
 OpenGl-Game/
-|-- src/                    # Source code
-|   |-- core/              # Game engine
-|   |-- systems/           # Game systems (weapons, physics, etc.)
-|   |-- network/           # Multiplayer networking
-|   |-- ui/                # User interface
-|   `-- main.cpp           # Game entry point
-|-- assets/                # Game assets (textures, maps)
-|-- build/                 # Compiled binaries
-|-- .vscode/               # VS Code configuration
+|-- engine/                 # Reusable, game-agnostic engine library
+|   |-- include/engine/     # Public engine headers
+|   |-- src/                # Engine implementation
+|   `-- tests/              # Engine smoke test
+|-- src/                    # Game application code
+|   |-- core/               # Game logic (monolithic Game class, editor, HUD)
+|   |-- systems/            # Game systems (weapons, physics, etc.)
+|   |-- network/            # Multiplayer networking
+|   |-- ui/                 # User interface
+|   `-- main.cpp            # Game entry point
+|-- assets/                 # Game assets (textures, maps)
+|-- build/                  # Compiled binaries
+|-- .vscode/                # VS Code configuration
 |   |-- c_cpp_properties_windows.json  # Windows IntelliSense
 |   |-- launch_windows.json            # Windows debug configs
 |   `-- tasks.json                    # Build tasks
@@ -314,7 +318,17 @@ To use your own recordings, replace the files (`.wav`, `.ogg`, `.flac` or
 ```
 make && ./build/bin/audio_test        # mixer / decoding / volumes (no device needed)
 xvfb-run -a ./build/bin/audio_smoke   # end-to-end: start a match, fire, check sounds
+make engine-test && ./build/bin/engine_smoke_test  # extracted engine without game code
+CUBE_MENU_TEST="menu:main;dump" xvfb-run -a ./build/bin/game  # game still boots
 ```
 
 `audio_test` also opens the real device when one exists; on CI without sound it
 still checks decoding and the volume buses.
+
+### Engine library
+
+The reusable rendering, map, camera, audio and thread-pool code lives in
+`engine/` and builds as the `cube_engine` library. The game links it from
+`src/`. See [`engine/README.md`](engine/README.md) for the boundary rules and
+the smoke test. The older `src/engine/` files are an earlier prototype, not part
+of the library target.

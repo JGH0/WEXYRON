@@ -5,7 +5,7 @@
  * @date 2025
  */
 
-#include "shader.hpp"
+#include "engine/shader.hpp"
 #include <glm/gtc/type_ptr.hpp>
 #include <fstream>
 #include <sstream>

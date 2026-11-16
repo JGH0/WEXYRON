@@ -9,7 +9,7 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
-#include "texture.hpp"
+#include "engine/texture.hpp"
 #include <iostream>
 
 Texture::Texture(const char* path, GLenum textureUnit) 

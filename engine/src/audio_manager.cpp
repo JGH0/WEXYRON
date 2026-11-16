@@ -15,7 +15,7 @@
  * (starting a sound, changing music), so the mixer never waits on game logic.
  */
 
-#include "audio_manager.hpp"
+#include "engine/audio_manager.hpp"
 
 #include <algorithm>
 #include <chrono>

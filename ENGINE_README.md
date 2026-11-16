@@ -1,5 +1,12 @@
 # Modern OpenGL Game Engine
 
+> **Status (16.11.2026):** This document describes the earlier `src/engine/`
+> prototype. The reusable engine used by the game has been extracted to
+> `engine/` and builds as the `cube_engine` library. See
+> [`engine/README.md`](engine/README.md) for the current architecture and the
+> boundary rules. The prototype is kept for reference and is not part of the
+> build.
+
 A powerful, modular game engine built with C++ and OpenGL that provides a strong foundation for any type of game.
 
 ## Architecture Overview

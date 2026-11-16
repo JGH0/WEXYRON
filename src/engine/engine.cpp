@@ -5,7 +5,7 @@
 #include "scene_manager.hpp"
 #include "resource_manager.hpp"
 #include "physics_engine.hpp"
-#include "audio_manager.hpp"
+#include "engine/audio_manager.hpp"
 #include "network_manager.hpp"
 #include <glad/glad.h>
 

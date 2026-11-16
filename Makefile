@@ -22,7 +22,7 @@ DEPFLAGS = -MMD -MP
 
 # Shared flags. CPPFLAGS is kept separate so the platform blocks below can add
 # include paths (Homebrew on macOS) without repeating the common ones.
-CPPFLAGS = -I./include -I./include/stb -I./src
+CPPFLAGS = -I./include -I./include/stb -I./engine/include -I./src
 CXXFLAGS = -std=c++17 -Wall $(CPPFLAGS)
 
 # Platform-specific libraries.
@@ -45,28 +45,31 @@ endif
 SRC_DIR = src
 CORE_DIR = src/core
 SYSTEMS_DIR = src/systems
-ENGINE_DIR = src/engine
 GAME_DIR = src/game
 NETWORK_DIR = src/network
 UI_DIR = src/ui
+ENGINE_SRC_DIR = engine/src
 BUILD_DIR = build/obj
+LIB_DIR = build/lib
 BIN_DIR = build/bin
+ENGINE_LIB = $(LIB_DIR)/libcube_engine.a
 TARGET = $(BIN_DIR)/game
 SERVER_TARGET = $(BIN_DIR)/server
 
 # Source files
-CORE_SOURCES = $(CORE_DIR)/game.cpp $(CORE_DIR)/game_input.cpp $(CORE_DIR)/game_loop.cpp $(CORE_DIR)/game_gameplay.cpp $(CORE_DIR)/game_hud.cpp $(CORE_DIR)/game_menus.cpp $(CORE_DIR)/game_server.cpp $(CORE_DIR)/game_server_menu.cpp $(CORE_DIR)/game_audio.cpp $(CORE_DIR)/game_editor.cpp $(CORE_DIR)/settings.cpp $(CORE_DIR)/renderer.cpp $(CORE_DIR)/camera.cpp $(CORE_DIR)/map.cpp $(CORE_DIR)/map_loader.cpp $(CORE_DIR)/shader.cpp $(CORE_DIR)/texture.cpp
+CORE_SOURCES = $(CORE_DIR)/game.cpp $(CORE_DIR)/game_input.cpp $(CORE_DIR)/game_loop.cpp $(CORE_DIR)/game_gameplay.cpp $(CORE_DIR)/game_hud.cpp $(CORE_DIR)/game_menus.cpp $(CORE_DIR)/game_server.cpp $(CORE_DIR)/game_server_menu.cpp $(CORE_DIR)/game_audio.cpp $(CORE_DIR)/game_editor.cpp $(CORE_DIR)/settings.cpp
 SYSTEMS_SOURCES = $(SYSTEMS_DIR)/input.cpp $(SYSTEMS_DIR)/weapon.cpp $(SYSTEMS_DIR)/physics.cpp $(SYSTEMS_DIR)/enemy.cpp $(SYSTEMS_DIR)/projectile.cpp $(SYSTEMS_DIR)/player.cpp $(SYSTEMS_DIR)/game_state.cpp
 NETWORK_SOURCES = $(NETWORK_DIR)/network.cpp $(NETWORK_DIR)/server_config.cpp
 GAME_BOT_SOURCES = $(GAME_DIR)/bot.cpp
 SERVER_BOT_SOURCES = $(NETWORK_DIR)/server_bots.cpp $(NETWORK_DIR)/server_bomb.cpp
 UI_SOURCES = $(UI_DIR)/menu_core.cpp $(UI_DIR)/menu_draw.cpp $(UI_DIR)/menu_input.cpp $(UI_DIR)/menu_pages.cpp
-ENGINE_SOURCES = $(ENGINE_DIR)/audio_manager.cpp
+ENGINE_LIB_SOURCES = $(ENGINE_SRC_DIR)/audio_manager.cpp $(ENGINE_SRC_DIR)/camera.cpp $(ENGINE_SRC_DIR)/map.cpp $(ENGINE_SRC_DIR)/map_loader.cpp $(ENGINE_SRC_DIR)/mesh.cpp $(ENGINE_SRC_DIR)/renderer.cpp $(ENGINE_SRC_DIR)/shader.cpp $(ENGINE_SRC_DIR)/texture.cpp
 MINIAUDIO_SOURCES = third_party/miniaudio/miniaudio.c
 MAIN_SOURCES = $(SRC_DIR)/main.cpp
 SERVER_SOURCES = server_main.cpp $(NETWORK_SOURCES) $(GAME_BOT_SOURCES) $(SERVER_BOT_SOURCES)
 GLAD_SOURCES = glad.c
-ALL_SOURCES = $(CORE_SOURCES) $(SYSTEMS_SOURCES) $(NETWORK_SOURCES) $(GAME_BOT_SOURCES) $(UI_SOURCES) $(ENGINE_SOURCES) $(MINIAUDIO_SOURCES) $(MAIN_SOURCES) $(GLAD_SOURCES)
+ENGINE_TEST_SOURCES = engine/tests/engine_smoke_test.cpp
+ALL_SOURCES = $(CORE_SOURCES) $(SYSTEMS_SOURCES) $(NETWORK_SOURCES) $(GAME_BOT_SOURCES) $(UI_SOURCES) $(MAIN_SOURCES)
 
 # Object files
 CORE_OBJECTS = $(addprefix $(BUILD_DIR)/core/, $(notdir $(CORE_SOURCES:.cpp=.o)))
@@ -75,12 +78,10 @@ NETWORK_OBJECTS = $(addprefix $(BUILD_DIR)/network/, $(notdir $(NETWORK_SOURCES:
 GAME_BOT_OBJECTS = $(addprefix $(BUILD_DIR)/game/, $(notdir $(GAME_BOT_SOURCES:.cpp=.o)))
 SERVER_BOT_OBJECTS = $(addprefix $(BUILD_DIR)/network/, $(notdir $(SERVER_BOT_SOURCES:.cpp=.o)))
 UI_OBJECTS = $(addprefix $(BUILD_DIR)/ui/, $(notdir $(UI_SOURCES:.cpp=.o)))
-ENGINE_OBJECTS = $(addprefix $(BUILD_DIR)/engine/, $(notdir $(ENGINE_SOURCES:.cpp=.o)))
+ENGINE_LIB_OBJECTS = $(addprefix $(BUILD_DIR)/engine_lib/, $(notdir $(ENGINE_LIB_SOURCES:.cpp=.o))) $(BUILD_DIR)/engine_lib/glad.o $(BUILD_DIR)/engine_lib/miniaudio.o
 MAIN_OBJECT = $(BUILD_DIR)/main.o
 SERVER_MAIN_OBJECT = $(BUILD_DIR)/server_main.o
-GLAD_OBJECT = $(BUILD_DIR)/glad.o
-MINIAUDIO_OBJECT = $(BUILD_DIR)/third_party/miniaudio.o
-ALL_OBJECTS = $(CORE_OBJECTS) $(SYSTEMS_OBJECTS) $(NETWORK_OBJECTS) $(GAME_BOT_OBJECTS) $(UI_OBJECTS) $(ENGINE_OBJECTS) $(MAIN_OBJECT) $(GLAD_OBJECT) $(MINIAUDIO_OBJECT)
+ALL_OBJECTS = $(CORE_OBJECTS) $(SYSTEMS_OBJECTS) $(NETWORK_OBJECTS) $(GAME_BOT_OBJECTS) $(UI_OBJECTS) $(MAIN_OBJECT)
 SERVER_OBJECTS = $(SERVER_MAIN_OBJECT) $(NETWORK_OBJECTS) $(GAME_BOT_OBJECTS) $(SERVER_BOT_OBJECTS)
 
 all: $(TARGET) $(SERVER_TARGET)
@@ -89,13 +90,31 @@ client: $(TARGET)
 
 server: $(SERVER_TARGET)
 
+engine-test: $(BIN_DIR)/engine_smoke_test
+
 # `deps` is order-only: it runs (and can fail with a helpful message) before
 # linking, but never forces a relink or appears in $^.
-$(TARGET): $(ALL_OBJECTS) | deps-check $(BIN_DIR)
-	$(CXX) $^ -o $@ $(LDFLAGS)
+$(TARGET): $(ALL_OBJECTS) $(ENGINE_LIB) | deps-check $(BIN_DIR)
+	$(CXX) $(ALL_OBJECTS) $(ENGINE_LIB) -o $@ $(LDFLAGS)
 
 $(SERVER_TARGET): $(SERVER_OBJECTS) | deps-check $(BIN_DIR)
 	$(CXX) $^ -o $@ $(LDFLAGS)
+
+$(BIN_DIR)/engine_smoke_test: $(ENGINE_TEST_SOURCES) $(ENGINE_LIB) | $(BIN_DIR)
+	$(CXX) $(CXXFLAGS) $(ENGINE_TEST_SOURCES) $(ENGINE_LIB) -o $@ $(LDFLAGS)
+
+# Reusable engine library
+$(ENGINE_LIB): $(ENGINE_LIB_OBJECTS) | $(LIB_DIR)
+	ar rcs $@ $(ENGINE_LIB_OBJECTS)
+
+$(BUILD_DIR)/engine_lib/%.o: $(ENGINE_SRC_DIR)/%.cpp | $(BUILD_DIR)/engine_lib
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/engine_lib/glad.o: $(GLAD_SOURCES) | $(BUILD_DIR)/engine_lib
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/engine_lib/miniaudio.o: $(MINIAUDIO_SOURCES) | $(BUILD_DIR)/engine_lib
+	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 # Core object files
 $(BUILD_DIR)/core/%.o: $(CORE_DIR)/%.cpp | $(BUILD_DIR)/core
@@ -111,10 +130,6 @@ $(BUILD_DIR)/network/%.o: $(NETWORK_DIR)/%.cpp | $(BUILD_DIR)/network
 
 # UI object files
 $(BUILD_DIR)/ui/%.o: $(UI_DIR)/%.cpp | $(BUILD_DIR)/ui
-	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
-
-# Engine object files
-$(BUILD_DIR)/engine/%.o: $(ENGINE_DIR)/%.cpp | $(BUILD_DIR)/engine
 	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
 
 # Game object files
@@ -133,15 +148,6 @@ $(BUILD_DIR)/main.o: $(SRC_DIR)/main.cpp | $(BUILD_DIR)
 $(BUILD_DIR)/server_main.o: server_main.cpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
 
-# miniaudio implementation (third_party/miniaudio). Its header is large and
-# stable, so it is compiled once into its own object.
-$(MINIAUDIO_OBJECT): $(MINIAUDIO_SOURCES) | $(BUILD_DIR)/third_party
-	$(CXX) $(CXXFLAGS) -c $< -o $@
-
-# GLAD object file (C, no header deps to track)
-$(GLAD_OBJECT): $(GLAD_SOURCES) | $(BUILD_DIR)
-	$(CXX) $(CXXFLAGS) -c $< -o $@
-
 # Create directories
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
@@ -158,20 +164,20 @@ $(BUILD_DIR)/network:
 $(BUILD_DIR)/ui:
 	mkdir -p $(BUILD_DIR)/ui
 
-$(BUILD_DIR)/engine:
-	mkdir -p $(BUILD_DIR)/engine
+$(BUILD_DIR)/engine_lib:
+	mkdir -p $(BUILD_DIR)/engine_lib
 
 $(BUILD_DIR)/game:
 	mkdir -p $(BUILD_DIR)/game
 
-$(BUILD_DIR)/third_party:
-	mkdir -p $(BUILD_DIR)/third_party
+$(LIB_DIR):
+	mkdir -p $(LIB_DIR)
 
 $(BIN_DIR):
 	mkdir -p $(BIN_DIR)
 
 clean:
-	rm -rf $(BUILD_DIR) $(BIN_DIR)
+	rm -rf $(BUILD_DIR) $(LIB_DIR) $(BIN_DIR)
 
 # Preflight: fail early with install instructions instead of a bare
 # "'GLFW/glfw3.h' file not found" deep in the first compile.
@@ -201,22 +207,24 @@ debug: $(TARGET)
 
 help:
 	@echo "Targets:"
-	@echo "  all         build client and server (default)"
-	@echo "  client      build $(TARGET)"
-	@echo "  server      build $(SERVER_TARGET)"
-	@echo "  run         build and launch the client"
-	@echo "  run-server  build and launch the server"
-	@echo "  debug       client build with -g -DDEBUG"
-	@echo "  deps        check that GLFW/GLM headers are installed"
-	@echo "  clean       remove build artifacts"
+	@echo "  all          build client and server (default)"
+	@echo "  client       build $(TARGET)"
+	@echo "  server       build $(SERVER_TARGET)"
+	@echo "  engine-test  build the engine smoke test"
+	@echo "  run          build and launch the client"
+	@echo "  run-server   build and launch the server"
+	@echo "  debug        client build with -g -DDEBUG"
+	@echo "  deps         check that GLFW/GLM headers are installed"
+	@echo "  clean        remove build artifacts"
 
 # Header dependency files produced by -MMD (included after the first target so
 # they never become the default goal).
 -include $(ALL_OBJECTS:.o=.d)
 -include $(SERVER_OBJECTS:.o=.d)
+-include $(ENGINE_LIB_OBJECTS:.o=.d)
 
 .DELETE_ON_ERROR:
 
-.PHONY: all clean run run-server debug client server deps deps-check help
+.PHONY: all clean run run-server debug client server engine-test deps deps-check help
 
 endif # !Windows

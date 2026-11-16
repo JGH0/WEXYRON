@@ -48,6 +48,9 @@ jobs:
       - name: Verify binary
         run: file "$GAME_LINUX"
 
+      - name: Engine smoke test
+        run: make engine-test && ./build/bin/engine_smoke_test
+
       - name: Download AppImage tooling
         run: |
           sudo curl -fsSL -o /usr/local/bin/appimagetool \
@@ -112,13 +115,7 @@ jobs:
           echo "GCC_LIB=$GCC_LIB" >> "$GITHUB_ENV"
 
       - name: Build
-        run: |
-          # Makefile.windows (shared with BUILD.bat/MSYS2) has no rule for the
-          # miniaudio object; compile it here, then let make own the rest.
-          mkdir -p build/obj/third_party
-          g++ -std=c++17 -I./include -I./include/stb -I./src -DGLFW_INCLUDE_NONE \
-            -c third_party/miniaudio/miniaudio.c -o build/obj/third_party/miniaudio.o
-          make -f Makefile.windows client
+        run: make -f Makefile.windows client
 
       - name: Verify binary
         run: file "$GAME_WINDOWS"

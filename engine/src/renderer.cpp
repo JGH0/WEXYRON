@@ -5,9 +5,9 @@
  * @date 2025
  */
 
-#include "renderer.hpp"
-#include "map.hpp"
-#include "texture.hpp"
+#include "engine/renderer.hpp"
+#include "engine/map.hpp"
+#include "engine/texture.hpp"
 #include <iostream>
 #include <algorithm>
 #include <cstdlib>

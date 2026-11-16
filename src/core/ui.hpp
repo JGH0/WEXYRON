@@ -4,7 +4,7 @@
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
-#include "renderer.hpp"
+#include "engine/renderer.hpp"
 
 /**
  * @brief UI rendering system for menus and HUD

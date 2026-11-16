@@ -2,7 +2,7 @@
 #define PHYSICS_HPP
 
 #include <glm/glm.hpp>
-#include "../core/map.hpp"
+#include "engine/map.hpp"
 
 /**
  * @brief Physics system for player movement and collision detection

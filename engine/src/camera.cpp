@@ -5,7 +5,7 @@
  * @date 2025
  */
 
-#include "camera.hpp"
+#include "engine/camera.hpp"
 #include <iostream>
 
 Camera::Camera(glm::vec3 position, glm::vec3 up, float yaw, float pitch)

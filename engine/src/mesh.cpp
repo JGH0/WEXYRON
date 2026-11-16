@@ -5,10 +5,10 @@
  * @date 2025
  */
 
-#include "mesh.hpp"
+#include "engine/mesh.hpp"
 #include <iostream>
 
-Mesh::Mesh(std::vector<Vertex> vertices, std::vector<unsigned int> indices, std::vector<Texture> textures)
+Mesh::Mesh(std::vector<Vertex> vertices, std::vector<unsigned int> indices, std::vector<MeshTexture> textures)
     : vertices(vertices), indices(indices), textures(textures) {
     setupMesh();
 }

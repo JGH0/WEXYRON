@@ -6,7 +6,8 @@
  */
 
 #include "model.hpp"
-#include "texture.hpp"
+#include <stb_image.h>
+#include "engine/texture.hpp"
 #include <iostream>
 #include <filesystem>
 
@@ -52,7 +53,7 @@ Mesh Model::processMesh(aiMesh* mesh, const aiScene* scene) {
     // Data to fill
     std::vector<Vertex> vertices;
     std::vector<unsigned int> indices;
-    std::vector<Texture> textures;
+    std::vector<MeshTexture> textures;
 
     // Walk through each of the mesh's vertices
     for (unsigned int i = 0; i < mesh->mNumVertices; i++) {
@@ -111,27 +112,27 @@ Mesh Model::processMesh(aiMesh* mesh, const aiScene* scene) {
     aiMaterial* material = scene->mMaterials[mesh->mMaterialIndex];
 
     // 1. Diffuse maps
-    std::vector<Texture> diffuseMaps = loadMaterialTextures(material, aiTextureType_DIFFUSE, "texture_diffuse");
+    std::vector<MeshTexture> diffuseMaps = loadMaterialTextures(material, aiTextureType_DIFFUSE, "texture_diffuse");
     textures.insert(textures.end(), diffuseMaps.begin(), diffuseMaps.end());
 
     // 2. Specular maps
-    std::vector<Texture> specularMaps = loadMaterialTextures(material, aiTextureType_SPECULAR, "texture_specular");
+    std::vector<MeshTexture> specularMaps = loadMaterialTextures(material, aiTextureType_SPECULAR, "texture_specular");
     textures.insert(textures.end(), specularMaps.begin(), specularMaps.end());
 
     // 3. Normal maps
-    std::vector<Texture> normalMaps = loadMaterialTextures(material, aiTextureType_HEIGHT, "texture_normal");
+    std::vector<MeshTexture> normalMaps = loadMaterialTextures(material, aiTextureType_HEIGHT, "texture_normal");
     textures.insert(textures.end(), normalMaps.begin(), normalMaps.end());
 
     // 4. Height maps
-    std::vector<Texture> heightMaps = loadMaterialTextures(material, aiTextureType_AMBIENT, "texture_height");
+    std::vector<MeshTexture> heightMaps = loadMaterialTextures(material, aiTextureType_AMBIENT, "texture_height");
     textures.insert(textures.end(), heightMaps.begin(), heightMaps.end());
 
     // Return a mesh object created from the extracted mesh data
     return Mesh(vertices, indices, textures);
 }
 
-std::vector<Texture> Model::loadMaterialTextures(aiMaterial* mat, aiTextureType type, std::string typeName) {
-    std::vector<Texture> textures;
+std::vector<MeshTexture> Model::loadMaterialTextures(aiMaterial* mat, aiTextureType type, std::string typeName) {
+    std::vector<MeshTexture> textures;
     for (unsigned int i = 0; i < mat->GetTextureCount(type); i++) {
         aiString str;
         mat->GetTexture(type, i, &str);
@@ -148,7 +149,7 @@ std::vector<Texture> Model::loadMaterialTextures(aiMaterial* mat, aiTextureType 
 
         if (!skip) {
             // If texture hasn't been loaded yet, load it
-            Texture texture;
+            MeshTexture texture;
             texture.id = textureFromFile(str.C_Str(), this->directory);
             texture.type = typeName;
             texture.path = str.C_Str();

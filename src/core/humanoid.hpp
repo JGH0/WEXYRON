@@ -19,7 +19,7 @@
 #include <algorithm>
 #include <cmath>
 
-#include "renderer.hpp"
+#include "engine/renderer.hpp"
 
 namespace humanoid {
 

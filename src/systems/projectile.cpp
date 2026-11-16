@@ -1,6 +1,6 @@
 #include "projectile.hpp"
-#include "../core/renderer.hpp"
-#include "../core/map.hpp"
+#include "engine/renderer.hpp"
+#include "engine/map.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <cmath>
 #include <iostream>

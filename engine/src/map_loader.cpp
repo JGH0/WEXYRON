@@ -3,8 +3,8 @@
  * @brief Background map loading (see map_loader.hpp)
  */
 
-#include "map_loader.hpp"
-#include "map.hpp"
+#include "engine/map_loader.hpp"
+#include "engine/map.hpp"
 
 #include <GLFW/glfw3.h>
 #include <chrono>

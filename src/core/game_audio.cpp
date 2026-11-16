@@ -3,7 +3,7 @@
  * @brief Audio glue: loading sounds, listener updates, footsteps, music
  *
  * Gameplay code only ever calls playSoundEffect() / playUiSound(); the mixer
- * itself lives in src/engine/audio_manager.cpp. This file decides which file
+ * itself lives in engine/src/audio_manager.cpp. This file decides which file
  * plays when, how loud it is and where it is in the world.
  *
  * Sound files live in assets/audio/effects/<name>.wav and

@@ -82,7 +82,7 @@ inline float fitScale(const std::string& text, float maxWidth,
 
 // --- inline definition that needs Renderer ---
 // (placed here so translation units only need one include)
-#include "../core/renderer.hpp"
+#include "engine/renderer.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 
 inline void UIHelpers::setProjection(Renderer& renderer, GLFWwindow* window) {

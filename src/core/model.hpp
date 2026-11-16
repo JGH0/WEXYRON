@@ -13,7 +13,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <string>
 #include <vector>
-#include "mesh.hpp"
+#include "engine/mesh.hpp"
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
@@ -21,7 +21,7 @@
 class Model {
 public:
     // Model data
-    std::vector<Texture> textures_loaded;
+    std::vector<MeshTexture> textures_loaded;
     std::vector<Mesh> meshes;
     std::string directory;
     bool gammaCorrection;
@@ -47,7 +47,7 @@ private:
     Mesh processMesh(aiMesh* mesh, const aiScene* scene);
 
     // Load a texture from material
-    std::vector<Texture> loadMaterialTextures(aiMaterial* mat, aiTextureType type, std::string typeName);
+    std::vector<MeshTexture> loadMaterialTextures(aiMaterial* mat, aiTextureType type, std::string typeName);
 
     // Load a texture from file
     unsigned int textureFromFile(const char* path, const std::string& directory);

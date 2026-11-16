@@ -19,12 +19,12 @@
 #include <filesystem>
 #include <chrono>
 #include <cstring>
-#include "camera.hpp"
-#include "renderer.hpp"
+#include "engine/camera.hpp"
+#include "engine/renderer.hpp"
 #include "humanoid.hpp"
-#include "map.hpp"
-#include "map_loader.hpp"
-#include "thread_pool.hpp"
+#include "engine/map.hpp"
+#include "engine/map_loader.hpp"
+#include "engine/thread_pool.hpp"
 #include <memory>
 #include "../ui/menu.hpp"
 #include "../ui/menu_pages.hpp"
@@ -34,7 +34,7 @@
 #include "../systems/input.hpp"
 #include "../systems/enemy.hpp"
 #include "../network/network.hpp"
-#include "../engine/audio_manager.hpp"
+#include "engine/audio_manager.hpp"
 
 /**
  * @brief Main game class managing the application lifecycle
