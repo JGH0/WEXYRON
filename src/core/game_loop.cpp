@@ -155,7 +155,6 @@ void Game::update(float deltaTime) {
 
     // PVP collision checks (only in multiplayer)
     if (isConnectedToServer()) {
-        checkProjectilePlayerCollision();
         checkPlayerPlayerCollision();
         updateRemotePlayerDeath(deltaTime);
         updateRemoteAnimations(deltaTime);

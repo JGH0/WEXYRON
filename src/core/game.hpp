@@ -853,6 +853,22 @@ private:
     static float distanceToBody(const glm::vec3& point, const glm::vec3& feet);
     /// True when `point` is inside (or within `slack` of) the body at `feet`.
     static bool pointHitsBody(const glm::vec3& point, const glm::vec3& feet, float slack);
+
+    /// Result of sweeping a projectile's frame segment against a body box.
+    struct ProjectileSweepHit {
+        bool hit = false;
+        float t = 0.0f;         ///< 0..1 along the segment (0 = segment start)
+        glm::vec3 point{0.0f};  ///< first contact on the (fattened) body box
+    };
+    /// Swept projectile-vs-body test. The body box is fattened by `radius`, so
+    /// a fast shot cannot tunnel between two frames and grazes still connect.
+    static ProjectileSweepHit sweepProjectileAgainstBody(const glm::vec3& from,
+                                                         const glm::vec3& to,
+                                                         const glm::vec3& feet,
+                                                         float radius);
+    /// Start of a projectile's current frame segment: its last checked
+    /// position (seeded with the spawn position on creation).
+    glm::vec3 projectileSegmentStart(const Projectile& projectile) const;
     /// Move `feet` to the nearest position where the body does not overlap
     /// geometry and rests on a floor. Returns false if no such spot was found.
     bool placeAtSafePosition(glm::vec3& feet, float searchRadius = 1.5f) const;
@@ -1081,9 +1097,13 @@ private:
     void updateFlashbangEffect(float deltaTime);
     
     /**
-     * @brief Check projectile collision with players (PVP)
+     * @brief Stop a relayed bullet on our own body (damage comes from the
+     *        shooter).
+     *
+     * @param projectile The relayed projectile to check
+     * @return true if it hit our body and was deactivated
      */
-    void checkProjectilePlayerCollision();
+    bool checkProjectilePlayerBody(Projectile& projectile);
     
     /**
      * @brief Damage local player

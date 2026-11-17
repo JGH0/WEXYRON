@@ -6,7 +6,10 @@
 # Windows-only, so changes here cannot break the Linux build.
 
 CXX = g++
-CXXFLAGS = -std=c++17 -Wall -I./include -I./include/stb -I./engine/include -I./src
+# SpatialKit continuous-collision headers (vendored snapshot; the Linux
+# Makefile prefers the live checkout next to the repository).
+SPATIALKIT_DIR ?= third_party/spatialkit
+CXXFLAGS = -std=c++17 -Wall -I./include -I./include/stb -I./engine/include -I./src -I$(SPATIALKIT_DIR)/include
 # Track header dependencies so editing a header (e.g. game.hpp) recompiles every
 # object that uses it. Stale objects would otherwise disagree about sizeof(Game)
 # and corrupt game members at wrong offsets.
@@ -71,12 +74,18 @@ server: $(SERVER_TARGET)
 
 engine-test: $(BIN_DIR)/engine_smoke_test.exe
 
+# Regression test for the continuous (swept) projectile-vs-body detection.
+swept-test: $(BIN_DIR)/swept_hit_test.exe
+
 $(TARGET): $(ALL_OBJECTS) $(ENGINE_LIB) | $(BIN_DIR)
 	$(CXX) $(ALL_OBJECTS) $(ENGINE_LIB) -o $@ $(CLIENT_LDFLAGS)
 	$(MAKE) -f Makefile.windows --no-print-directory stage-runtime
 
 $(BIN_DIR)/engine_smoke_test.exe: $(ENGINE_TEST_SOURCES) $(ENGINE_LIB) | $(BIN_DIR)
 	$(CXX) $(CXXFLAGS) $(ENGINE_TEST_SOURCES) $(ENGINE_LIB) -o $@ $(CLIENT_LDFLAGS)
+
+$(BIN_DIR)/swept_hit_test.exe: tests/swept_hit_test.cpp | $(BIN_DIR)
+	$(CXX) $(CXXFLAGS) $< -o $@
 
 $(SERVER_TARGET): $(SERVER_OBJECTS) | $(BIN_DIR)
 	$(CXX) $^ -o $@ $(SERVER_LDFLAGS)
@@ -203,4 +212,4 @@ debug: $(TARGET)
 -include $(SERVER_OBJECTS:.o=.d)
 -include $(ENGINE_LIB_OBJECTS:.o=.d)
 
-.PHONY: all clean run run-server debug client server engine-test stage-runtime
+.PHONY: all clean run run-server debug client server engine-test swept-test stage-runtime

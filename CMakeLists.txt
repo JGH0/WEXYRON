@@ -87,6 +87,15 @@ endif()
 # not need it.
 add_subdirectory(engine)
 
+# SpatialKit provides the continuous (segment/swept) geometry tests used for
+# fast projectiles. Prefer the live checkout next to this repository; fall back
+# to the vendored header snapshot so CI and fresh clones build without it.
+set(SPATIALKIT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../Einzelkleinprojekt/spartialkit"
+    CACHE PATH "SpatialKit checkout (header-only geometry is used here)")
+if(NOT EXISTS "${SPATIALKIT_DIR}/include/spatialkit/geometry.hpp")
+    set(SPATIALKIT_DIR "${CMAKE_SOURCE_DIR}/third_party/spatialkit")
+endif()
+
 # Include directories
 include_directories(
     ${CMAKE_SOURCE_DIR}/include
@@ -98,6 +107,7 @@ include_directories(
     ${CMAKE_SOURCE_DIR}/src/network
     ${CMAKE_SOURCE_DIR}/src/systems
     ${CMAKE_SOURCE_DIR}/src/ui
+    ${SPATIALKIT_DIR}/include
 )
 
 # Source files
@@ -196,8 +206,19 @@ target_link_libraries(server PRIVATE
     ${PLATFORM_LIBS}
 )
 
+# Regression test for fast-projectile hit detection (uses SpatialKit geometry).
+add_executable(swept_hit_test
+    tests/swept_hit_test.cpp
+)
+if(MSVC)
+    target_compile_options(swept_hit_test PRIVATE /W4)
+else()
+    target_compile_options(swept_hit_test PRIVATE -Wall -Wextra)
+endif()
+add_test(NAME swept_hit_test COMMAND swept_hit_test)
+
 # Set output directories
-set_target_properties(game server
+set_target_properties(game server swept_hit_test
     PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )

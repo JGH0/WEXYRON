@@ -22,7 +22,12 @@ DEPFLAGS = -MMD -MP
 
 # Shared flags. CPPFLAGS is kept separate so the platform blocks below can add
 # include paths (Homebrew on macOS) without repeating the common ones.
-CPPFLAGS = -I./include -I./include/stb -I./engine/include -I./src
+#
+# SpatialKit supplies the continuous (segment/swept) geometry tests used for
+# fast projectiles. Prefer the live checkout next to this repository; fall back
+# to the vendored header snapshot so CI and fresh clones build without it.
+SPATIALKIT_DIR ?= $(if $(wildcard ../Einzelkleinprojekt/spartialkit/include/spatialkit/geometry.hpp),../Einzelkleinprojekt/spartialkit,third_party/spatialkit)
+CPPFLAGS = -I./include -I./include/stb -I./engine/include -I./src -I$(SPATIALKIT_DIR)/include
 CXXFLAGS = -std=c++17 -Wall $(CPPFLAGS)
 
 # Platform-specific libraries.
@@ -92,6 +97,9 @@ server: $(SERVER_TARGET)
 
 engine-test: $(BIN_DIR)/engine_smoke_test
 
+# Regression test for the continuous (swept) projectile-vs-body detection.
+swept-test: $(BIN_DIR)/swept_hit_test
+
 # `deps` is order-only: it runs (and can fail with a helpful message) before
 # linking, but never forces a relink or appears in $^.
 $(TARGET): $(ALL_OBJECTS) $(ENGINE_LIB) | deps-check $(BIN_DIR)
@@ -102,6 +110,9 @@ $(SERVER_TARGET): $(SERVER_OBJECTS) | deps-check $(BIN_DIR)
 
 $(BIN_DIR)/engine_smoke_test: $(ENGINE_TEST_SOURCES) $(ENGINE_LIB) | $(BIN_DIR)
 	$(CXX) $(CXXFLAGS) $(ENGINE_TEST_SOURCES) $(ENGINE_LIB) -o $@ $(LDFLAGS)
+
+$(BIN_DIR)/swept_hit_test: tests/swept_hit_test.cpp | $(BIN_DIR)
+	$(CXX) $(CXXFLAGS) $< -o $@
 
 # Reusable engine library
 $(ENGINE_LIB): $(ENGINE_LIB_OBJECTS) | $(LIB_DIR)
@@ -211,6 +222,7 @@ help:
 	@echo "  client       build $(TARGET)"
 	@echo "  server       build $(SERVER_TARGET)"
 	@echo "  engine-test  build the engine smoke test"
+	@echo "  swept-test   build the fast-projectile hit regression test"
 	@echo "  run          build and launch the client"
 	@echo "  run-server   build and launch the server"
 	@echo "  debug        client build with -g -DDEBUG"
@@ -225,6 +237,6 @@ help:
 
 .DELETE_ON_ERROR:
 
-.PHONY: all clean run run-server debug client server engine-test deps deps-check help
+.PHONY: all clean run run-server debug client server engine-test swept-test deps deps-check help
 
 endif # !Windows

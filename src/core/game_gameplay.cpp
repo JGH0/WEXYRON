@@ -1,6 +1,7 @@
 #include "game.hpp"
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <spatialkit/geometry.hpp>
 #include <algorithm>
 #include <cstdlib>
 #include <iostream>
@@ -8,6 +9,20 @@
 #include <limits>
 #include <GLFW/glfw3.h>
 #include <array>
+
+namespace {
+
+// Gameplay works in GLM; SpatialKit deliberately has its own tiny math types
+// so it stays engine-agnostic. These two helpers are the only bridge.
+inline spatialkit::Vec3 toSpatial(const glm::vec3& value) {
+    return spatialkit::Vec3(value.x, value.y, value.z);
+}
+
+inline glm::vec3 toGlm(const spatialkit::Vec3& value) {
+    return glm::vec3(value.x, value.y, value.z);
+}
+
+} // namespace
 
 // ---------------------------------------------------------------------------
 // Player body: one box shared by rendering and hit detection. Positions are
@@ -31,6 +46,45 @@ float Game::distanceToBody(const glm::vec3& point, const glm::vec3& feet) {
 
 bool Game::pointHitsBody(const glm::vec3& point, const glm::vec3& feet, float slack) {
     return distanceToBody(point, feet) <= slack;
+}
+
+Game::ProjectileSweepHit Game::sweepProjectileAgainstBody(const glm::vec3& from,
+                                                          const glm::vec3& to,
+                                                          const glm::vec3& feet,
+                                                          float radius) {
+    ProjectileSweepHit result;
+
+    glm::vec3 boxMin, boxMax;
+    bodyBox(feet, boxMin, boxMax);
+
+    // Fatten the body by the projectile radius. This is where the old
+    // `bodyHitSlack` lives now, and it makes the swept test tolerant of
+    // near-misses without ever skipping the segment in between frames.
+    const glm::vec3 margin(radius, radius, radius);
+    const spatialkit::AABB body{toSpatial(boxMin - margin),
+                                toSpatial(boxMax + margin)};
+
+    const spatialkit::RayHit hit =
+        spatialkit::intersectSegmentAABB(toSpatial(from), toSpatial(to), body);
+    if (!hit.hit) {
+        return result;
+    }
+
+    result.hit = true;
+    result.t = hit.t;
+    result.point = toGlm(hit.point);
+    return result;
+}
+
+glm::vec3 Game::projectileSegmentStart(const Projectile& projectile) const {
+    for (int i = 0; i < MAX_PROJECTILES; ++i) {
+        if (&projectiles[i] != &projectile) continue;
+        // createProjectile() seeds this slot with the spawn position and every
+        // map check refreshes it, so it is always the start of the current
+        // frame's segment, including the very first frame after spawning.
+        return projectilePrevPos[i];
+    }
+    return projectile.position;
 }
 
 // ---------------------------------------------------------------------------
@@ -855,7 +909,13 @@ void Game::updateProjectiles(float deltaTime) {
                 }
                 std::cout << "Projectile hit enemy! Active: " << activeProjectiles << std::endl;
             }
-            
+
+            // Relayed bullets: stop at our own body. The shooter resolves the
+            // damage; this only ends the visible bullet where it hits us.
+            if (projectiles[i].active && checkProjectilePlayerBody(projectiles[i])) {
+                continue;
+            }
+
             // Check collision with walls (different behavior for different projectile types)
             if (checkProjectileCollision(projectiles[i]) && projectiles[i].active) {
                 // Check projectile type by type field
@@ -1175,61 +1235,39 @@ bool Game::checkProjectileCollision(Projectile& projectile) {
         }
 
         glm::vec3 currPos = projectile.position;
-        glm::vec3 rayDir = currPos - prevPos;
-        float rayLength = glm::length(rayDir);
+        const glm::vec3 segment = currPos - prevPos;
+        const float rayLength = glm::length(segment);
 
-        if (rayLength > 0.001f) {
-            rayDir = rayDir / rayLength; // Normalize
-        }
+        // Swept collision through the SpatialKit segment/AABB test. Only blocks
+        // the shot actually crosses are candidates; the nearest impact wins so
+        // the bullet stops on the surface instead of at its end-of-frame
+        // position (which can be inside or behind the wall).
+        if (rayLength > 0.1f) {
+            const spatialkit::Vec3 from = toSpatial(prevPos);
+            const spatialkit::Vec3 to = toSpatial(currPos);
 
-        // Check each block with swept collision (ray-box intersection)
-        for (const MapBlock& block : blocks) {
-            if (!block.solid) continue;
+            float nearestT = std::numeric_limits<float>::infinity();
+            glm::vec3 impactPoint = currPos;
 
-            // Block bounds (axis-aligned in world space)
-            glm::vec3 blockMin = block.position - block.scale * 0.5f;
-            glm::vec3 blockMax = block.position + block.scale * 0.5f;
+            for (const MapBlock& block : blocks) {
+                if (!block.solid) continue;
 
-            // Only check collision if projectile has traveled some distance
-            if (rayLength > 0.1f) {
-                // Swept collision for fast projectiles - ray-box intersection
-                float tmin = 0.0f;
-                float tmax = rayLength;
+                const glm::vec3 blockMin = block.position - block.scale * 0.5f;
+                const glm::vec3 blockMax = block.position + block.scale * 0.5f;
+                const spatialkit::AABB box{toSpatial(blockMin),
+                                           toSpatial(blockMax)};
 
-                // Check X slab
-                if (abs(rayDir.x) < 0.0001f) {
-                    if (currPos.x < blockMin.x || currPos.x > blockMax.x) continue;
-                } else {
-                    float t1 = (blockMin.x - prevPos.x) / rayDir.x;
-                    float t2 = (blockMax.x - prevPos.x) / rayDir.x;
-                    tmin = std::max(tmin, std::min(t1, t2));
-                    tmax = std::min(tmax, std::max(t1, t2));
+                const spatialkit::RayHit hit =
+                    spatialkit::intersectSegmentAABB(from, to, box);
+                if (hit.hit && hit.t < nearestT) {
+                    nearestT = hit.t;
+                    impactPoint = toGlm(hit.point);
                 }
+            }
 
-                // Check Y slab
-                if (abs(rayDir.y) < 0.0001f) {
-                    if (currPos.y < blockMin.y || currPos.y > blockMax.y) continue;
-                } else {
-                    float t1 = (blockMin.y - prevPos.y) / rayDir.y;
-                    float t2 = (blockMax.y - prevPos.y) / rayDir.y;
-                    tmin = std::max(tmin, std::min(t1, t2));
-                    tmax = std::min(tmax, std::max(t1, t2));
-                }
-
-                // Check Z slab
-                if (abs(rayDir.z) < 0.0001f) {
-                    if (currPos.z < blockMin.z || currPos.z > blockMax.z) continue;
-                } else {
-                    float t1 = (blockMin.z - prevPos.z) / rayDir.z;
-                    float t2 = (blockMax.z - prevPos.z) / rayDir.z;
-                    tmin = std::max(tmin, std::min(t1, t2));
-                    tmax = std::min(tmax, std::max(t1, t2));
-                }
-
-                // Check if ray intersects block
-                if (tmin <= tmax && tmin >= 0.0f && tmin <= rayLength) {
-                    return true;
-                }
+            if (nearestT <= 1.0f) {
+                projectile.position = impactPoint;
+                return true;
             }
         }
 
@@ -1323,45 +1361,67 @@ void Game::spawnEnemy(const glm::vec3& position) {
 }
 
 bool Game::checkProjectileEnemyCollision(Projectile& projectile) {
+    // Test the whole step (last checked position -> current position), not just
+    // the end point. At high bullet speeds the end point can already be behind
+    // the target, which is exactly how hits used to get lost.
+    const glm::vec3 from = projectileSegmentStart(projectile);
+
+    int bestIndex = -1;
+    ProjectileSweepHit best;
     for (int i = 0; i < MAX_ENEMIES; i++) {
-        if (enemies[i].active && enemies[i].alive) {
-            // Enemies stand with their feet on their spawn position.
-            glm::vec3 enemyFeet(enemies[i].x, enemies[i].y, enemies[i].z);
-            if (pointHitsBody(projectile.position, enemyFeet, bodyHitSlack)) {
-                // Grenades/flashbangs do not deal their bullet damage on
-                // contact: the throwable branch detonates them, and the blast
-                // applies its own fixed damage.
-                if (projectile.type == 1 || projectile.type == 2) {
-                    return true;
-                }
+        if (!enemies[i].active || !enemies[i].alive) continue;
 
-                const humanoid::HitZone zone =
-                    humanoid::hitZone(projectile.position, enemyFeet, enemies[i].yaw);
-                const float damage = humanoid::projectileBaseDamage(projectile.type) *
-                                     humanoid::damageMultiplier(zone);
-                enemies[i].health -= damage;
-                enemies[i].anim.damage = 1.0f;
-                playSoundEffect("hit_flesh", projectile.position, 0.8f);
-                std::cout << "Enemy hit (" << humanoid::hitZoneName(zone) << ", x"
-                          << humanoid::damageMultiplier(zone) << ")! Health: "
-                          << enemies[i].health << std::endl;
-
-                if (enemies[i].health <= 0.0f) {
-                    enemies[i].alive = false;
-                    enemies[i].active = false;
-                    activeEnemies--;
-                    kills_++;
-                    std::cout << "Enemy defeated!" << std::endl;
-                }
-                // Bullets stop at the body they hit (throwables are handled
-                // above and must stay active until the caller detonates them).
-                projectile.active = false;
-                activeProjectiles--;
-                return true; // Hit detected
-            }
+        // Enemies stand with their feet on their spawn position.
+        const glm::vec3 enemyFeet(enemies[i].x, enemies[i].y, enemies[i].z);
+        const ProjectileSweepHit hit = sweepProjectileAgainstBody(
+            from, projectile.position, enemyFeet, bodyHitSlack);
+        if (hit.hit && (!best.hit || hit.t < best.t)) {
+            best = hit;
+            bestIndex = i;
         }
     }
-    return false; // No hit
+
+    if (bestIndex < 0) {
+        return false; // No body on the path
+    }
+
+    Enemy& target = enemies[bestIndex];
+    const glm::vec3 enemyFeet(target.x, target.y, target.z);
+
+    // Stop the shot at the first contact, so sounds, hit zones and impact
+    // positions are where the shot actually landed.
+    projectile.position = best.point;
+
+    // Grenades/flashbangs do not deal their bullet damage on contact: the
+    // throwable branch detonates them, and the blast applies its own fixed
+    // damage.
+    if (projectile.type == 1 || projectile.type == 2) {
+        return true;
+    }
+
+    const humanoid::HitZone zone =
+        humanoid::hitZone(best.point, enemyFeet, target.yaw);
+    const float damage = humanoid::projectileBaseDamage(projectile.type) *
+                         humanoid::damageMultiplier(zone);
+    target.health -= damage;
+    target.anim.damage = 1.0f;
+    playSoundEffect("hit_flesh", best.point, 0.8f);
+    std::cout << "Enemy hit (" << humanoid::hitZoneName(zone) << ", x"
+              << humanoid::damageMultiplier(zone) << ")! Health: "
+              << target.health << std::endl;
+
+    if (target.health <= 0.0f) {
+        target.alive = false;
+        target.active = false;
+        activeEnemies--;
+        kills_++;
+        std::cout << "Enemy defeated!" << std::endl;
+    }
+    // Bullets stop at the body they hit (throwables are handled above and must
+    // stay active until the caller detonates them).
+    projectile.active = false;
+    activeProjectiles--;
+    return true; // Hit detected
 }
 
 void Game::checkEnemyPlayerCollision(float deltaTime) {
@@ -1428,30 +1488,34 @@ void Game::updateEnemies(float deltaTime) {
     }
 }
 
-void Game::checkProjectilePlayerCollision() {
+bool Game::checkProjectilePlayerBody(Projectile& projectile) {
     // Hits are resolved once, by the shooter's client, against the same body
     // box and reported to the server. The victim must not apply a second copy
     // locally: that made the victim die on its own while the server (and the
-    // other clients) still saw a living player.
-    for (int i = 0; i < MAX_PROJECTILES; i++) {
-        if (!projectiles[i].active) continue;
-        
-        // Only check projectiles from other players (owner != 0 means remote player)
-        if (projectiles[i].owner == 0) continue; // Skip own projectiles
+    // other players) still saw a living player.
+    if (!networkClient || !networkClient->isConnected()) return false;
 
-        if (projectiles[i].type == 1 || projectiles[i].type == 2) {
-            // Relayed grenade/flashbang: the blast is resolved by the thrower
-            // (damage) or applies its own local flash effect.
-            continue;
-        }
+    // Only check projectiles from other players (owner != 0 means remote player)
+    if (projectile.owner == 0) return false; // Skip own projectiles
 
-        // A relayed bullet ends where it visibly hits this body, but the
-        // damage packet comes from the shooter via the server.
-        if (pointHitsBody(projectiles[i].position, playerPos, bodyHitSlack)) {
-            projectiles[i].active = false;
-            activeProjectiles--;
-        }
+    if (projectile.type == 1 || projectile.type == 2) {
+        // Relayed grenade/flashbang: the blast is resolved by the thrower
+        // (damage) or applies its own local flash effect.
+        return false;
     }
+
+    // A relayed bullet ends where it visibly hits this body, but the damage
+    // packet comes from the shooter via the server. Sweep the step so a fast
+    // relayed bullet cannot fly through us between two frames.
+    const glm::vec3 from = projectileSegmentStart(projectile);
+    const ProjectileSweepHit hit = sweepProjectileAgainstBody(
+        from, projectile.position, playerPos, bodyHitSlack);
+    if (!hit.hit) return false;
+
+    projectile.position = hit.point;
+    projectile.active = false;
+    activeProjectiles--;
+    return true;
 }
 
 void Game::damagePlayer(float damage) {
@@ -1510,6 +1574,13 @@ void Game::checkPlayerPlayerCollision() {
 // ---------------------------------------------------------------------------
 
 bool Game::checkProjectileRemoteCollision(Projectile& projectile) {
+    // Sweep this frame's whole step so fast shots cannot pass through a body.
+    const glm::vec3 from = projectileSegmentStart(projectile);
+
+    RemotePlayer* nearest = nullptr;
+    int nearestIndex = -1;
+    ProjectileSweepHit best;
+
     for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
         RemotePlayer& remote = remotePlayers[i];
         if (!remote.active || remote.isDead) continue;
@@ -1517,59 +1588,60 @@ bool Game::checkProjectileRemoteCollision(Projectile& projectile) {
 
         // Remote positions travel as feet positions (eye = feet + eyeHeight).
         // Hit detection uses the very box the remote player is drawn with.
-        if (!pointHitsBody(projectile.position, remote.position, bodyHitSlack)) continue;
-
-        if (projectile.type == 1 || projectile.type == 2) {
-            // Our grenade/flashbang hit a body: the thrower resolves the
-            // blast here, and the relayed copy (owner != 0) only draws it on
-            // the other clients.
-            return true;
+        const ProjectileSweepHit hit = sweepProjectileAgainstBody(
+            from, projectile.position, remote.position, bodyHitSlack);
+        if (!hit.hit) continue;
+        if (!best.hit || hit.t < best.t) {
+            best = hit;
+            nearest = &remote;
+            nearestIndex = i;
         }
+    }
 
-        // Bullets: the shot stops at the first remote player it reaches.
-        RemotePlayer* nearest = &remote;
-        float nearestDistance = glm::length(remote.position - projectile.position);
-        int nearestIndex = i;
-        for (int j = i + 1; j < MAX_REMOTE_PLAYERS; j++) {
-            RemotePlayer& other = remotePlayers[j];
-            if (!other.active || other.isDead) continue;
-            if (!pointHitsBody(projectile.position, other.position, bodyHitSlack)) continue;
-            const float d = glm::length(other.position - projectile.position);
-            if (d < nearestDistance) { nearest = &other; nearestDistance = d; nearestIndex = j; }
-        }
+    if (!nearest) {
+        return false;
+    }
 
-        // Hit zone: head 2x, torso 1x, arms/legs/feet 0.5x. The multiplier is
-        // applied by the shooter, so the server and the victim receive the
-        // final damage exactly as resolved here.
-        const humanoid::HitZone zone =
-            humanoid::hitZone(projectile.position, nearest->position, nearest->yaw);
-        const float damage = humanoid::projectileBaseDamage(projectile.type) *
-                             humanoid::damageMultiplier(zone);
+    // The shot stops at the first body on the path, not at the bullet's
+    // end-of-frame position (which may already be behind the target).
+    projectile.position = best.point;
 
-        // A shotgun blast hits one target with several pellets per frame: the
-        // pellets are separate damage, not a duplicate hit.
-        networkClient->sendPlayerDamage(nearest->id,
-                                        static_cast<uint16_t>(damage),
-                                        static_cast<uint8_t>(projectile.type));
-        PvpRemote& book = pvpRemotes_[nearestIndex];
-        book.lastHitTime = static_cast<float>(glfwGetTime());
-        book.health = std::max(0.0f, book.health - damage);
-        book.damageSent += static_cast<int>(damage);
-        book.pending = true;
-        book.sentAt  = std::chrono::steady_clock::now();
-        nearest->anim.damage = 1.0f;
-
-        playSoundEffect("hit_flesh", projectile.position, 0.8f);
-        std::cout << "Hit remote player " << nearest->id << " (" << humanoid::hitZoneName(zone)
-                  << ", x" << humanoid::damageMultiplier(zone) << ")"
-                  << " for " << damage << std::endl;
-
-        projectile.active = false;
-        activeProjectiles--;
+    if (projectile.type == 1 || projectile.type == 2) {
+        // Our grenade/flashbang hit a body: the thrower resolves the
+        // blast here, and the relayed copy (owner != 0) only draws it on
+        // the other clients.
         return true;
     }
 
-    return false;
+    // Hit zone: head 2x, torso 1x, arms/legs/feet 0.5x. The multiplier is
+    // applied by the shooter, so the server and the victim receive the
+    // final damage exactly as resolved here.
+    const humanoid::HitZone zone =
+        humanoid::hitZone(best.point, nearest->position, nearest->yaw);
+    const float damage = humanoid::projectileBaseDamage(projectile.type) *
+                         humanoid::damageMultiplier(zone);
+
+    // A shotgun blast hits one target with several pellets per frame: the
+    // pellets are separate damage, not a duplicate hit.
+    networkClient->sendPlayerDamage(nearest->id,
+                                    static_cast<uint16_t>(damage),
+                                    static_cast<uint8_t>(projectile.type));
+    PvpRemote& book = pvpRemotes_[nearestIndex];
+    book.lastHitTime = static_cast<float>(glfwGetTime());
+    book.health = std::max(0.0f, book.health - damage);
+    book.damageSent += static_cast<int>(damage);
+    book.pending = true;
+    book.sentAt  = std::chrono::steady_clock::now();
+    nearest->anim.damage = 1.0f;
+
+    playSoundEffect("hit_flesh", best.point, 0.8f);
+    std::cout << "Hit remote player " << nearest->id << " (" << humanoid::hitZoneName(zone)
+              << ", x" << humanoid::damageMultiplier(zone) << ")"
+              << " for " << damage << std::endl;
+
+    projectile.active = false;
+    activeProjectiles--;
+    return true;
 }
 
 void Game::checkExplosionRemoteCollision(const glm::vec3& position, float radius, float damage) {

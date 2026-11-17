@@ -172,6 +172,9 @@ sudo ufw disable
 - GLFW3
 - GLAD
 - C++17 compiler (g++/MinGW recommended; the build files set `-std=c++17`)
+- SpatialKit continuous-collision headers (vendored in `third_party/spatialkit`;
+  the build prefers the live `../Einzelkleinprojekt/spartialkit` checkout when
+  it exists, so both projects stay in sync during development)
 - **Windows**: MSYS2 + MinGW-w64
 - **Linux**: g++ build-essential
 - **macOS**: Xcode Command Line Tools
@@ -319,11 +322,27 @@ To use your own recordings, replace the files (`.wav`, `.ogg`, `.flac` or
 make && ./build/bin/audio_test        # mixer / decoding / volumes (no device needed)
 xvfb-run -a ./build/bin/audio_smoke   # end-to-end: start a match, fire, check sounds
 make engine-test && ./build/bin/engine_smoke_test  # extracted engine without game code
+make swept-test && ./build/bin/swept_hit_test      # fast projectiles cannot tunnel
 CUBE_MENU_TEST="menu:main;dump" xvfb-run -a ./build/bin/game  # game still boots
 ```
 
 `audio_test` also opens the real device when one exists; on CI without sound it
 still checks decoding and the volume buses.
+
+### Projectile hit detection
+
+Bullets are fast enough to cross a whole player body between two frames. The
+gameplay hit test therefore sweeps the frame segment (previous checked position
+-> current position) through the target's body box with
+`spatialkit::intersectSegmentAABB()` instead of testing only the end point.
+The body is fattened by the old `bodyHitSlack`, so grazing shots still connect;
+the nearest hit along the segment wins, and the projectile is moved to the
+contact point so sounds and impacts happen where the shot landed. See
+`Game::sweepProjectileAgainstBody()` in `src/core/game_gameplay.cpp`.
+
+Increasing `camera.Front * 120.0f` (pistol) or the shotgun pellet speed in
+`src/core/game_gameplay.cpp` is now safe: the swept test has no per-frame
+distance limit as long as `projectilePrevPos` is tracked.
 
 ### Engine library
 
