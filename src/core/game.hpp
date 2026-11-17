@@ -157,6 +157,14 @@ public:
     menu::Page* debugMenuPage();
     GLFWwindow* windowHandle() const { return window; }
     int debugGameMode() const { return static_cast<int>(currentGameMode); }
+    void debugSetGameModeForTest(int mode) {
+        currentGameMode = static_cast<GameMode>(mode);
+    }
+    /// Force the round-end sequence (tests: movement window / popup timer).
+    void debugEndRoundForTest(int winner, int reason) {
+        endRound(winner, static_cast<RoundEndReason>(reason));
+    }
+    float debugRoundEndTimerForTest() const { return roundEndTimer; }
 
     int debugMenuSelection() const { return activeMenuViewConst().stack.selection(); }
     bool debugMainMenuReady() const { return mainMenu_.stack.current() != nullptr; }
@@ -248,8 +256,27 @@ public:
         debugScopedValue_ = scoped;
     }
     /// Current bindings (key test).
+    int debugForwardKey() const { return keyBindings.forward; }
     int debugJumpKey() const { return keyBindings.jump; }
+    int debugSprintKey() const { return keyBindings.sprint; }
+    int debugSneakKey() const { return keyBindings.sneak; }
+    int debugProneKey() const { return keyBindings.prone; }
     int debugGrenadeKey() const { return keyBindings.grenade; }
+    /// Local stance (0 standing, 1 crouching, 2 prone) and eye height for tests.
+    int debugStanceForTest() const { return static_cast<int>(stance_); }
+    float debugEyeHeightForTest() const { return eyeHeightCurrent_; }
+    /// Queue wheel notches exactly like scrollCallback (tests).
+    void debugScrollWeaponForTest(int direction) { pendingWeaponScroll_ = direction; }
+    /// Held weapon index (0 pistol, 1 shotgun, 2 sniper, 3 grenade, 4 flash).
+    int debugWeaponForTest() const { return static_cast<int>(currentWeapon); }
+    /// Infinite-ammo flag actually used by the held weapon.
+    bool debugWeaponInfiniteForTest() const {
+        return currentWeaponInstance && currentWeaponInstance->isInfiniteAmmo();
+    }
+    /// True when the held weapon would allow another shot right now.
+    bool debugWeaponCanShootForTest() const {
+        return currentWeaponInstance && currentWeaponInstance->canShoot();
+    }
     /// Run one frame of real gameplay input holding exactly these keys (a
     /// keyboard press, as far as processGameInput can tell).
     void debugStepWithKeysForTest(float dt, const std::vector<int>& keys);
@@ -374,6 +401,8 @@ public:
     /// Fire sound of the player's own weapon, with a slight random pitch so
     /// repeated shots never sound identical.
     void playGunshot(const std::string& name, float volume = 1.0f);
+    /// Queue the bolt-action rattle (delay lets the gunshot ring out first).
+    void scheduleSniperBolt(float delay);
     /// Trigger click when a weapon with no ammo is fired.
     void playDryFire();
     /// Switch the music track (main menu vs. in-game); called per frame.
@@ -432,14 +461,20 @@ private:
     Grenade* grenade;
     Flashbang* flashbang;
 
-    /// Sniper scope (right mouse button): zooms the camera and draws the
-    /// scope overlay while the sniper is held.
+    /// Sniper scope (held SCOPE binding, right mouse by default): zooms the
+    /// camera and draws the scope overlay while the sniper is held.
     bool sniperScoped_ = false;
     /// Screenshot/test override for the scope state (see debugSetScopedForTest).
     bool debugScopeOverride_ = false;
     bool debugScopedValue_ = false;
     static constexpr float kDefaultFov = 45.0f;   ///< hip-fire / normal FOV
     static constexpr float kSniperFov  = 14.0f;   ///< scoped FOV (approx. 3.2x)
+
+    // Bolt-action sniper: the rattle is delayed until after the shot, and
+    // switching to the rifle requires racking it before it can fire.
+    bool  sniperBoltSoundPending_ = false;
+    float sniperBoltSoundDelay_ = 0.0f;
+    static constexpr float kSniperRackTime = 0.85f;
     
     // Physics system
     Physics physics;
@@ -571,6 +606,7 @@ private:
 
         // Gameplay specific
         bool gameplayGPressed  = false;
+        bool gameplayPronePressed = false;
         bool gameplayWeaponPressed[5] = {false, false, false, false, false}; // indices 0-4
 
         InputState() {
@@ -604,9 +640,18 @@ private:
             rightPressed     = true;
             shapeResetPressed = false;
             gameplayGPressed = false;
+            gameplayPronePressed = false;
             for (int i = 0; i < 5; i++) gameplayWeaponPressed[i] = false;
         }
     } inp;
+
+    /// Keyboard state for a binding, false for unbound (-1) keys and for
+    /// mouse-button codes.
+    bool keyDown(int key) const;
+    /// Mouse-button state for a binding, false for unbound (-1) / invalid.
+    bool mouseDown(int button) const;
+    /// Either kind of binding: keyboard code or encoded mouse button.
+    bool bindingDown(int code) const;
 
     /// Bindings resolved from `gameSettings_` (GLFW key / mouse codes).
     struct KeyBindings {
@@ -615,11 +660,19 @@ private:
         int left;
         int right;
         int jump;
+        int sprint;
+        int sneak;        ///< crouch (hold)
+        int prone;        ///< lie down / crawl (toggle)
         int menu;
         int shoot;        ///< shoot as a key code (-1 when bound to the mouse)
         int shootKey;     ///< same as `shoot`, explicit name
         int shootButton;  ///< mouse button for shooting (-1 when bound to a key)
+        int scopeKey;     ///< scope as a key code (-1 when bound to the mouse)
+        int scopeButton;  ///< mouse button for scoping (-1 when bound to a key)
+        int weaponSlot[5];///< select pistol/shotgun/sniper/grenade/flashbang
         int grenade;
+        int use;          ///< plant / defuse
+        int unstuck;
     } keyBindings;
 
     /// Live settings (bindings, video, gameplay) and the settings file.
@@ -689,6 +742,7 @@ private:
         bool active;
         bool alive;
         float yaw = 0.0f;               ///< facing direction (camera convention)
+        float deathTimer = 0.0f;        ///< > 0: dead but still collapsing on screen
         humanoid::Anim anim;            ///< walk / flinch / attack animation
     };
     
@@ -790,9 +844,30 @@ private:
     // sits eyeHeight above them and the body box spans the whole character.
     // Bodies and hit detection share these numbers so what you see is what
     // you can hit.
-    static constexpr float eyeHeight   = 1.6f;   ///< camera / eye above the feet
+    static constexpr float eyeHeight   = 1.6f;   ///< standing camera / eye above the feet
     static constexpr float bodyWidth   = 0.8f;   ///< body box width and depth
-    static constexpr float bodyHeight  = 1.8f;   ///< body box height
+    static constexpr float bodyHeight  = 1.8f;   ///< standing body box height
+
+    /// The local player's stance changes the body box, the eye height and the
+    /// movement speed. Sneak is held (CTRL), lie/crawl (C) is a toggle.
+    enum Stance {
+        STANCE_STANDING,
+        STANCE_CROUCHING,
+        STANCE_PRONE
+    };
+    Stance stance_ = STANCE_STANDING;
+    /// Smoothed camera height so crouching / lying down eases instead of
+    /// snapping the view to the floor.
+    float eyeHeightCurrent_ = eyeHeight;
+
+    /// Eye / body dimensions for the current stance.
+    float currentEyeHeight() const;
+    float currentBodyHeight() const;
+    float currentBodyCenterHeight() const;
+    /// True when a body of `height` fits at `feet` (used to stand up).
+    bool bodyFitsHeight(const glm::vec3& feet, float height) const;
+    /// True when the local player may stand up here (no low ceiling).
+    bool canStandAtPlayer() const;
     /// Distance from a shot projectile to the nearest body surface below which
     /// the shot counts as a hit.
     static constexpr float bodyHitSlack = 0.15f;
@@ -863,12 +938,17 @@ private:
     static const int MAX_REMOTE_PLAYERS = 16;
     RemotePlayer remotePlayers[MAX_REMOTE_PLAYERS];
 
-    /// Upright body box of a player standing at `feet` (feet = bottom centre).
-    static void bodyBox(const glm::vec3& feet, glm::vec3& boxMin, glm::vec3& boxMax);
-    /// Distance from `point` to a body box standing at `feet` (0 = inside).
-    static float distanceToBody(const glm::vec3& point, const glm::vec3& feet);
+    /// Upright body box of a player at `feet` (feet = bottom centre).
+    /// `height` defaults to the standing body; pass currentBodyHeight() for
+    /// the local player so crouching / lying down really lowers the hit box.
+    static void bodyBox(const glm::vec3& feet, glm::vec3& boxMin, glm::vec3& boxMax,
+                        float height = bodyHeight);
+    /// Distance from `point` to a body box at `feet` (0 = inside).
+    static float distanceToBody(const glm::vec3& point, const glm::vec3& feet,
+                                float height = bodyHeight);
     /// True when `point` is inside (or within `slack` of) the body at `feet`.
-    static bool pointHitsBody(const glm::vec3& point, const glm::vec3& feet, float slack);
+    static bool pointHitsBody(const glm::vec3& point, const glm::vec3& feet, float slack,
+                              float height = bodyHeight);
 
     /// Result of sweeping a projectile's frame segment against a body box.
     struct ProjectileSweepHit {
@@ -881,7 +961,8 @@ private:
     static ProjectileSweepHit sweepProjectileAgainstBody(const glm::vec3& from,
                                                          const glm::vec3& to,
                                                          const glm::vec3& feet,
-                                                         float radius);
+                                                         float radius,
+                                                         float height = bodyHeight);
     /// Start of a projectile's current frame segment: its last checked
     /// position (seeded with the spawn position on creation).
     glm::vec3 projectileSegmentStart(const Projectile& projectile) const;
@@ -917,6 +998,7 @@ private:
         float health = 100.0f;      ///< health as this client believes it
         int   damageSent = 0;       ///< damage reported but not yet confirmed
         bool  pending = false;      ///< damageSent still in flight
+        bool  killSoundPlayed = false; ///< kill "bling" already played for this life
         std::chrono::steady_clock::time_point sentAt; ///< when it was sent
     };
     PvpRemote pvpRemotes_[MAX_REMOTE_PLAYERS];
@@ -1083,6 +1165,13 @@ private:
      * @brief Switch to the given weapon (no-op if already holding it)
      */
     void switchWeapon(WeaponType weapon);
+    /// Cycle to the next (+1) / previous (-1) weapon with the mouse wheel.
+    void cycleWeapon(int direction);
+    /// Wheel notches accumulated by scrollCallback(), consumed in gameplay.
+    int pendingWeaponScroll_ = 0;
+    /// Re-send an active plant / defuse request so a dropped UDP packet does
+    /// not silently cancel the interaction (multiplayer is server-owned).
+    float bombInteractResend_ = 0.0f;
     
     /**
      * @brief Shoot specific weapon types
@@ -1182,6 +1271,9 @@ private:
      * @param position Spawn position
      */
     void spawnEnemy(const glm::vec3& position);
+    /// Shared enemy death path: start the collapse animation, credit the kill
+    /// and play the kill feedback.
+    void killEnemy(Enemy& enemy);
     
     /**
      * @brief Update all active enemies
@@ -1229,9 +1321,11 @@ private:
     void renderScopeOverlay();
 
     /**
-     * @brief Update the sniper scope (right mouse button) and FOV transition
+     * @brief Update the sniper scope (held scope binding) and FOV transition
      */
     void updateScope(float deltaTime);
+    /// Play a queued bolt-action cycle sound when its delay elapsed.
+    void updateSniperBolt(float deltaTime);
     
     /**
      * @brief Build/clear bomb sites from the current map and game mode.

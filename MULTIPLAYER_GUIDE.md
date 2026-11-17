@@ -119,9 +119,13 @@ sudo ufw disable
 - **W/A/S/D**: Move forward/left/backward/right
 - **Mouse**: Look around
 - **Space**: Jump
+- **Left Shift (hold)**: Sprint
+- **Left Ctrl (hold)**: Sneak / crouch
+- **C**: Lie down / get up (crawl while prone; toggle or hold via settings)
 - **Left Mouse**: Shoot
 
 ### Weapons
+- **Mouse Wheel**: Previous / next weapon
 - **1**: Pistol
 - **2**: Pump Shotgun
 - **3**: Sniper Rifle
@@ -131,8 +135,11 @@ sudo ufw disable
 - **Right Mouse (hold)**: Scope with the sniper rifle
 
 ### Other
+- **E**: Plant / defuse the bomb
 - **ESC**: Menu/Disconnect
 - **U**: Unstuck (move to safe position)
+
+All bindings can be changed in **Settings → Controls**.
 
 ## Server Commands
 

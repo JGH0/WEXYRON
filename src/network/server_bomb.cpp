@@ -42,6 +42,7 @@ bool ServerBombManager::init(NetworkServer& server, const Config& config) {
     states_.clear();
     maps_.clear();
     interact_.clear();
+    interactAge_.clear();
     std::cout << "[Bomb] Server-side bomb enabled (round " << config_.roundTime
               << "s, plant " << config_.plantTime << "s, defuse "
               << config_.defuseTime << "s, fuse " << config_.explodeTime << "s)"
@@ -110,6 +111,7 @@ void ServerBombManager::resetRound(MapState& state, int gameMode, int attackingT
     state.broadcastTimer = 0.0f;
     resetBomb(state);
     interact_.clear();
+    interactAge_.clear();
 }
 
 void ServerBombManager::observePlayers(NetworkServer& server) {
@@ -158,6 +160,7 @@ void ServerBombManager::observePlayers(NetworkServer& server) {
                 state.roundTimeLeft = 0.0f;
                 resetBomb(state);
                 interact_.clear();
+                interactAge_.clear();
             } else {
                 resetRound(state, mode, state.attackingTeam);
             }
@@ -178,21 +181,22 @@ void ServerBombManager::onBombInteract(uint32_t playerId, uint8_t action) {
     if (!server_) return;
     ServerPlayer* player = server_->getPlayer(playerId);
     if (!player || !player->active || player->isDead) return;
+    // Only humans send requests; bots are handled automatically by chooseActor.
+    if (player->isBot) return;
     if (player->gameMode < 1) return;
+    if (action != BOMB_INTERACT_PLANT && action != BOMB_INTERACT_DEFUSE) return;
 
     MapState& state = stateFor(player->mapName);
     if (state.gameMode < 1) resetRound(state, player->gameMode, state.attackingTeam);
     if (!state.roundActive) return;
 
-    if (action == BOMB_INTERACT_PLANT) {
-        interact_[playerId] = action;
-    } else if (action == BOMB_INTERACT_DEFUSE) {
-        interact_[playerId] = action;
-    }
+    interact_[playerId] = action;
+    interactAge_[playerId] = 0.0f;
 }
 
 void ServerBombManager::onPlayerDisconnected(uint32_t playerId) {
     interact_.erase(playerId);
+    interactAge_.erase(playerId);
 }
 
 int ServerBombManager::nearbySite(const bots::BotMap* map, const glm::vec3& position) const {
@@ -382,6 +386,19 @@ void ServerBombManager::explode(MapState& state, const std::string& mapName,
 void ServerBombManager::update(float deltaTime, NetworkServer& server) {
     if (!server_) return;
     observePlayers(server);
+
+    // Interaction intents are held only while the client keeps re-sending
+    // them. A lost final packet therefore cannot leave a stale request that
+    // plants the bomb minutes later.
+    for (auto it = interactAge_.begin(); it != interactAge_.end(); ) {
+        it->second += deltaTime;
+        if (it->second > kIntentTtl) {
+            interact_.erase(it->first);
+            it = interactAge_.erase(it);
+        } else {
+            ++it;
+        }
+    }
 
     // No human online: bots idle and the round clock should not keep running.
     const bool humansOnline = server.getHumanPlayerCount() > 0;

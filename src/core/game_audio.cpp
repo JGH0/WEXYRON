@@ -35,6 +35,10 @@ const MixEntry kMix[] = {
     {"pistol_fire",       0.9f},
     {"shotgun_fire",      1.0f},
     {"sniper_fire",       1.0f},
+    {"sniper_fire_thunder", 1.15f},
+    {"sniper_bolt",       0.72f},
+    {"hitmarker",         0.55f},
+    {"kill_bling",        0.75f},
     {"dry_fire",          0.6f},
     {"reload",            0.7f},
     {"grenade_throw",     0.6f},
@@ -58,6 +62,7 @@ const MixEntry kMix[] = {
     {"bomb_beep",         0.5f},
     {"bomb_defuse",       0.6f},
     {"bomb_explode",      1.0f},
+    {"bomb_explode_echo", 1.15f},
     {"ui_hover",          0.35f},
     {"ui_select",         0.55f},
     {"ui_back",           0.5f},
@@ -202,7 +207,8 @@ void Game::updateFootsteps(float deltaTime) {
     }
     if (!onGround) fallTime += deltaTime;
 
-    // Walking: one step every ~0.4 s at full running speed.
+    // Walking: one step every ~0.4 s at full running speed. Sneaking and
+    // crawling are deliberately quieter (and slower, see processGameInput).
     if (onGround && horizontalSpeed > 0.5f) {
         footstepTimer += deltaTime;
         const float interval = std::max(0.3f, 2.0f / std::max(horizontalSpeed, 1.0f));
@@ -213,7 +219,10 @@ void Game::updateFootsteps(float deltaTime) {
             std::snprintf(name, sizeof(name), "footstep_%d", footstepIndex + 1);
             // A touch of random pitch so the four steps don't loop audibly.
             const float pitch = randomRange(0.92f, 1.08f) * footstepPitch;
-            playSoundEffect(name, playerPos + glm::vec3(0.0f, -1.4f, 0.0f), 1.0f, pitch);
+            const float volume = stance_ == STANCE_PRONE ? 0.18f
+                               : stance_ == STANCE_CROUCHING ? 0.4f
+                                                             : 1.0f;
+            playSoundEffect(name, playerPos + glm::vec3(0.0f, -1.4f, 0.0f), volume, pitch);
         }
     } else {
         footstepTimer = 0.0f;

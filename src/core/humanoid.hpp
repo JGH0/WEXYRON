@@ -83,6 +83,9 @@ struct Anim {
     float walkBlend = 0.0f;   ///< 0 = standing, 1 = full stride
     float damage = 0.0f;      ///< 0..1 flinch timer, set to 1 on a hit
     float shoot = 0.0f;       ///< 0..1 fire/recoil timer, set to 1 on a shot
+    /// 0 = upright, 1 = fully collapsed. Gameplay advances this after death so
+    /// bodies fall over instead of disappearing in the same frame.
+    float death = 0.0f;
     float vx = 0.0f;          ///< last horizontal velocity (world)
     float vy = 0.0f;          ///< last vertical velocity
     float vz = 0.0f;
@@ -173,6 +176,16 @@ inline void render(Renderer& renderer, const glm::vec3& feet, float yawDeg,
     root[2] = vec4(forward, 0.0f);
     root[3] = vec4(feet, 1.0f);
 
+    // Death animation: rotate the whole body around the feet (fall backwards)
+    // and lift it a little off the floor so the collapsed model does not sink
+    // into the ground.
+    const float death = std::clamp(anim.death, 0.0f, 1.0f);
+    if (death > 0.0f) {
+        const float fall = death * (2.0f - death);   // ease out
+        root = glm::rotate(root, glm::radians(-82.0f * fall), vec3(1, 0, 0));
+        root[3].y += 0.10f * fall;
+    }
+
     // Push a box in a parent's local space. `rot` is applied around the box
     // centre (X then Y then Z).
     auto add = [&](const mat4& parent, const vec3& centre, const vec3& size,
@@ -247,8 +260,20 @@ inline void render(Renderer& renderer, const glm::vec3& feet, float yawDeg,
         torsoTwist = 8.0f * fire;
     }
 
+    // Dead: limp limbs, no gait / firing pose.
+    if (death > 0.0f) {
+        leftHip = rightHip = -7.0f * death;
+        leftKnee = rightKnee = 20.0f * death;
+        leftArm = rightArm = -16.0f * death;
+        armOutL = 30.0f * death;
+        armOutR = -30.0f * death;
+        torsoLean = 0.0f;
+        torsoTwist = 0.0f;
+        torsoBob = 0.0f;
+    }
+
     const float headPitch = std::clamp(pitchDeg * 0.35f, -18.0f, 18.0f)
-                          - 8.0f * flinch;
+                          - 8.0f * flinch - 14.0f * death;
 
     // ── Torso / neck / head ────────────────────────────────────────────────
     mat4 torsoRoot = glm::translate(root, vec3(0.0f, kHipY + torsoBob, 0.0f));

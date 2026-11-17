@@ -41,3 +41,7 @@ block 0.0 2.0 20.0 42.0 4.0 1.0 6 1 1
 block 0.0 2.0 -20.0 42.0 4.0 1.0 6 1 1
 block 20.0 2.0 0.0 1.0 4.0 42.0 6 1 1
 block -20.0 2.0 0.0 1.0 4.0 42.0 6 1 1
+
+# Bomb sites (bomb defusal): open side lanes, clear of cover blocks
+bomb_site -15.0 0.01 0.0 A
+bomb_site 15.0 0.01 0.0 B

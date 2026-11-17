@@ -85,7 +85,7 @@ void PumpShotgun::shoot(Game* game) {
 
 // Sniper Implementation
 Sniper::Sniper(bool infiniteAmmo)
-    : Weapon(SNIPER, 1.15f, infiniteAmmo ? 999 : 10, infiniteAmmo) {
+    : Weapon(SNIPER, 1.45f, infiniteAmmo ? 999 : 10, infiniteAmmo) {
 }
 
 void Sniper::shoot(Game* game) {
@@ -95,7 +95,10 @@ void Sniper::shoot(Game* game) {
     if (game->createProjectile(game->getCamera().Position,
                                game->getCamera().Front * kSniperBulletSpeed,
                                3.0f, 0, 4)) {
-        game->playGunshot("sniper_fire", 1.0f);
+        game->playGunshot("sniper_fire_thunder", 1.15f);
+        // Bolt-action: the rattle follows the shot, and the long cooldown
+        // prevents another round until the bolt has been cycled.
+        game->scheduleSniperBolt(0.42f);
         if (!infiniteAmmo) {
             ammo--;
         }
@@ -106,8 +109,8 @@ void Sniper::shoot(Game* game) {
 }
 
 // Grenade Implementation
-Grenade::Grenade(int count)
-    : Weapon(GRENADE, 1.0f, count, false) {
+Grenade::Grenade(int count, bool infiniteAmmo)
+    : Weapon(GRENADE, 1.0f, count, infiniteAmmo) {
 }
 
 void Grenade::shoot(Game* game) {
@@ -124,8 +127,8 @@ void Grenade::shoot(Game* game) {
 }
 
 // Flashbang Implementation  
-Flashbang::Flashbang(int count)
-    : Weapon(FLASHBANG, 1.0f, count, false) {
+Flashbang::Flashbang(int count, bool infiniteAmmo)
+    : Weapon(FLASHBANG, 1.0f, count, infiniteAmmo) {
 }
 
 void Flashbang::shoot(Game* game) {

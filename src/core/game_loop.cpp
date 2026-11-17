@@ -22,9 +22,10 @@ void Game::update(float deltaTime) {
     // gameplay below may start sounds that are mixed this frame.
     updateAudio(deltaTime);
 
-    // Sniper scope: right mouse button zooms while the sniper is held. Runs in
+    // Sniper scope: the held SCOPE binding zooms while the sniper is held. Runs in
     // every state so the FOV also returns to normal after death or a menu.
     updateScope(deltaTime);
+    updateSniperBolt(deltaTime);
 
     if (gameState == PLAYING) {
         // Deathmatch has no round cycle; the HUD shows elapsed match time.
@@ -41,13 +42,15 @@ void Game::update(float deltaTime) {
             // Dead players fly freely (map-editor style) instead of running
             // gravity/collision on a body that is no longer in the round.
             updateSpectator(deltaTime);
-        } else if (roundIntermission) {
-            playerVelocity = glm::vec3(0.0f);
-            isPlanting = false;
-            isDefusing = false;
-            plantProgress = 0.0f;
-            defuseProgress = 0.0f;
         } else {
+            if (roundIntermission) {
+                // CS-style round end: no shooting / planting, but the body
+                // keeps walking around until the next round starts.
+                isPlanting = false;
+                isDefusing = false;
+                plantProgress = 0.0f;
+                defuseProgress = 0.0f;
+            }
             // Update player physics (always run, client controls own movement in multiplayer)
             updatePlayerPhysics(deltaTime);
 
@@ -117,33 +120,34 @@ void Game::update(float deltaTime) {
         const bool roundFrozen =
             roundEndTimer > 0.0f &&
             (currentGameMode == TEAM_VS_TEAM || currentGameMode == BOMB_DEFUSAL);
+        const bool interacting = isPlanting || isDefusing;
         float moveX = 0.0f, moveZ = 0.0f;
-        if (alive && !roundFrozen) {
-            if (glfwGetKey(window, keyBindings.forward) == GLFW_PRESS) {
+        if (alive && !interacting) {
+            if (keyDown(keyBindings.forward)) {
                 moveX += cos(glm::radians(camera.Yaw));
                 moveZ += sin(glm::radians(camera.Yaw));
             }
-            if (glfwGetKey(window, keyBindings.backward) == GLFW_PRESS) {
+            if (keyDown(keyBindings.backward)) {
                 moveX -= cos(glm::radians(camera.Yaw));
                 moveZ -= sin(glm::radians(camera.Yaw));
             }
-            if (glfwGetKey(window, keyBindings.left) == GLFW_PRESS) {
+            if (keyDown(keyBindings.left)) {
                 moveX += cos(glm::radians(camera.Yaw - 90.0f));
                 moveZ += sin(glm::radians(camera.Yaw - 90.0f));
             }
-            if (glfwGetKey(window, keyBindings.right) == GLFW_PRESS) {
+            if (keyDown(keyBindings.right)) {
                 moveX += cos(glm::radians(camera.Yaw + 90.0f));
                 moveZ += sin(glm::radians(camera.Yaw + 90.0f));
             }
         }
 
-        const bool jump  = alive && !roundFrozen &&
-                           glfwGetKey(window, keyBindings.jump) == GLFW_PRESS;
-        const bool shoot = alive && !roundFrozen &&
-                           glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+        const bool jump  = alive && !interacting &&
+                           keyDown(keyBindings.jump);
+        const bool shoot = alive && !roundFrozen && !interacting &&
+                           bindingDown(gameSettings_.bindShoot);
 
         // Send eye-level position for projectile spawning (playerPos + eye height)
-        const glm::vec3 eyePos = playerPos + glm::vec3(0.0f, 1.6f, 0.0f);
+        const glm::vec3 eyePos = playerPos + glm::vec3(0.0f, currentEyeHeight(), 0.0f);
         networkClient->sendPlayerInput(moveX, moveZ, camera.Yaw, camera.Pitch, jump, shoot,
                                        static_cast<uint8_t>(currentWeapon),
                                        eyePos.x, eyePos.y, eyePos.z,

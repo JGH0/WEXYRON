@@ -104,13 +104,13 @@ void Game::processInput(float deltaTime) {
 
     if (gameState == PLAYING) {
         // ESC opens the menu (unless the player bound another key to it).
-        if (glfwGetKey(window, keyBindings.menu) == GLFW_PRESS && !inp.escapePressed) {
+        if (bindingDown(keyBindings.menu) && !inp.escapePressed) {
             inp.escapePressed = true;
             inp.resetNavKeys();
             openMainMenu();
             gameState = MENU;
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-        } else if (glfwGetKey(window, keyBindings.menu) == GLFW_RELEASE) {
+        } else if (!bindingDown(keyBindings.menu)) {
             inp.escapePressed = false;
         }
         processGameInput(deltaTime);
@@ -270,39 +270,61 @@ void Game::processMenuInput() {
 // Gameplay input
 // ---------------------------------------------------------------------------
 
+bool Game::keyDown(int key) const {
+    return window && key >= 0 && !settings::isMouseBinding(key) &&
+           glfwGetKey(window, key) == GLFW_PRESS;
+}
+
+bool Game::mouseDown(int button) const {
+    return window && button >= 0 && button <= GLFW_MOUSE_BUTTON_LAST &&
+           glfwGetMouseButton(window, button) == GLFW_PRESS;
+}
+
+bool Game::bindingDown(int code) const {
+    const int button = settings::mouseButtonOf(code);
+    return button >= 0 ? mouseDown(button) : keyDown(code);
+}
+
 void Game::processGameInput(float deltaTime) {
     // Dead spectators only fly the camera (updateSpectator); they must not
     // shoot, switch weapons or plant/defuse while the round continues.
-    if (spectatorMode) return;
+    if (spectatorMode) {
+        pendingWeaponScroll_ = 0;
+        return;
+    }
 
-    // Between rounds nothing may move or shoot. This also cancels a plant /
-    // defuse that was in progress when the winning condition was reached.
+    // Counter-Strike style round end: players may still walk around for a
+    // few seconds, but shooting and bomb interactions are disabled and any
+    // plant/defuse in progress is cancelled.
     const bool roundIntermission =
         roundEndTimer > 0.0f &&
         (currentGameMode == TEAM_VS_TEAM || currentGameMode == BOMB_DEFUSAL);
     if (roundIntermission) {
-        playerVelocity.x = 0.0f;
-        playerVelocity.z = 0.0f;
-        inp.jumpHeld = false;
         isPlanting = false;
         isDefusing = false;
         plantProgress = 0.0f;
         defuseProgress = 0.0f;
-        return;
     }
 
-    bool inputProcessed = false;
-    
-    // Unstuck key (U) - move player to safe center position
-    if (glfwGetKey(window, GLFW_KEY_U) == GLFW_PRESS) {
+    // Mouse wheel weapon switch (queued by scrollCallback). One notch per
+    // frame; scrolling no longer changes the camera FOV.
+    if (pendingWeaponScroll_ != 0) {
+        const int direction = pendingWeaponScroll_ > 0 ? 1 : -1;
+        pendingWeaponScroll_ = 0;
+        cycleWeapon(direction);
+    }
+
+    // Unstuck (U by default, rebindable) - move player to a safe centre spot.
+    if (bindingDown(keyBindings.unstuck)) {
         playerPos = glm::vec3(0.0f, 2.0f, 0.0f); // Reset to center well above floor
         playerVelocity = glm::vec3(0.0f, 0.0f, 0.0f); // Stop all movement
+        stance_ = STANCE_STANDING;
+        eyeHeightCurrent_ = eyeHeight;
         camera.Position = glm::vec3(0.0f, playerPos.y + eyeHeight, 0.0f); // Reset camera
-        inputProcessed = true;
     }
     
-    // Bomb defusal mode - E key for planting/defusing
-    if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) {
+    // Bomb defusal mode - USE key (E by default) for planting/defusing
+    if (!roundIntermission && bindingDown(keyBindings.use)) {
         if (bombDefusalMode) {
             if (bomb.planted && !bomb.defused) {
                 startDefusing();
@@ -310,40 +332,106 @@ void Game::processGameInput(float deltaTime) {
                 startPlanting();
             }
         }
-        inputProcessed = true;
     }
-    
+
+    // ── Stance (sprint / sneak / prone) ─────────────────────────────────────
+    // Sneak is held. Lying down is a toggle or a hold, depending on the
+    // "C LIE TOGGLE" gameplay setting. Standing up is refused when the body
+    // would not fit under a low ceiling, so the player stays crouched instead
+    // of being pushed into geometry.
+    const bool sprintHeld = debugKeyDownForTest(keyBindings.sprint);
+    const bool sneakHeld  = debugKeyDownForTest(keyBindings.sneak);
+    const bool proneHeld  = debugKeyDownForTest(keyBindings.prone);
+
+    const bool proneToggle = gameSettings_.proneToggle;
+    if (proneToggle) {
+        if (proneHeld && !inp.gameplayPronePressed) {
+            inp.gameplayPronePressed = true;
+            if (stance_ == STANCE_PRONE) {
+                if (canStandAtPlayer() && !sneakHeld) {
+                    stance_ = STANCE_STANDING;
+                } else {
+                    stance_ = bodyFitsHeight(playerPos, 1.2f) ? STANCE_CROUCHING
+                                                              : STANCE_PRONE;
+                }
+            } else {
+                stance_ = STANCE_PRONE;
+            }
+        } else if (!proneHeld) {
+            inp.gameplayPronePressed = false;
+        }
+    } else {
+        // Held mode: lying down only while the key is down.
+        inp.gameplayPronePressed = false;
+        if (proneHeld) {
+            stance_ = STANCE_PRONE;
+        } else if (stance_ == STANCE_PRONE) {
+            if (sneakHeld) {
+                stance_ = STANCE_CROUCHING;
+            } else if (canStandAtPlayer()) {
+                stance_ = STANCE_STANDING;
+            } else {
+                stance_ = bodyFitsHeight(playerPos, 1.2f) ? STANCE_CROUCHING
+                                                          : STANCE_PRONE;
+            }
+        }
+    }
+
+    if (stance_ != STANCE_PRONE) {
+        if (sneakHeld) {
+            stance_ = STANCE_CROUCHING;
+        } else if (stance_ == STANCE_CROUCHING && canStandAtPlayer()) {
+            // Crouching was only held down; stand back up when there is room.
+            stance_ = STANCE_STANDING;
+        }
+    }
+
+    // Planting / defusing puts the player into the low, crouched pose used by
+    // CS and Valorant. The body stays put until the interaction ends.
+    const bool bombInteraction = isPlanting || isDefusing;
+    if (bombInteraction) stance_ = STANCE_CROUCHING;
+
     // Movement using key bindings (from the settings file)
     glm::vec3 movement(0.0f);
-    float moveSpeed = 5.0f;
     
-    if (glfwGetKey(window, keyBindings.forward) == GLFW_PRESS) {
+    if (debugKeyDownForTest(keyBindings.forward)) {
         movement.x += cos(glm::radians(camera.Yaw));
         movement.z += sin(glm::radians(camera.Yaw));
-        inputProcessed = true;
     }
-    if (glfwGetKey(window, keyBindings.backward) == GLFW_PRESS) {
+    if (debugKeyDownForTest(keyBindings.backward)) {
         movement.x -= cos(glm::radians(camera.Yaw));
         movement.z -= sin(glm::radians(camera.Yaw));
-        inputProcessed = true;
     }
-    if (glfwGetKey(window, keyBindings.left) == GLFW_PRESS) {
+    if (debugKeyDownForTest(keyBindings.left)) {
         movement.x += cos(glm::radians(camera.Yaw - 90.0f));
         movement.z += sin(glm::radians(camera.Yaw - 90.0f));
-        inputProcessed = true;
     }
-    if (glfwGetKey(window, keyBindings.right) == GLFW_PRESS) {
+    if (debugKeyDownForTest(keyBindings.right)) {
         movement.x += cos(glm::radians(camera.Yaw + 90.0f));
         movement.z += sin(glm::radians(camera.Yaw + 90.0f));
-        inputProcessed = true;
     }
-    
-    // Apply movement to velocity
-    if (inputProcessed) {
+
+    const bool moving = glm::length(movement) > 0.0001f;
+    if (moving) {
+        movement = glm::normalize(movement);
+    }
+
+    float moveSpeed = 5.0f;
+    switch (stance_) {
+        case STANCE_CROUCHING: moveSpeed = 2.6f; break;
+        case STANCE_PRONE:     moveSpeed = 1.2f; break;
+        case STANCE_STANDING:
+        default:
+            moveSpeed = (sprintHeld && moving) ? 8.5f : 5.0f;
+            break;
+    }
+
+    // Apply movement to velocity. A bomb interaction locks the body in place.
+    if (moving && !bombInteraction) {
         playerVelocity.x = movement.x * moveSpeed;
         playerVelocity.z = movement.z * moveSpeed;
     } else {
-        // Stop horizontal movement when no keys pressed
+        // Stop horizontal movement when no keys pressed (or while interacting).
         playerVelocity.x = 0.0f;
         playerVelocity.z = 0.0f;
     }
@@ -351,22 +439,17 @@ void Game::processGameInput(float deltaTime) {
     // Jump input: holding the key keeps jumping. handleJump() only starts a jump
     // from the ground, so the press jumps at once and a held key jumps again the
     // moment the feet touch the floor (bunny-hop), never mid-air.
-    inp.jumpHeld = debugKeyDownForTest(keyBindings.jump);
+    inp.jumpHeld = debugKeyDownForTest(keyBindings.jump) &&
+                   stance_ != STANCE_PRONE && !bombInteraction;
     if (inp.jumpHeld) {
         if (isOnGround()) handleJump();   // no point above the floor
-        inputProcessed = true;
     }
     
     // Shoot input: mouse button by default, rebindable in Settings > Controls
-    // (the binding may also be a key). glfwGetMouseButton() only accepts mouse
-    // buttons and glfwGetKey() only accepts keys, hence the two checks.
-    const bool shootDown =
-        (keyBindings.shootButton >= 0 &&
-         glfwGetMouseButton(window, keyBindings.shootButton) == GLFW_PRESS) ||
-        (keyBindings.shootKey >= 0 && glfwGetKey(window, keyBindings.shootKey) == GLFW_PRESS);
-    if (shootDown) {
+    // (the binding may also be a key). No firing between rounds or mid-plant.
+    const bool shootDown = bindingDown(gameSettings_.bindShoot);
+    if (shootDown && !roundIntermission && !bombInteraction) {
         shoot();
-        inputProcessed = true;
     }
     
     // Weapon switching input.
@@ -378,7 +461,7 @@ void Game::processGameInput(float deltaTime) {
         PISTOL, PUMP_SHOTGUN, SNIPER, GRENADE, FLASHBANG
     };
     for (int key = 0; key < 5; key++) {
-        if (glfwGetKey(window, GLFW_KEY_1 + key) != GLFW_PRESS) {
+        if (!bindingDown(keyBindings.weaponSlot[key])) {
             inp.gameplayWeaponPressed[key] = false;
             continue;
         }
@@ -390,7 +473,7 @@ void Game::processGameInput(float deltaTime) {
 
     // Grenade key: toggle between the two throwables (selecting the throwable
     // you're not holding, or the grenade if you're holding a gun).
-    if (glfwGetKey(window, keyBindings.grenade) == GLFW_PRESS) {
+    if (bindingDown(keyBindings.grenade)) {
         if (!inp.gameplayGPressed) {
             inp.gameplayGPressed = true;
             switchWeapon(currentWeapon == GRENADE ? FLASHBANG : GRENADE);

@@ -89,6 +89,8 @@ const float kMaxFrameTime = 0.05f;
 struct GameSettings {
     // Gameplay ---------------------------------------------------------------
     bool infiniteAmmo = false;
+    /// C toggles lying down when ON; OFF makes it a held key (release to get up).
+    bool proneToggle = true;
 
     // Video ------------------------------------------------------------------
     bool showFps = false;
@@ -102,14 +104,25 @@ struct GameSettings {
     int effectsVolume = 90;        ///< 0..100, applied live
 
     // Controls ---------------------------------------------------------------
-    int bindForward = 87;          ///< GLFW_KEY_W
-    int bindBackward = 83;         ///< GLFW_KEY_S
-    int bindLeft = 65;             ///< GLFW_KEY_A
-    int bindRight = 68;            ///< GLFW_KEY_D
-    int bindJump = 32;             ///< GLFW_KEY_SPACE
-    int bindShoot = 1000 + 0;      ///< GLFW_MOUSE_BUTTON_LEFT
-    int bindGrenade = 71;          ///< GLFW_KEY_G
-    int bindMenu = 256;            ///< GLFW_KEY_ESCAPE
+    int bindForward = 87;           ///< GLFW_KEY_W
+    int bindBackward = 83;          ///< GLFW_KEY_S
+    int bindLeft = 65;              ///< GLFW_KEY_A
+    int bindRight = 68;             ///< GLFW_KEY_D
+    int bindJump = 32;              ///< GLFW_KEY_SPACE
+    int bindSprint = 340;           ///< GLFW_KEY_LEFT_SHIFT
+    int bindSneak = 341;            ///< GLFW_KEY_LEFT_CONTROL (crouch)
+    int bindProne = 67;             ///< GLFW_KEY_C (lie down / crawl, toggle)
+    int bindShoot = 1000 + 0;       ///< GLFW_MOUSE_BUTTON_LEFT
+    int bindScope = 1000 + 1;       ///< GLFW_MOUSE_BUTTON_RIGHT (sniper)
+    int bindWeapon1 = 49;           ///< GLFW_KEY_1 (pistol)
+    int bindWeapon2 = 50;           ///< GLFW_KEY_2 (shotgun)
+    int bindWeapon3 = 51;           ///< GLFW_KEY_3 (sniper)
+    int bindWeapon4 = 52;           ///< GLFW_KEY_4 (grenade)
+    int bindWeapon5 = 53;           ///< GLFW_KEY_5 (flashbang)
+    int bindGrenade = 71;           ///< GLFW_KEY_G
+    int bindUse = 69;               ///< GLFW_KEY_E (plant / defuse)
+    int bindUnstuck = 85;           ///< GLFW_KEY_U
+    int bindMenu = 256;             ///< GLFW_KEY_ESCAPE
 };
 
 /// One entry of the settings registry: a value plus everything the UI and the

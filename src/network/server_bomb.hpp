@@ -123,8 +123,12 @@ private:
     NetworkServer* server_ = nullptr;
     std::map<std::string, MapState> states_;
     std::map<std::string, std::unique_ptr<bots::BotMap>> maps_;
-    /// Last requested action per player (valid until the next round / death).
+    /// Last requested action per player. Clients re-send while holding the
+    /// use key; an intent older than kIntentTtl is dropped, so releasing the
+    /// key cancels a plant that has not started yet.
     std::map<uint32_t, uint8_t> interact_;
+    std::map<uint32_t, float> interactAge_;
+    static constexpr float kIntentTtl = 0.5f;
 
     const bots::BotMap* getMap(const std::string& mapName);
     std::string resolveMapPath(const std::string& mapName) const;

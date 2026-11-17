@@ -40,6 +40,10 @@ public:
     int getAmmo() const { return ammo; }
     bool isInfiniteAmmo() const { return infiniteAmmo; }
     void setInfiniteAmmo(bool val) { infiniteAmmo = val; }
+    /// Force at least `seconds` of cycling before the next shot (bolt rack).
+    void startCycle(float seconds) {
+        if (seconds > cooldownTimer) cooldownTimer = seconds;
+    }
 };
 
 /**
@@ -74,7 +78,7 @@ public:
  */
 class Grenade : public Weapon {
 public:
-    Grenade(int count = 3);
+    Grenade(int count = 3, bool infiniteAmmo = false);
     void shoot(Game* game) override;
 };
 
@@ -83,7 +87,7 @@ public:
  */
 class Flashbang : public Weapon {
 public:
-    Flashbang(int count = 2);
+    Flashbang(int count = 2, bool infiniteAmmo = false);
     void shoot(Game* game) override;
 };
 

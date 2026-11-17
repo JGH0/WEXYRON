@@ -176,8 +176,19 @@ void Game::resetBindingsToDefaults() {
     gameSettings_.bindLeft     = defaults.bindLeft;
     gameSettings_.bindRight    = defaults.bindRight;
     gameSettings_.bindJump     = defaults.bindJump;
+    gameSettings_.bindSprint   = defaults.bindSprint;
+    gameSettings_.bindSneak    = defaults.bindSneak;
+    gameSettings_.bindProne    = defaults.bindProne;
     gameSettings_.bindShoot    = defaults.bindShoot;
+    gameSettings_.bindScope    = defaults.bindScope;
+    gameSettings_.bindWeapon1  = defaults.bindWeapon1;
+    gameSettings_.bindWeapon2  = defaults.bindWeapon2;
+    gameSettings_.bindWeapon3  = defaults.bindWeapon3;
+    gameSettings_.bindWeapon4  = defaults.bindWeapon4;
+    gameSettings_.bindWeapon5  = defaults.bindWeapon5;
     gameSettings_.bindGrenade  = defaults.bindGrenade;
+    gameSettings_.bindUse      = defaults.bindUse;
+    gameSettings_.bindUnstuck  = defaults.bindUnstuck;
     gameSettings_.bindMenu     = defaults.bindMenu;
 
     // Refresh the key caps shown on the controls page.
@@ -306,14 +317,16 @@ void Game::applySettings() {
     if (glfwGetCurrentContext()) glfwSwapInterval(vsyncEnabled ? 1 : 0);
 
     // Infinite ammo is read from the game member by the gameplay code, and
-    // mirrored into the weapons (their own check is what stops ammo loss).
-    if (gameSettings_.infiniteAmmo != infiniteAmmoMode) {
-        infiniteAmmoMode = gameSettings_.infiniteAmmo;
-        if (pistol)    pistol->setInfiniteAmmo(infiniteAmmoMode);
-        if (shotgun)   shotgun->setInfiniteAmmo(infiniteAmmoMode);
-        if (grenade)   grenade->setInfiniteAmmo(infiniteAmmoMode);
-        if (flashbang) flashbang->setInfiniteAmmo(infiniteAmmoMode);
-    }
+    // mirrored into every weapon (their own canShoot()/shoot() check is what
+    // stops ammo loss). Do not guard this with "value changed": weapons are
+    // created after loadSettings(), so grenades/flashbangs used to stay on
+    // their finite count while the HUD showed INF.
+    infiniteAmmoMode = gameSettings_.infiniteAmmo;
+    if (pistol)    pistol->setInfiniteAmmo(infiniteAmmoMode);
+    if (shotgun)   shotgun->setInfiniteAmmo(infiniteAmmoMode);
+    if (sniper)    sniper->setInfiniteAmmo(infiniteAmmoMode);
+    if (grenade)   grenade->setInfiniteAmmo(infiniteAmmoMode);
+    if (flashbang) flashbang->setInfiniteAmmo(infiniteAmmoMode);
 
     // Audio: volumes apply live (the menu previews them through the mixer).
     audio.setMasterVolume(gameSettings_.masterVolume / 100.0f);
@@ -325,6 +338,9 @@ void Game::applySettings() {
     keyBindings.left     = gameSettings_.bindLeft;
     keyBindings.right    = gameSettings_.bindRight;
     keyBindings.jump     = gameSettings_.bindJump;
+    keyBindings.sprint   = gameSettings_.bindSprint;
+    keyBindings.sneak    = gameSettings_.bindSneak;
+    keyBindings.prone    = gameSettings_.bindProne;
     // Bindings are stored as one integer for keys *and* mouse buttons:
     // keyboard codes are 32..348 and mouse buttons are encoded as 1000 + n.
     // glfwGetKeyName/glfwGetKey belong to keyboard codes only, so the engine
@@ -332,7 +348,16 @@ void Game::applySettings() {
     keyBindings.shootButton = settings::mouseButtonOf(gameSettings_.bindShoot);
     keyBindings.shootKey    = keyBindings.shootButton >= 0 ? -1 : gameSettings_.bindShoot;
     keyBindings.shoot       = keyBindings.shootKey;   // kept for compatibility
+    keyBindings.scopeButton = settings::mouseButtonOf(gameSettings_.bindScope);
+    keyBindings.scopeKey    = keyBindings.scopeButton >= 0 ? -1 : gameSettings_.bindScope;
+    keyBindings.weaponSlot[0] = gameSettings_.bindWeapon1;
+    keyBindings.weaponSlot[1] = gameSettings_.bindWeapon2;
+    keyBindings.weaponSlot[2] = gameSettings_.bindWeapon3;
+    keyBindings.weaponSlot[3] = gameSettings_.bindWeapon4;
+    keyBindings.weaponSlot[4] = gameSettings_.bindWeapon5;
     keyBindings.grenade  = gameSettings_.bindGrenade;
+    keyBindings.use      = gameSettings_.bindUse;
+    keyBindings.unstuck  = gameSettings_.bindUnstuck;
     keyBindings.menu     = gameSettings_.bindMenu;
 }
 
@@ -636,6 +661,14 @@ bool Game::debugInstallMapForTest(std::unique_ptr<Map> map) {
 }
 
 bool Game::debugKeyDownForTest(int key) const {
+    if (key < 0) return false;
+    if (settings::isMouseBinding(key)) {
+        // Movement / stance bindings may be mouse buttons too. The scripted
+        // test keys only stand in for keyboard codes, so use the real button.
+        const int button = settings::mouseButtonOf(key);
+        return button >= 0 && button <= GLFW_MOUSE_BUTTON_LAST &&
+               window && glfwGetMouseButton(window, button) == GLFW_PRESS;
+    }
     if (!debugKeysHeldForTest.empty()) {
         for (int held : debugKeysHeldForTest) if (held == key) return true;
         return false;

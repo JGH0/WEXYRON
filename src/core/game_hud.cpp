@@ -21,16 +21,18 @@ void Game::renderFlashbangEffect() {
 
 void Game::renderEnemies() {
     for (int i = 0; i < MAX_ENEMIES; i++) {
-        if (enemies[i].active && enemies[i].alive) {
-            // Practice targets use the same blocky body as remote players.
-            // Their health is 50, so it drives the :) -> :| -> :( face too.
-            const float healthPct = glm::clamp(enemies[i].health / 50.0f, 0.0f, 1.0f);
-            humanoid::render(renderer,
-                             glm::vec3(enemies[i].x, enemies[i].y, enemies[i].z),
-                             enemies[i].yaw,
-                             glm::vec3(0.95f, 0.18f, 0.15f),
-                             healthPct, enemies[i].anim, 0.0f, false);
-        }
+        // Dead bodies stay for the collapse animation (and a moment afterwards).
+        if (!enemies[i].active) continue;
+        // Practice targets use the same blocky body as remote players.
+        // Their health is 50, so it drives the :) -> :| -> :( face too.
+        const float healthPct = enemies[i].alive
+                                    ? glm::clamp(enemies[i].health / 50.0f, 0.0f, 1.0f)
+                                    : 0.0f;
+        humanoid::render(renderer,
+                         glm::vec3(enemies[i].x, enemies[i].y, enemies[i].z),
+                         enemies[i].yaw,
+                         glm::vec3(0.95f, 0.18f, 0.15f),
+                         healthPct, enemies[i].anim, 0.0f, enemies[i].alive);
     }
 }
 
@@ -776,27 +778,39 @@ void Game::renderBombDefusalHUD() {
             shownWinner = bomb.defused ? 1 - bomb.plantingTeam : bomb.plantingTeam;
         }
         char teamLine[48];
+        glm::vec3 winColor(0.95f);
         if (shownWinner == 0) {
             snprintf(teamLine, sizeof(teamLine), "TEAM A (RED) WINS");
+            winColor = glm::vec3(1.0f, 0.25f, 0.22f);
         } else if (shownWinner == 1) {
             snprintf(teamLine, sizeof(teamLine), "TEAM B (BLUE) WINS");
+            winColor = glm::vec3(0.28f, 0.48f, 1.0f);
         } else {
             snprintf(teamLine, sizeof(teamLine), "DRAW");
+            winColor = glm::vec3(0.85f);
         }
 
         const float centreX = (left + right) * 0.5f;
         const float centreY = (top + bottom) * 0.5f;
         const float maxLineWidth = (right - left) * 0.82f;
-        renderer.drawTextCenteredColored(reasonLine, centreX, centreY - 24.0f,
-                                         1.0f, glm::vec3(1.0f), maxLineWidth);
-        renderer.drawTextCenteredColored(teamLine, centreX, centreY + 18.0f,
-                                         0.85f, glm::vec3(1.0f), maxLineWidth);
+        renderer.drawTextCenteredColored(reasonLine, centreX, centreY - 40.0f,
+                                         1.05f, glm::vec3(1.0f), maxLineWidth);
+        renderer.drawTextCenteredColored(teamLine, centreX, centreY + 4.0f,
+                                         0.9f, winColor, maxLineWidth);
+
+        // Match score: the popup keeps the score visible like the CS round
+        // result instead of only naming the winner.
+        char scoreLine[64];
+        snprintf(scoreLine, sizeof(scoreLine), "TEAM A  %d   :   %d  TEAM B",
+                 teamAScore_, teamBScore_);
+        renderer.drawTextCenteredColored(scoreLine, centreX, centreY + 42.0f,
+                                         0.7f, glm::vec3(0.82f), maxLineWidth);
 
         // Countdown text
         char countdownMsg[48];
         snprintf(countdownMsg, sizeof(countdownMsg), "Next round in %d...",
                  static_cast<int>(ceilf(roundEndTimer)));
-        renderer.drawTextCenteredColored(countdownMsg, centreX, centreY + 58.0f,
+        renderer.drawTextCenteredColored(countdownMsg, centreX, centreY + 78.0f,
                                          0.6f, glm::vec3(0.85f),
                                          (right - left) * 0.55f);
     }

@@ -259,11 +259,14 @@ std::vector<SettingDef> makeGameSettingDefs(GameSettings& s) {
 
     store.adapters.clear();
     store.values.clear();
-    store.adapters.reserve(16);
-    store.values.reserve(16);
+    // SettingDef::value points into store.values, so the vector must never
+    // reallocate after the defs are built. Keep this comfortably above the
+    // number of rows (add new settings below and bump it if needed).
+    store.adapters.reserve(32);
+    store.values.reserve(32);
 
     std::vector<SettingDef> defs;
-    defs.reserve(16);
+    defs.reserve(32);
 
     auto push = [&](const char* key, const char* label, const char* group,
                     const char* help, const Value& initial, RowAdapter adapter) {
@@ -313,6 +316,9 @@ std::vector<SettingDef> makeGameSettingDefs(GameSettings& s) {
     // changes, so this order is all it takes to lay the screen out.
     addBool("infinite_ammo", "INFINITE AMMO", "GAMEPLAY",
             "Never run out of ammunition", &GameSettings::infiniteAmmo);
+    addBool("prone_toggle", "C LIE TOGGLE", "GAMEPLAY",
+            "ON: C toggles lying down. OFF: hold C to lie down",
+            &GameSettings::proneToggle);
     addBool("show_fps", "SHOW FPS", "GAMEPLAY",
             "Show the frame-rate counter", &GameSettings::showFps);
 
@@ -341,10 +347,32 @@ std::vector<SettingDef> makeGameSettingDefs(GameSettings& s) {
            "Strafe right", &GameSettings::bindRight);
     addKey("bind_jump", "JUMP", "MOVEMENT",
            "Jump", &GameSettings::bindJump);
+    addKey("bind_sprint", "SPRINT", "MOVEMENT",
+           "Hold to run faster (standing only)", &GameSettings::bindSprint);
+    addKey("bind_sneak", "SNEAK", "MOVEMENT",
+           "Hold to crouch and move quietly", &GameSettings::bindSneak);
+    addKey("bind_prone", "LIE / CRAWL", "MOVEMENT",
+           "Toggle lying down and crawling", &GameSettings::bindProne);
     addKey("bind_shoot", "SHOOT", "COMBAT",
            "Fire the current weapon", &GameSettings::bindShoot);
+    addKey("bind_scope", "SCOPE", "COMBAT",
+           "Scope with the sniper (hold)", &GameSettings::bindScope);
+    addKey("bind_weapon1", "WEAPON 1 (PISTOL)", "COMBAT",
+           "Select the pistol", &GameSettings::bindWeapon1);
+    addKey("bind_weapon2", "WEAPON 2 (SHOTGUN)", "COMBAT",
+           "Select the pump shotgun", &GameSettings::bindWeapon2);
+    addKey("bind_weapon3", "WEAPON 3 (SNIPER)", "COMBAT",
+           "Select the sniper rifle", &GameSettings::bindWeapon3);
+    addKey("bind_weapon4", "WEAPON 4 (GRENADE)", "COMBAT",
+           "Select the grenade", &GameSettings::bindWeapon4);
+    addKey("bind_weapon5", "WEAPON 5 (FLASHBANG)", "COMBAT",
+           "Select the flashbang", &GameSettings::bindWeapon5);
     addKey("bind_grenade", "GRENADE", "COMBAT",
            "Toggle between grenade and flashbang", &GameSettings::bindGrenade);
+    addKey("bind_use", "PLANT / DEFUSE", "COMBAT",
+           "Use the bomb at a site / on the planted bomb", &GameSettings::bindUse);
+    addKey("bind_unstuck", "UNSTUCK", "INTERFACE",
+           "Teleport back to the map centre if stuck", &GameSettings::bindUnstuck);
     addKey("bind_menu", "BACK TO MENU", "INTERFACE",
            "Leave the game and open the menu", &GameSettings::bindMenu);
 

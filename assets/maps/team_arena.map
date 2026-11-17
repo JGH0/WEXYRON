@@ -72,6 +72,10 @@ team_spawn 25.0 1.0 8.0 1 -90.0 0.0
 team_spawn 28.0 1.0 -5.0 1 -45.0 0.0
 team_spawn 28.0 1.0 5.0 1 -135.0 0.0
 
+# Bomb sites (bomb defusal): open floor on each side, clear of cover blocks
+bomb_site -15.0 0.01 -10.0 A
+bomb_site 15.0 0.01 10.0 B
+
 # Deathmatch spawn points (for DM mode)
 # Central area
 spawn 0.0 2.0 0.0 0.0 0.0

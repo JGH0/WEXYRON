@@ -397,8 +397,8 @@ Game::Game(int width, int height)
     pistol    = new Pistol(infiniteAmmoMode);
     shotgun   = new PumpShotgun(infiniteAmmoMode);
     sniper    = new Sniper(infiniteAmmoMode);
-    grenade   = new Grenade(3);
-    flashbang = new Flashbang(2);
+    grenade   = new Grenade(3, infiniteAmmoMode);
+    flashbang = new Flashbang(2, infiniteAmmoMode);
     currentWeaponInstance = pistol;
 
     // Physics
@@ -859,6 +859,11 @@ void Game::resetGame() {
     bomb.active = false;
     bomb.defuseProgress = 0.0f;
 
+    // Spawn checks use the standing body box: a fresh life is never placed
+    // in a spot that only fits while crouched or prone.
+    stance_ = STANCE_STANDING;
+    eyeHeightCurrent_ = eyeHeight;
+
     // Spawn at map spawn point
     if (currentMap) {
         // Every map spawn is checked for clearance: spawn points are authored
@@ -957,6 +962,7 @@ void Game::resetGame() {
     // Weapons
     currentWeapon    = PISTOL;
     currentWeaponInstance = pistol;
+    sniperBoltSoundPending_ = false;
     sniperScoped_    = false;
     camera.Zoom      = kDefaultFov;
     pistolCooldown   = 0.0f;
@@ -1081,6 +1087,13 @@ void Game::mouseCallback(GLFWwindow* window, double xpos, double ypos) {
 
 void Game::scrollCallback(GLFWwindow* window, double /*xoffset*/, double yoffset) {
     Game* game = static_cast<Game*>(glfwGetWindowUserPointer(window));
-    if (game)
-        game->camera.ProcessMouseScroll((float)yoffset);
+    if (!game) return;
+
+    // The wheel switches weapons during a match. It no longer zooms the world
+    // camera (the sniper scope stays on its own held binding). Menus, death
+    // screens and the editor ignore the wheel.
+    if (game->gameState == PLAYING && !game->isDead && !game->spectatorMode &&
+        yoffset != 0.0) {
+        game->pendingWeaponScroll_ = yoffset > 0.0 ? -1 : 1;
+    }
 }

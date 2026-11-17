@@ -30,32 +30,35 @@ inline glm::vec3 toGlm(const spatialkit::Vec3& value) {
 // bodyHeight and the camera sits eyeHeight above it.
 // ---------------------------------------------------------------------------
 
-void Game::bodyBox(const glm::vec3& feet, glm::vec3& boxMin, glm::vec3& boxMax) {
+void Game::bodyBox(const glm::vec3& feet, glm::vec3& boxMin, glm::vec3& boxMax,
+                   float height) {
     const float half = bodyWidth * 0.5f;
     boxMin = glm::vec3(feet.x - half, feet.y, feet.z - half);
-    boxMax = glm::vec3(feet.x + half, feet.y + bodyHeight, feet.z + half);
+    boxMax = glm::vec3(feet.x + half, feet.y + height, feet.z + half);
 }
 
-float Game::distanceToBody(const glm::vec3& point, const glm::vec3& feet) {
+float Game::distanceToBody(const glm::vec3& point, const glm::vec3& feet, float height) {
     glm::vec3 boxMin, boxMax;
-    bodyBox(feet, boxMin, boxMax);
+    bodyBox(feet, boxMin, boxMax, height);
     // Distance from the point to an axis-aligned box (0 when inside it).
     const glm::vec3 d = glm::max(glm::max(boxMin - point, point - boxMax), glm::vec3(0.0f));
     return glm::length(d);
 }
 
-bool Game::pointHitsBody(const glm::vec3& point, const glm::vec3& feet, float slack) {
-    return distanceToBody(point, feet) <= slack;
+bool Game::pointHitsBody(const glm::vec3& point, const glm::vec3& feet, float slack,
+                         float height) {
+    return distanceToBody(point, feet, height) <= slack;
 }
 
 Game::ProjectileSweepHit Game::sweepProjectileAgainstBody(const glm::vec3& from,
                                                           const glm::vec3& to,
                                                           const glm::vec3& feet,
-                                                          float radius) {
+                                                          float radius,
+                                                          float height) {
     ProjectileSweepHit result;
 
     glm::vec3 boxMin, boxMax;
-    bodyBox(feet, boxMin, boxMax);
+    bodyBox(feet, boxMin, boxMax, height);
 
     // Fatten the body by the projectile radius. This is where the old
     // `bodyHitSlack` lives now, and it makes the swept test tolerant of
@@ -97,10 +100,44 @@ glm::vec3 Game::projectileSegmentStart(const Projectile& projectile) const {
 // (Map::boxOverlapsBlock), so this costs the same as the old point test.
 // ---------------------------------------------------------------------------
 
+float Game::currentEyeHeight() const {
+    switch (stance_) {
+        case STANCE_CROUCHING: return 1.05f;
+        case STANCE_PRONE:     return 0.35f;
+        case STANCE_STANDING:
+        default:               return eyeHeight;
+    }
+}
+
+float Game::currentBodyHeight() const {
+    switch (stance_) {
+        case STANCE_CROUCHING: return 1.2f;
+        case STANCE_PRONE:     return 0.55f;
+        case STANCE_STANDING:
+        default:               return bodyHeight;
+    }
+}
+
+float Game::currentBodyCenterHeight() const {
+    return currentBodyHeight() * 0.5f;
+}
+
+bool Game::bodyFitsHeight(const glm::vec3& feet, float height) const {
+    if (!currentMap) return true;
+    const float half = bodyWidth * 0.5f;
+    const glm::vec3 mn(feet.x - half, feet.y, feet.z - half);
+    const glm::vec3 mx(feet.x + half, feet.y + height, feet.z + half);
+    return !currentMap->boxOverlapsBlock(mn, mx);
+}
+
+bool Game::canStandAtPlayer() const {
+    return bodyFitsHeight(playerPos, bodyHeight);
+}
+
 void Game::bodyBounds(const glm::vec3& feet, glm::vec3& mn, glm::vec3& mx) const {
     const float half = bodyWidth * 0.5f;
     mn = glm::vec3(feet.x - half, feet.y, feet.z - half);
-    mx = glm::vec3(feet.x + half, feet.y + bodyHeight, feet.z + half);
+    mx = glm::vec3(feet.x + half, feet.y + currentBodyHeight(), feet.z + half);
 }
 
 bool Game::bodyBlockedAt(const glm::vec3& feet) const {
@@ -199,7 +236,7 @@ void Game::horizontalSweep(glm::vec3& feet, glm::vec3& mn, glm::vec3& mx, float 
 
             mn = lmn; mx = lmx;
             mn.y = support;
-            mx.y = support + bodyHeight;
+            mx.y = support + currentBodyHeight();
         }
 
         feet = glm::vec3((mn.x + mx.x) * 0.5f, mn.y, (mn.z + mx.z) * 0.5f);
@@ -341,7 +378,7 @@ void Game::applyPlayerDamage(float damage) {
 
     playerHealth -= damage;
     damageEffectTime = std::max(damageEffectTime, 1.0f);
-    playSoundEffect("player_damage", playerPos + glm::vec3(0.0f, eyeHeight, 0.0f), 0.9f);
+    playSoundEffect("player_damage", playerPos + glm::vec3(0.0f, currentEyeHeight(), 0.0f), 0.9f);
     reportLocalDamage(damage);
 
     std::cout << "Player hit! Health: " << playerHealth << "/" << playerMaxHealth << std::endl;
@@ -375,7 +412,9 @@ void Game::dieLocally() {
     isDefusing = false;
     plantProgress = 0.0f;
     defuseProgress = 0.0f;
-    playSoundEffect("player_death", playerPos + glm::vec3(0.0f, eyeHeight, 0.0f));
+    stance_ = STANCE_STANDING;
+    eyeHeightCurrent_ = eyeHeight;
+    playSoundEffect("player_death", playerPos + glm::vec3(0.0f, currentEyeHeight(), 0.0f));
 
     if (bombDefusalMode) {
         spectatorMode = true;
@@ -387,7 +426,7 @@ void Game::dieLocally() {
     // The server keeps the authoritative health: it sees health 0 and puts us
     // back at a spawn point (and broadcasts the respawned state to everyone).
     if (networkClient && networkClient->isConnected()) {
-        const glm::vec3 eye = playerPos + glm::vec3(0.0f, eyeHeight, 0.0f);
+        const glm::vec3 eye = playerPos + glm::vec3(0.0f, currentEyeHeight(), 0.0f);
         networkClient->sendPlayerInput(0.0f, 0.0f, camera.Yaw, camera.Pitch, false, false,
                                        static_cast<uint8_t>(currentWeapon),
                                        eye.x, eye.y, eye.z, false,
@@ -467,11 +506,20 @@ void Game::updatePlayerPhysics(float deltaTime) {
                   << ") - " << (onGround ? "ON GROUND" : "IN AIR/FALLING") << std::endl;
     }
     
-    // Update camera (playerPos is at the feet: the eye sits eyeHeight above).
+    // Update the eye height towards the stance (crouch / prone). The camera
+    // follows the body exactly in X/Z; only the vertical eye offset eases, so
+    // going prone does not snap the view to the floor in one frame.
+    const float targetEye = currentEyeHeight();
+    const float eyeBlend = 1.0f - std::exp(-deltaTime * 16.0f);
+    eyeHeightCurrent_ += (targetEye - eyeHeightCurrent_) * eyeBlend;
+    if (std::abs(eyeHeightCurrent_ - targetEye) < 0.005f) {
+        eyeHeightCurrent_ = targetEye;
+    }
+
     // The camera follows the body exactly. (A smoothed X/Z lag made the map
     // look doubled: the world is drawn once mid-frame with this position and
     // once at the end, so any lag between the two shifted the two copies.)
-    camera.Position = glm::vec3(playerPos.x, playerPos.y + eyeHeight, playerPos.z);
+    camera.Position = glm::vec3(playerPos.x, playerPos.y + eyeHeightCurrent_, playerPos.z);
     camera.updateCameraVectors();
 }
 
@@ -565,6 +613,9 @@ void Game::switchWeapon(WeaponType weapon) {
     currentWeapon = weapon;
     weaponSwitch_ = 1.0f;   // lower the old gun / raise the new one
 
+    // Leaving the sniper cancels a queued bolt rattle from a shot.
+    if (weapon != SNIPER) sniperBoltSoundPending_ = false;
+
     switch (weapon) {
         case PISTOL:
             currentWeaponInstance = pistol;
@@ -576,7 +627,13 @@ void Game::switchWeapon(WeaponType weapon) {
             break;
         case SNIPER:
             currentWeaponInstance = sniper;
-            std::cout << "Switched to Sniper! Ammo: " << (infiniteAmmoMode ? "∞" : std::to_string(sniper->getAmmo())) << std::endl;
+            // Raising the rifle includes working the bolt. It cannot fire
+            // until the rack completes, and the rattle plays shortly after
+            // the weapon-switch animation starts.
+            sniper->startCycle(kSniperRackTime);
+            scheduleSniperBolt(0.18f);
+            std::cout << "Switched to Sniper! Racking bolt. Ammo: "
+                      << (infiniteAmmoMode ? "∞" : std::to_string(sniper->getAmmo())) << std::endl;
             break;
         case GRENADE:
             currentWeaponInstance = grenade;
@@ -589,10 +646,24 @@ void Game::switchWeapon(WeaponType weapon) {
     }
 }
 
+void Game::cycleWeapon(int direction) {
+    // Mouse-wheel order follows the number keys (1..5). Wrapping keeps the
+    // wheel useful in both directions.
+    static const WeaponType kOrder[5] = {
+        PISTOL, PUMP_SHOTGUN, SNIPER, GRENADE, FLASHBANG
+    };
+    int index = 0;
+    for (int i = 0; i < 5; ++i) {
+        if (kOrder[i] == currentWeapon) { index = i; break; }
+    }
+    index = (index + (direction >= 0 ? 1 : -1) + 5) % 5;
+    switchWeapon(kOrder[index]);
+}
+
 void Game::updateScope(float deltaTime) {
     // Leaving the match (menu, death screen, editor) ends the scope. Do not
-    // touch camera.Zoom outside PLAYING afterwards: the map editor has its own
-    // scroll zoom and must keep it.
+    // touch camera.Zoom outside PLAYING afterwards: other screens own the
+    // current FOV.
     if (gameState != PLAYING) {
         if (sniperScoped_) {
             sniperScoped_ = false;
@@ -601,8 +672,8 @@ void Game::updateScope(float deltaTime) {
         return;
     }
 
-    // The scope is a held right mouse button while the sniper is the active
-    // weapon. The round-freeze releases it like everything else.
+    // The scope is a held binding while the sniper is the active weapon.
+    // The round-freeze releases it like everything else.
     const bool roundIntermission =
         roundEndTimer > 0.0f &&
         (currentGameMode == TEAM_VS_TEAM || currentGameMode == BOMB_DEFUSAL);
@@ -610,11 +681,10 @@ void Game::updateScope(float deltaTime) {
         window && !spectatorMode && !isDead && !roundIntermission &&
         currentWeapon == SNIPER;
 
-    const bool rmbDown =
-        canScope &&
-        glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
-    sniperScoped_ = debugScopeOverride_ ? debugScopedValue_
-                                        : (canScope && rmbDown);
+    // The scope is a held binding (right mouse button by default) and can be
+    // rebound on the CONTROLS page like every other button.
+    const bool scopeDown = canScope && bindingDown(gameSettings_.bindScope);
+    sniperScoped_ = debugScopeOverride_ ? debugScopedValue_ : scopeDown;
 
     // Smooth FOV transition instead of a hard snap; the blend is frame-rate
     // independent. Mouse look is also slowed down while scoped
@@ -625,6 +695,25 @@ void Game::updateScope(float deltaTime) {
     if (std::abs(camera.Zoom - targetFov) < 0.05f) {
         camera.Zoom = targetFov;
     }
+}
+
+void Game::scheduleSniperBolt(float delay) {
+    sniperBoltSoundPending_ = true;
+    sniperBoltSoundDelay_ = std::max(0.0f, delay);
+}
+
+void Game::updateSniperBolt(float deltaTime) {
+    if (!sniperBoltSoundPending_) return;
+    if (gameState != PLAYING) {
+        sniperBoltSoundPending_ = false;
+        return;
+    }
+    sniperBoltSoundDelay_ -= deltaTime;
+    if (sniperBoltSoundDelay_ > 0.0f) return;
+
+    sniperBoltSoundPending_ = false;
+    const float pitch = 0.96f + static_cast<float>(std::rand() % 9) * 0.01f;
+    playSoundEffect("sniper_bolt", camera.Position, 0.9f, pitch);
 }
 
 void Game::shootPistol() {
@@ -1037,13 +1126,11 @@ void Game::createSimpleExplosion(glm::vec3 position, const Projectile* source) {
             if (distance < explosionRadius) {
                 enemies[j].health -= explosionDamage_;
                 enemies[j].anim.damage = 1.0f;
+                playUiSound("hitmarker");
                 std::cout << "Enemy hit by explosion! Health: " << enemies[j].health << std::endl;
 
                 if (enemies[j].health <= 0.0f) {
-                    enemies[j].alive = false;
-                    enemies[j].active = false;
-                    activeEnemies--;
-                    kills_++;
+                    killEnemy(enemies[j]);
                     std::cout << "Enemy killed by explosion!" << std::endl;
                 }
             }
@@ -1061,7 +1148,7 @@ void Game::createSimpleExplosion(glm::vec3 position, const Projectile* source) {
     // Damage the local player if the blast reaches the body. No falloff: a hit
     // always deals the same explosion damage (only the hit zone is ignored,
     // because an explosion has no "head shot").
-    const float playerDistance = distanceToBody(position, playerPos);
+    const float playerDistance = distanceToBody(position, playerPos, currentBodyHeight());
     if (playerDistance < explosionRadius) {
         applyPlayerDamage(explosionDamage_);
         damageEffectTime = std::max(damageEffectTime, 1.5f); // Longer screen effect
@@ -1373,6 +1460,18 @@ void Game::renderBulletHoles() {
     }
 }
 
+void Game::killEnemy(Enemy& enemy) {
+    if (!enemy.alive) return;
+    // Leave the slot active for a moment so the body can collapse visibly;
+    // updateEnemies() retires it after deathTimer reaches zero.
+    enemy.alive = false;
+    enemy.anim.death = 0.0f;
+    enemy.deathTimer = 2.8f;
+    kills_++;
+    playUiSound("kill_bling");
+    std::cout << "Enemy defeated!" << std::endl;
+}
+
 void Game::spawnEnemy(const glm::vec3& position) {
     // Find an inactive enemy slot
     for (int i = 0; i < MAX_ENEMIES; i++) {
@@ -1390,6 +1489,7 @@ void Game::spawnEnemy(const glm::vec3& position) {
             enemies[i].active = true;
             enemies[i].alive = true;
             enemies[i].yaw = 0.0f;
+            enemies[i].deathTimer = 0.0f;
             enemies[i].anim = humanoid::Anim{};
             activeEnemies++;
 
@@ -1449,16 +1549,13 @@ bool Game::checkProjectileEnemyCollision(Projectile& projectile) {
     target.health -= damage;
     target.anim.damage = 1.0f;
     playSoundEffect("hit_flesh", best.point, 0.8f);
+    playUiSound("hitmarker");
     std::cout << "Enemy hit (" << humanoid::hitZoneName(zone) << ", x"
               << humanoid::damageMultiplier(zone) << ")! Health: "
               << target.health << std::endl;
 
     if (target.health <= 0.0f) {
-        target.alive = false;
-        target.active = false;
-        activeEnemies--;
-        kills_++;
-        std::cout << "Enemy defeated!" << std::endl;
+        killEnemy(target);
     }
     // Bullets stop at the body they hit (throwables are handled above and must
     // stay active until the caller detonates them).
@@ -1503,7 +1600,9 @@ void Game::checkEnemyPlayerCollision(float deltaTime) {
 
 void Game::updateEnemies(float deltaTime) {
     for (int i = 0; i < MAX_ENEMIES; i++) {
-        if (enemies[i].active && enemies[i].alive) {
+        if (!enemies[i].active) continue;
+
+        if (enemies[i].alive) {
             // Calculate direction to player
             glm::vec3 enemyPos(enemies[i].x, enemies[i].y, enemies[i].z);
             glm::vec3 direction = playerPos - enemyPos;
@@ -1527,6 +1626,16 @@ void Game::updateEnemies(float deltaTime) {
             // Practice targets walk on the floor; the animation still reacts to
             // their own movement speed and direction.
             enemies[i].anim.advance(deltaTime, vx, 0.0f, vz, true);
+        } else {
+            // Dead: collapse onto the floor, then free the slot.
+            enemies[i].anim.death = std::min(1.0f, enemies[i].anim.death + deltaTime * 4.5f);
+            enemies[i].deathTimer -= deltaTime;
+            if (enemies[i].deathTimer <= 0.0f) {
+                enemies[i].active = false;
+                enemies[i].alive = false;
+                enemies[i].anim.death = 0.0f;
+                if (activeEnemies > 0) activeEnemies--;
+            }
         }
     }
 }
@@ -1552,7 +1661,7 @@ bool Game::checkProjectilePlayerBody(Projectile& projectile) {
     // relayed bullet cannot fly through us between two frames.
     const glm::vec3 from = projectileSegmentStart(projectile);
     const ProjectileSweepHit hit = sweepProjectileAgainstBody(
-        from, projectile.position, playerPos, bodyHitSlack);
+        from, projectile.position, playerPos, bodyHitSlack, currentBodyHeight());
     if (!hit.hit) return false;
 
     projectile.position = hit.point;
@@ -1571,7 +1680,7 @@ void Game::damagePlayer(float damage) {
     playerDamageCooldown = 1.0f; // 1 second immunity
     
     std::cout << "Player hit! Health: " << playerHealth << "/" << playerMaxHealth << std::endl;
-    playSoundEffect("player_damage", playerPos + glm::vec3(0.0f, eyeHeight, 0.0f), 0.9f);
+    playSoundEffect("player_damage", playerPos + glm::vec3(0.0f, currentEyeHeight(), 0.0f), 0.9f);
     reportLocalDamage(damage);
     
     if (playerHealth <= 0.0f) {
@@ -1589,8 +1698,9 @@ void Game::checkPlayerPlayerCollision() {
     for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
         if (!remotePlayers[i].active || remotePlayers[i].isDead) continue;
         
-        const float distance = distanceToBody(playerPos + glm::vec3(0.0f, bodyCenterHeight, 0.0f),
-                                               remotePlayers[i].position);
+        const float distance = distanceToBody(
+            playerPos + glm::vec3(0.0f, currentBodyCenterHeight(), 0.0f),
+            remotePlayers[i].position);
         if (distance < 0.5f) {
             // Measured over time: next frame drains the accumulated budget,
             // so a 60 fps game does not take 60 hits at the same spot.
@@ -1678,6 +1788,11 @@ bool Game::checkProjectileRemoteCollision(Projectile& projectile) {
     nearest->anim.damage = 1.0f;
 
     playSoundEffect("hit_flesh", best.point, 0.8f);
+    playUiSound("hitmarker");
+    if (book.health <= 0.0f && !book.killSoundPlayed) {
+        book.killSoundPlayed = true;
+        playUiSound("kill_bling");
+    }
     std::cout << "Hit remote player " << nearest->id << " (" << humanoid::hitZoneName(zone)
               << ", x" << humanoid::damageMultiplier(zone) << ")"
               << " for " << damage << std::endl;
@@ -1710,6 +1825,11 @@ void Game::checkExplosionRemoteCollision(const glm::vec3& position, float radius
         book.damageSent += static_cast<int>(amount);
         book.pending = true;
         book.sentAt  = std::chrono::steady_clock::now();
+        playUiSound("hitmarker");
+        if (book.health <= 0.0f && !book.killSoundPlayed) {
+            book.killSoundPlayed = true;
+            playUiSound("kill_bling");
+        }
         std::cout << "Blast hit remote player " << remote.id << " for " << amount << std::endl;
     }
 }
@@ -1738,6 +1858,9 @@ void Game::updateRemotePlayerDeath(float deltaTime) {
             const float sinceHit = static_cast<float>(glfwGetTime()) - book.lastHitTime;
             if (book.lastHitTime > 0.0f && sinceHit >= 0.0f && sinceHit < 3.0f) {
                 kills_++;
+                if (!book.killSoundPlayed) {
+                    playUiSound("kill_bling");
+                }
                 std::cout << "Player " << remote.id << " eliminated - kill credited" << std::endl;
             }
             book = PvpRemote{};
@@ -1763,6 +1886,16 @@ void Game::updateRemoteAnimations(float deltaTime) {
     for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
         RemotePlayer& remote = remotePlayers[i];
         if (!remote.active) continue;
+
+        if (remote.isDead) {
+            // Advance the collapse; dead bodies stay on the map until the
+            // server respawns the player at the next round.
+            remote.anim.death = std::min(1.0f, remote.anim.death + deltaTime * 4.5f);
+            remote.anim.advance(deltaTime, 0.0f, 0.0f, 0.0f, true);
+            continue;
+        }
+        remote.anim.death = 0.0f;
+
         // Positions arrive at the packet rate, not every frame. A change in
         // height marks a jump/fall and keeps the air pose alive briefly, so
         // walking on an elevated platform is not mistaken for falling (the
@@ -1787,7 +1920,9 @@ void Game::updateRemoteAnimations(float deltaTime) {
 void Game::renderRemotePlayers() {
     for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
         RemotePlayer& remote = remotePlayers[i];
-        if (!remote.active || remote.isDead) continue;
+        // Dead players are rendered too: their body collapses and stays on
+        // the ground until the server respawns them next round.
+        if (!remote.active) continue;
 
         // Smooth out the network rate: converge on the latest position. The
         // height follows exactly (a body never slides vertically between the
@@ -1812,9 +1947,11 @@ void Game::renderRemotePlayers() {
                               ? glm::vec3(0.15f, 0.4f, 1.0f)   // blue
                               : glm::vec3(1.0f, 0.15f, 0.15f); // red
 
-        const float healthPct = glm::clamp(remote.health / 100.0f, 0.0f, 1.0f);
+        const float healthPct = remote.isDead
+                                    ? 0.0f
+                                    : glm::clamp(remote.health / 100.0f, 0.0f, 1.0f);
         humanoid::render(renderer, remote.renderPosition, remote.yaw, color,
-                         healthPct, remote.anim, remote.pitch, true);
+                         healthPct, remote.anim, remote.pitch, !remote.isDead);
     }
 }
 
@@ -1850,6 +1987,21 @@ void Game::updateBomb(float deltaTime) {
                 playSoundEffect("bomb_beep", bomb.position, remaining <= 5.0f ? 1.0f : 0.7f);
             }
         }
+
+        // UDP is lossy: while an interaction is active keep telling the
+        // server so a dropped request cannot leave the player "planting"
+        // forever on their own screen. The server expires the intent when
+        // these stop, so releasing E also cancels it.
+        if (networkClient->isConnected() && (isPlanting || isDefusing)) {
+            bombInteractResend_ -= deltaTime;
+            if (bombInteractResend_ <= 0.0f) {
+                bombInteractResend_ = 0.2f;
+                networkClient->sendBombInteract(isPlanting ? BOMB_INTERACT_PLANT
+                                                           : BOMB_INTERACT_DEFUSE);
+            }
+        } else {
+            bombInteractResend_ = 0.0f;
+        }
         return;
     }
     
@@ -1868,7 +2020,8 @@ void Game::updateBomb(float deltaTime) {
         // Check if bomb exploded
         if (bomb.plantTime >= bomb.explodeTime) {
             std::cout << "BOMB EXPLODED!" << std::endl;
-            playSoundEffect("bomb_explode", bomb.position);
+            // The round-ending detonation is played by endRound() below so
+            // every client (including multiplayer) hears the same echo.
             bomb.active = false;
             bomb.planted = false; // Prevent re-triggering
             endRound(bomb.plantingTeam, ROUND_END_BOMB_EXPLODED); // Attackers win
@@ -1959,11 +2112,17 @@ void Game::startDefusing() {
 }
 
 int Game::getNearbyBombSite() {
+    // Match the server's use range (ServerBombManager::Config::useRange).
+    // Horizontal distance is what matters; a site on a small platform must
+    // still be usable when the player stands at a slightly different height.
+    constexpr float kUseRange = 2.5f;
+    constexpr float kUseHeight = 2.5f;
     for (int i = 0; i < activeBombSites; i++) {
         if (!bombSites[i].active) continue;
-        
-        float distance = glm::length(playerPos - bombSites[i].position);
-        if (distance < 2.0f) { // Within 2 units of bomb site
+
+        const glm::vec3 delta = playerPos - bombSites[i].position;
+        const float horizontal = std::sqrt(delta.x * delta.x + delta.z * delta.z);
+        if (horizontal < kUseRange && std::abs(delta.y) < kUseHeight) {
             return i;
         }
     }
@@ -1972,9 +2131,12 @@ int Game::getNearbyBombSite() {
 
 bool Game::isNearBomb() {
     if (!bomb.planted || bomb.defused) return false;
-    
-    float distance = glm::length(playerPos - bomb.position);
-    return distance < 2.0f; // Within 2 units of bomb
+
+    constexpr float kUseRange = 2.5f;
+    constexpr float kUseHeight = 2.5f;
+    const glm::vec3 delta = playerPos - bomb.position;
+    const float horizontal = std::sqrt(delta.x * delta.x + delta.z * delta.z);
+    return horizontal < kUseRange && std::abs(delta.y) < kUseHeight;
 }
 
 void Game::endRound(int winner, RoundEndReason reason) {
@@ -1984,7 +2146,9 @@ void Game::endRound(int winner, RoundEndReason reason) {
     roundActive = false;
     roundWinner = winner;
     roundEndReason = reason;
-    roundEndTimer = 4.0f; // 4 second delay before next round
+    // CS-style post-round window: players can keep moving for a few seconds
+    // while the result popup is up, then the next round starts.
+    roundEndTimer = 5.0f;
     if (winner == 0)      teamAScore_++;
     else if (winner == 1) teamBScore_++;
     playUiSound("round_end");
@@ -2005,6 +2169,12 @@ void Game::endRound(int winner, RoundEndReason reason) {
     // like a detonation.
     const bool bombExploded = reason == ROUND_END_BOMB_EXPLODED ||
                               (reason == ROUND_END_NONE && (bomb.planted || bomb.active));
+    if (bombExploded) {
+        // 2D/global sound: the detonation is heard across the whole map, not
+        // attenuated by the listener's distance, and carries the echo baked
+        // into bomb_explode_echo.wav.
+        playUiSound("bomb_explode_echo");
+    }
     if (bombExploded) {
         // Create a massive explosion
         for (int i = 0; i < MAX_EXPLOSIONS; i++) {
@@ -2103,10 +2273,10 @@ void Game::updateSpectator(float deltaTime) {
     const float spectatorSpeed = 15.0f;
     glm::vec3 moveDir(0.0f);
 
-    if (glfwGetKey(window, keyBindings.forward) == GLFW_PRESS)  moveDir += camera.Front;
-    if (glfwGetKey(window, keyBindings.backward) == GLFW_PRESS) moveDir -= camera.Front;
-    if (glfwGetKey(window, keyBindings.left) == GLFW_PRESS)     moveDir -= camera.Right;
-    if (glfwGetKey(window, keyBindings.right) == GLFW_PRESS)    moveDir += camera.Right;
+    if (keyDown(keyBindings.forward))  moveDir += camera.Front;
+    if (keyDown(keyBindings.backward)) moveDir -= camera.Front;
+    if (keyDown(keyBindings.left))     moveDir -= camera.Right;
+    if (keyDown(keyBindings.right))    moveDir += camera.Right;
     if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)       moveDir += glm::vec3(0.0f, 1.0f, 0.0f);
     if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
         glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS) moveDir -= glm::vec3(0.0f, 1.0f, 0.0f);
@@ -2119,7 +2289,7 @@ void Game::updateSpectator(float deltaTime) {
     // Keep the stored body position in sync with the free camera. It is not
     // used for collision (the body is dead) but keeps the network input
     // interesting position sensible.
-    playerPos = camera.Position - glm::vec3(0.0f, eyeHeight, 0.0f);
+    playerPos = camera.Position - glm::vec3(0.0f, currentEyeHeight(), 0.0f);
     playerVelocity = glm::vec3(0.0f);
     camera.updateCameraVectors();
 }

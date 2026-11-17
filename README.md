@@ -100,25 +100,34 @@ make clean && make
 - **W/A/S/D**: Move
 - **Mouse**: Look around
 - **Space**: Jump
-- **Left Mouse**: Shoot
+- **Left Shift (hold)**: Sprint (standing only)
+- **Left Ctrl (hold)**: Sneak / crouch and move quietly
+- **C**: Lie down / get up (crawl while lying down; toggle or hold in Settings)
 
 ### Weapons
+- **Left Mouse**: Shoot
+- **Right Mouse (hold)**: Scope with the sniper rifle
+- **Mouse wheel**: Previous / next weapon (the wheel no longer zooms)
 - **1**: Pistol
 - **2**: Pump Shotgun
 - **3**: Sniper Rifle
 - **4**: Grenade
 - **5**: Flashbang
 - **G**: Toggle Grenade/Flashbang
-- **Right Mouse (hold)**: Scope with the sniper rifle
+
+The sniper is bolt-action: selecting it racks the bolt first, and each shot
+must be cycled before the next round can be fired.
 
 ### Other
+- **E**: Plant / defuse the bomb
 - **ESC**: Menu / back
 - **U**: Unstuck (reset position)
 
-Movement, shooting and the grenade toggle can be rebound in
-**Settings → Controls** (the sniper scope stays on the right mouse button). The
-current binding is shown on the right of each row; press ENTER on a row and then
-the new key (or mouse button). Bindings and the other settings are saved to
+Movement, sprint, sneak, lying down, shooting, scoping, the weapon slots, the
+grenade toggle, planting/defusing and the menu key can all be rebound in
+**Settings → Controls**. The current binding
+is shown on the right of each row; press ENTER on a row and then the new key (or
+mouse button). Bindings and the other settings are saved to
 `assets/settings.cfg` automatically.
 
 ### Menus and settings

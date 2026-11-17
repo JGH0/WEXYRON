@@ -267,6 +267,66 @@ def synth_hit_flesh():
     return saturate(thud + slap * 0.8, 1.8)
 
 
+def synth_hitmarker():
+    # Very short, bright "tick" played through the UI bus when a shot lands.
+    dur = 0.075
+    x = highpass(noise(dur), 3000.0) * exp_env(dur, 0.0, 0.004, 2.0) * 0.7
+    x += sine(3300.0, dur) * exp_env(dur, 0.0, 0.010, 2.0) * 0.45
+    x += sine(2100.0, dur) * exp_env(dur, 0.0, 0.014, 2.0) * 0.20
+    return x
+
+
+def synth_kill_bling():
+    # Two rising chimes for a confirmed kill.
+    dur = 0.42
+    out = np.zeros(int(RATE * dur))
+    for i, freq in enumerate((1318.51, 1760.0, 2637.02)):
+        note = (sine(freq, 0.28) + sine(freq * 2.0, 0.28) * 0.25)
+        note *= adsr(0.28, 0.002, 0.05, 0.55, 0.16)
+        place(out, note * (0.55 - i * 0.10), i * 0.055)
+    return out
+
+
+def synth_sniper_bolt():
+    # Bolt-action cycle: unlock, pull back, push forward, lock down.
+    dur = 0.72
+    buf = np.zeros(int(RATE * dur))
+    place(buf, synth_click(2400.0, 0.06, 0.008) * 0.8, 0.02)
+    place(buf, synth_click(1500.0, 0.09, 0.015) * 0.9, 0.14)
+    place(buf, bandpass(noise(0.10), 1200.0, 6000.0) * exp_env(0.10, 0.0, 0.025, 1.5) * 0.55, 0.24)
+    place(buf, synth_click(1800.0, 0.09, 0.014) * 0.9, 0.42)
+    place(buf, synth_click(1200.0, 0.10, 0.020) * 1.0, 0.54)
+    place(buf, sine(3100.0, 0.20) * exp_env(0.20, 0.001, 0.04, 2.0) * 0.10, 0.54)
+    return buf
+
+
+def synth_sniper_fire_thunder():
+    # The normal rifle crack plus a deeper pressure wave and a room echo.
+    base = synth_gunshot(body_freq=48.0, duration=1.05, punch=2.15, tail=0.52)
+    dur = 1.7
+    out = np.zeros(int(RATE * dur))
+    place(out, base, 0.0)
+    sub = sine(sweep(72.0, 28.0, 0.8, 2.5), 0.8) * exp_env(0.8, 0.0, 0.28, 1.6)
+    place(out, sub * 0.55, 0.0)
+    place(out, lowpass(base, 900.0) * 0.30, 0.19)
+    place(out, lowpass(base, 500.0) * 0.18, 0.39)
+    return normalize(out)
+
+
+def synth_bomb_explosion_echo():
+    # Deeper blast with several decaying reflections: every player on the map
+    # hears the same round-ending detonation.
+    base = synth_explosion(2.8)
+    dur = 4.6
+    out = np.zeros(int(RATE * dur))
+    place(out, base, 0.0)
+    place(out, lowpass(base, 1100.0) * 0.48, 0.32)
+    place(out, lowpass(base, 700.0)  * 0.30, 0.71)
+    place(out, lowpass(base, 420.0)  * 0.20, 1.20)
+    place(out, lowpass(base, 260.0)  * 0.12, 1.85)
+    return normalize(out)
+
+
 def synth_help():
     """Odd little confirmation blip (used as a generic positive feedback)."""
     dur = 0.35
@@ -559,6 +619,13 @@ EFFECTS = {
     # Kept last so adding it does not change the RNG sequence of the sounds
     # above (the generator uses one shared seeded RNG).
     "sniper_fire":        lambda: synth_gunshot(body_freq=70.0, duration=0.85, punch=1.7, tail=0.35),
+    # Extra combat feedback and the bolt-action / bomb-defusal sounds. Appended
+    # so the RNG sequence of the older effects stays unchanged.
+    "hitmarker":          synth_hitmarker,
+    "kill_bling":         synth_kill_bling,
+    "sniper_bolt":        synth_sniper_bolt,
+    "sniper_fire_thunder": synth_sniper_fire_thunder,
+    "bomb_explode_echo":  synth_bomb_explosion_echo,
 }
 
 

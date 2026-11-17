@@ -131,11 +131,19 @@ OpenGl-Game/
 - **WASD** - Move
 - **Mouse** - Look around
 - **Space** - Jump
+- **Left Shift (hold)** - Sprint
+- **Left Ctrl (hold)** - Sneak / crouch
+- **C** - Lie down / get up (crawl while prone; toggle or hold via settings)
 - **Left Click** - Shoot
+- **Mouse Wheel** - Previous / next weapon
 - **1-5** - Switch weapons
 - **Right Mouse (hold)** - Scope with the sniper rifle
+- **E** - Plant / defuse the bomb
 - **ESC** - Menu
 - **U** - Unstuck (reset position if stuck)
+
+All of these bindings (including scope and stance) can be changed in
+**Settings → Controls**.
 
 ## Multiplayer
 
