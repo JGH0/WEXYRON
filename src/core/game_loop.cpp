@@ -22,6 +22,10 @@ void Game::update(float deltaTime) {
     // gameplay below may start sounds that are mixed this frame.
     updateAudio(deltaTime);
 
+    // Sniper scope: right mouse button zooms while the sniper is held. Runs in
+    // every state so the FOV also returns to normal after death or a menu.
+    updateScope(deltaTime);
+
     if (gameState == PLAYING) {
         // Deathmatch has no round cycle; the HUD shows elapsed match time.
         // Round modes advance their own clock in updateBomb().
@@ -248,6 +252,10 @@ void Game::render() {
                     // Shotgun pellet
                     model = glm::scale(model, glm::vec3(0.08f, 0.08f, 0.08f));
                     renderer.drawCube(model, glm::vec3(1.0f, 0.5f, 0.0f)); // Orange for shotgun pellets
+                } else if (projectiles[i].type == 4) {
+                    // Sniper round: small and pale blue, like a tracer.
+                    model = glm::scale(model, glm::vec3(0.07f, 0.07f, 0.07f));
+                    renderer.drawCube(model, glm::vec3(0.55f, 0.80f, 1.0f));
                 } else {
                     // Pistol bullet
                     model = glm::scale(model, glm::vec3(0.1f, 0.1f, 0.1f));
@@ -261,11 +269,18 @@ void Game::render() {
             renderRemotePlayers();
         }
 
-        // First-person weapon (its own pass, after the world)
-        if (!spectatorMode && !isDead) renderWeaponViewmodel();
+        // First-person weapon (its own pass, after the world). The viewmodel is
+        // hidden while looking through the scope.
+        if (!spectatorMode && !isDead && !sniperScoped_) renderWeaponViewmodel();
 
-        // Render crosshair
-        if (!spectatorMode) renderCrosshair();
+        // Render crosshair, or the scope overlay while aiming the sniper.
+        if (!spectatorMode) {
+            if (sniperScoped_) {
+                renderScopeOverlay();
+            } else {
+                renderCrosshair();
+            }
+        }
 
         // Render damage effect
         renderDamageEffect();

@@ -56,6 +56,78 @@ void Game::renderCrosshair() {
     renderer.drawColoredQuad(verticalModel, glm::vec3(1.0f, 1.0f, 1.0f)); // White
 }
 
+void Game::renderScopeOverlay() {
+    if (!window || !sniperScoped_) return;
+
+    UIHelpers::setProjection(renderer, window);
+    const UIHelpers::UIBounds b = UIHelpers::getBounds(window);
+    const float cx = b.centerX();
+    const float cy = b.centerY();
+    // Round lens in the 800x600 design canvas. The world outside the circle is
+    // masked by vertical strips, which approximates a circle with quads.
+    const float radius = 245.0f;
+
+    auto quad = [&](float centerX, float centerY, float w, float h,
+                    const glm::vec3& color) {
+        glm::mat4 m = glm::translate(glm::mat4(1.0f),
+                                     glm::vec3(centerX, centerY, 0.0f));
+        m = glm::scale(m, glm::vec3(w, h, 1.0f));
+        renderer.drawColoredQuad(m, color);
+    };
+
+    const glm::vec3 black(0.0f, 0.0f, 0.0f);
+    const glm::vec3 ring(0.20f, 0.22f, 0.24f);
+    const glm::vec3 reticle(0.20f, 0.20f, 0.20f);
+    const glm::vec3 dot(0.85f, 0.18f, 0.12f);
+
+    const int strips = 96;
+    const float stripW = b.width() / static_cast<float>(strips) + 1.0f;
+    for (int i = 0; i < strips; ++i) {
+        const float x = b.left + (static_cast<float>(i) + 0.5f) * b.width() /
+                                              static_cast<float>(strips);
+        const float dx = x - cx;
+        const float half = std::abs(dx) < radius
+                               ? std::sqrt(radius * radius - dx * dx)
+                               : 0.0f;
+
+        const float topH = (cy - half) - b.top;
+        if (topH > 0.0f) {
+            quad(x, b.top + topH * 0.5f, stripW, topH, black);
+        }
+        const float bottomY = cy + half;
+        const float bottomH = b.bottom - bottomY;
+        if (bottomH > 0.0f) {
+            quad(x, bottomY + bottomH * 0.5f, stripW, bottomH, black);
+        }
+        if (half > 0.0f) {
+            // Thin ring right at the lens edge.
+            quad(x, cy - half - 1.0f, stripW, 2.0f, ring);
+            quad(x, cy + half + 1.0f, stripW, 2.0f, ring);
+        }
+    }
+
+    // Reticle: a cross with a clear centre gap and mil-dot ticks.
+    const float gap = 13.0f;
+    const float armX = radius - 18.0f;
+    const float armY = radius * 0.62f;
+    quad(cx - (gap + armX) * 0.5f, cy, armX - gap, 1.5f, reticle);
+    quad(cx + (gap + armX) * 0.5f, cy, armX - gap, 1.5f, reticle);
+    quad(cx, cy - (gap + armY) * 0.5f, 1.5f, armY - gap, reticle);
+    quad(cx, cy + (gap + armY) * 0.5f, 1.5f, armY - gap, reticle);
+
+    for (float offset : {50.0f, 100.0f, 150.0f, 200.0f}) {
+        quad(cx + offset, cy, 2.0f, 8.0f, reticle);
+        quad(cx - offset, cy, 2.0f, 8.0f, reticle);
+    }
+    for (float offset : {50.0f, 100.0f, 150.0f}) {
+        quad(cx, cy + offset, 8.0f, 2.0f, reticle);
+        quad(cx, cy - offset, 8.0f, 2.0f, reticle);
+    }
+
+    // Centre dot.
+    quad(cx, cy, 3.5f, 3.5f, dot);
+}
+
 void Game::renderDamageEffect() {
     if (damageEffectTime > 0.0f) {
         UIHelpers::setProjection(renderer, window);
@@ -262,11 +334,12 @@ void Game::renderGameHUD() {
     }
 
     // ── Weapon + ammo (bottom-right) ────────────────────────────────────────
-    static const char* const kWeaponNames[4] = {"PISTOL", "SHOTGUN", "GRENADE", "FLASHBANG"};
-    static const char* const kSlotNames[4]   = {"PISTOL", "SHOTGUN", "GRENADE", "FLASH"};
-    const int weaponIndex = static_cast<int>(currentWeapon) & 3;
+    static const char* const kWeaponNames[5] = {"PISTOL", "SHOTGUN", "SNIPER", "GRENADE", "FLASHBANG"};
+    static const char* const kSlotNames[5]   = {"PISTOL", "SHOTGUN", "SNIPER", "GRENADE", "FLASH"};
+    const int weaponIndex = static_cast<int>(currentWeapon);
 
-    const float weaponW = 250.0f, weaponH = 112.0f;
+    // Three rows of two slots (the fifth slot sits alone in the last row).
+    const float weaponW = 250.0f, weaponH = 132.0f;
     const float weaponX = right - weaponW - 14.0f;
     const float weaponY = bottom - weaponH - 14.0f;
     panel(weaponX + weaponW * 0.5f, weaponY + weaponH * 0.5f, weaponW, weaponH, kPanel);
@@ -279,7 +352,8 @@ void Game::renderGameHUD() {
     if (infiniteAmmoMode) {
         ammoStr = "INF";
     } else if (weaponIndex == static_cast<int>(PISTOL) ||
-               weaponIndex == static_cast<int>(PUMP_SHOTGUN)) {
+               weaponIndex == static_cast<int>(PUMP_SHOTGUN) ||
+               weaponIndex == static_cast<int>(SNIPER)) {
         ammoStr = std::to_string(currentWeaponInstance ? currentWeaponInstance->getAmmo() : 0);
     } else {
         ammoStr = "x" + std::to_string(currentWeaponInstance ? currentWeaponInstance->getAmmo() : 0);
@@ -287,8 +361,8 @@ void Game::renderGameHUD() {
     renderer.drawTextColored("AMMO", weaponX + 12.0f, weaponY + 33.0f, 0.32f, kLabel);
     textRight(ammoStr, weaponX + weaponW - 12.0f, weaponY + 23.0f, 0.90f, kGold);
 
-    // 2 x 2 weapon slots (the keys 1-4 work exactly like this list).
-    for (int i = 0; i < 4; ++i) {
+    // 2 x 3 weapon slots (the keys 1-5 work exactly like this list).
+    for (int i = 0; i < 5; ++i) {
         const float slotW = 112.0f, slotH = 18.0f;
         const float slotX = weaponX + 10.0f + static_cast<float>(i % 2) * 116.0f;
         const float slotY = weaponY + 68.0f + static_cast<float>(i / 2) * 20.0f;
@@ -542,6 +616,38 @@ void Game::renderWeaponViewmodel() {
             addHands(true);
             if (weaponRecoil_ > 0.55f) {
                 add(glm::vec3(0.0f, 0.030f, -0.66f), glm::vec3(0.14f, 0.14f, 0.16f),
+                    glm::vec3(1.0f, 0.72f, 0.16f));
+            }
+            break;
+        }
+        case SNIPER: {
+            const glm::vec3 metal(0.22f, 0.24f, 0.26f);
+            const glm::vec3 dark(0.09f, 0.10f, 0.11f);
+            const glm::vec3 stock(0.17f, 0.20f, 0.16f);
+            // Long barrel + receiver + bolt handle.
+            add(glm::vec3(0.0f, 0.030f, -0.52f), glm::vec3(0.042f, 0.042f, 0.86f), metal);
+            add(glm::vec3(0.0f, 0.020f, -0.24f), glm::vec3(0.075f, 0.075f, 0.44f), dark);
+            add(glm::vec3(0.058f, 0.035f, -0.10f), glm::vec3(0.055f, 0.022f, 0.022f), metal);
+            // Scope tube with front objective and rear eyepiece.
+            add(glm::vec3(0.0f, 0.105f, -0.23f), glm::vec3(0.070f, 0.070f, 0.30f), dark);
+            add(glm::vec3(0.0f, 0.105f, -0.39f), glm::vec3(0.090f, 0.090f, 0.055f), metal);
+            add(glm::vec3(0.0f, 0.105f, -0.07f), glm::vec3(0.080f, 0.080f, 0.055f), metal);
+            // Scope mounts.
+            add(glm::vec3(0.0f, 0.065f, -0.15f), glm::vec3(0.028f, 0.050f, 0.028f), metal);
+            add(glm::vec3(0.0f, 0.065f, -0.31f), glm::vec3(0.028f, 0.050f, 0.028f), metal);
+            // Stock and grip.
+            add(glm::vec3(0.0f, -0.005f, 0.175f), glm::vec3(0.085f, 0.115f, 0.34f),
+                stock, glm::vec3(7.0f, 0.0f, 0.0f));
+            add(glm::vec3(0.0f, -0.100f, 0.035f), glm::vec3(0.070f, 0.160f, 0.090f),
+                dark, glm::vec3(-12.0f, 0.0f, 0.0f));
+            // Bipod hint under the barrel.
+            add(glm::vec3(-0.030f, -0.075f, -0.49f), glm::vec3(0.016f, 0.095f, 0.016f),
+                dark, glm::vec3(0.0f, 0.0f, 18.0f));
+            add(glm::vec3(0.030f, -0.075f, -0.49f), glm::vec3(0.016f, 0.095f, 0.016f),
+                dark, glm::vec3(0.0f, 0.0f, -18.0f));
+            addHands(true);
+            if (weaponRecoil_ > 0.55f) {
+                add(glm::vec3(0.0f, 0.030f, -0.98f), glm::vec3(0.16f, 0.16f, 0.20f),
                     glm::vec3(1.0f, 0.72f, 0.16f));
             }
             break;

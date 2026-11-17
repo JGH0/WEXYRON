@@ -2,6 +2,17 @@
 #include "../core/game.hpp"
 #include <iostream>
 
+namespace {
+
+// Bullet speeds in world units per second. These are deliberately fast (and
+// the projectile hit test is swept), so the shots behave like bullets instead
+// of slow floating dots. Throwables keep their lobbed speeds.
+constexpr float kPistolBulletSpeed   = 150.0f;
+constexpr float kSniperBulletSpeed   = 400.0f;
+constexpr float kShotgunPelletSpeed  = 110.0f;
+
+} // namespace
+
 Weapon::Weapon(WeaponType type, float cooldown, int ammo, bool infiniteAmmo)
     : type(type), cooldown(cooldown), ammo(ammo), infiniteAmmo(infiniteAmmo), cooldownTimer(0.0f) {
 }
@@ -24,7 +35,7 @@ Pistol::Pistol(bool infiniteAmmo)
 void Pistol::shoot(Game* game) {
     if (!canShoot()) { game->playDryFire(); return; }
     
-    if (game->createProjectile(game->getCamera().Position, game->getCamera().Front * 60.0f, 2.0f, 0, 0)) {
+    if (game->createProjectile(game->getCamera().Position, game->getCamera().Front * kPistolBulletSpeed, 2.0f, 0, 0)) {
         // Fired from the player's own position: 3D audio pans/attenuates it
         // like any other sound. Slight random pitch keeps shots from sounding
         // identical.
@@ -55,7 +66,7 @@ void PumpShotgun::shoot(Game* game) {
             0.0f
         );
 
-        if (game->createProjectile(game->getCamera().Position, (game->getCamera().Front + spread) * 50.0f, 1.0f, 0, 3)) {
+        if (game->createProjectile(game->getCamera().Position, (game->getCamera().Front + spread) * kShotgunPelletSpeed, 1.0f, 0, 3)) {
             pelletsShot++;
         }
     }
@@ -69,6 +80,28 @@ void PumpShotgun::shoot(Game* game) {
         std::cout << "Shotgun blast! Pellets: " << pelletsShot << " Ammo: " << (infiniteAmmo ? "∞" : std::to_string(ammo)) << std::endl;
     } else {
         std::cout << "Shotgun failed to fire - max projectiles reached" << std::endl;
+    }
+}
+
+// Sniper Implementation
+Sniper::Sniper(bool infiniteAmmo)
+    : Weapon(SNIPER, 1.15f, infiniteAmmo ? 999 : 10, infiniteAmmo) {
+}
+
+void Sniper::shoot(Game* game) {
+    if (!canShoot()) { game->playDryFire(); return; }
+
+    // Projectile type 4 = sniper round: high velocity, high damage, no spread.
+    if (game->createProjectile(game->getCamera().Position,
+                               game->getCamera().Front * kSniperBulletSpeed,
+                               3.0f, 0, 4)) {
+        game->playGunshot("sniper_fire", 1.0f);
+        if (!infiniteAmmo) {
+            ammo--;
+        }
+        cooldownTimer = cooldown;
+        std::cout << "Sniper shot! Active: " << game->getActiveProjectiles()
+                  << " Ammo: " << (infiniteAmmo ? "∞" : std::to_string(ammo)) << std::endl;
     }
 }
 

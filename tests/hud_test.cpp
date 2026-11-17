@@ -32,7 +32,7 @@ int main() {
     CHECK(game.debugViewmodelInstancesLastFrame() > 0);
 
     // Every held weapon has a model and the HUD reports that weapon.
-    for (int weapon = 0; weapon < 4; ++weapon) {
+    for (int weapon = 0; weapon < 5; ++weapon) {
         game.debugSelectWeaponForTest(weapon);
         game.debugStepForTest(2, kDt);
         game.render();

@@ -6,7 +6,7 @@ A multiplayer-enabled 3D first-person shooter game built with OpenGL and C++.
 
 ### Single Player
 - 3D first-person shooter gameplay
-- Multiple weapons (Pistol, Shotgun, Grenade, Flashbang)
+- Multiple weapons (Pistol, Shotgun, Sniper, Grenade, Flashbang)
 - First-person weapon viewmodel with bob/sway, recoil and switch animation
 - HUD with health, current weapon + ammo, round details, team score and K/D
 - Blocky animated humanoid enemies/teammates with health-reactive faces
@@ -104,18 +104,21 @@ make clean && make
 
 ### Weapons
 - **1**: Pistol
-- **2**: Pump Shotgun  
-- **3**: Grenade
-- **4**: Flashbang
+- **2**: Pump Shotgun
+- **3**: Sniper Rifle
+- **4**: Grenade
+- **5**: Flashbang
 - **G**: Toggle Grenade/Flashbang
+- **Right Mouse (hold)**: Scope with the sniper rifle
 
 ### Other
 - **ESC**: Menu / back
 - **U**: Unstuck (reset position)
 
-All of these can be rebound in **Settings → Controls**. The current binding is
-shown on the right of each row; press ENTER on a row and then the new key (or
-mouse button). Bindings and the other settings are saved to
+Movement, shooting and the grenade toggle can be rebound in
+**Settings → Controls** (the sniper scope stays on the right mouse button). The
+current binding is shown on the right of each row; press ENTER on a row and then
+the new key (or mouse button). Bindings and the other settings are saved to
 `assets/settings.cfg` automatically.
 
 ### Menus and settings

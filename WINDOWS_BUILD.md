@@ -132,7 +132,8 @@ OpenGl-Game/
 - **Mouse** - Look around
 - **Space** - Jump
 - **Left Click** - Shoot
-- **1-4** - Switch weapons
+- **1-5** - Switch weapons
+- **Right Mouse (hold)** - Scope with the sniper rifle
 - **ESC** - Menu
 - **U** - Unstuck (reset position if stuck)
 

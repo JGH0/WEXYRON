@@ -396,6 +396,7 @@ Game::Game(int width, int height)
     // Weapons
     pistol    = new Pistol(infiniteAmmoMode);
     shotgun   = new PumpShotgun(infiniteAmmoMode);
+    sniper    = new Sniper(infiniteAmmoMode);
     grenade   = new Grenade(3);
     flashbang = new Flashbang(2);
     currentWeaponInstance = pistol;
@@ -555,6 +556,7 @@ Game::~Game() {
     }
     delete pistol;
     delete shotgun;
+    delete sniper;
     delete grenade;
     delete flashbang;
     if (currentMap) delete currentMap;
@@ -955,6 +957,8 @@ void Game::resetGame() {
     // Weapons
     currentWeapon    = PISTOL;
     currentWeaponInstance = pistol;
+    sniperScoped_    = false;
+    camera.Zoom      = kDefaultFov;
     pistolCooldown   = 0.0f;
     shotgunCooldown  = 0.0f;
     grenadeCooldown  = 0.0f;
@@ -1064,6 +1068,12 @@ void Game::mouseCallback(GLFWwindow* window, double xpos, double ypos) {
     float yoffset =  game->lastY - (float)ypos;
     game->lastX   = (float)xpos;
     game->lastY   = (float)ypos;
+    // While scoped the same mouse distance should move the aim less: the
+    // zoomed image amplifies every pixel of look movement.
+    if (game->sniperScoped_) {
+        xoffset *= 0.35f;
+        yoffset *= 0.35f;
+    }
     // Only process mouse look while playing or in the editor
     if (game->gameState == PLAYING || game->gameState == MAP_EDITOR)
         game->camera.ProcessMouseMovement(xoffset, yoffset);

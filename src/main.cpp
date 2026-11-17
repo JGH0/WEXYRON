@@ -210,13 +210,18 @@ static void runMenuTest(Game& game, const char* script) {
             game.debugStartMapForTest(step.substr(4));
             game.debugRunFrames(30);
         } else if (step.rfind("weapon:", 0) == 0) {
-            // Select the held weapon (0 pistol .. 3 flashbang) for a screenshot.
+            // Select the held weapon (0 pistol .. 4 flashbang) for a screenshot.
             game.debugSelectWeaponForTest(std::atoi(step.c_str() + 7));
             game.debugRunFrames(10);
         } else if (step == "dump") {
             game.debugMenuDump();
         } else if (step == "shot") {
             game.render();
+        } else if (step == "scope") {
+            // Sniper scoped view for screenshots/tests (RMB is held in real play).
+            game.debugSelectWeaponForTest(2);
+            game.debugSetScopedForTest(true);
+            game.debugRunFrames(20);
         } else {
             game.debugMenuKey(step);
             game.render();

@@ -52,3 +52,5 @@ run_steps server     menu:server
 run_steps controls   menu:settings select:CONTROLS enter
 run_steps capture    menu:settings select:CONTROLS enter down down down down enter
 run_steps capture2   menu:settings select:CONTROLS enter down down down down enter capture:70
+run_steps sniper     map:arena.map weapon:2 game:20 shot
+run_steps scope      map:arena.map scope shot

@@ -555,6 +555,10 @@ EFFECTS = {
     "ui_back":            synth_ui_back,
     "pickup":             synth_pickup,
     "help":               synth_help,
+    # sniper: deeper body and a longer room tail than the other rifles.
+    # Kept last so adding it does not change the RNG sequence of the sounds
+    # above (the generator uses one shared seeded RNG).
+    "sniper_fire":        lambda: synth_gunshot(body_freq=70.0, duration=0.85, punch=1.7, tail=0.35),
 }
 
 

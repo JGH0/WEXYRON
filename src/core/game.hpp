@@ -238,9 +238,14 @@ public:
     int debugCurrentAmmo() const {
         return currentWeaponInstance ? currentWeaponInstance->getAmmo() : 0;
     }
-    /// Switch the held weapon like pressing 1-4 (viewmodel screenshots/tests).
+    /// Switch the held weapon like pressing 1-5 (viewmodel screenshots/tests).
     void debugSelectWeaponForTest(int index) {
-        switchWeapon(static_cast<WeaponType>(index & 3));
+        switchWeapon(static_cast<WeaponType>(index % 5));
+    }
+    /// Force the sniper scope on/off for screenshots and tests (bypasses RMB).
+    void debugSetScopedForTest(bool scoped) {
+        debugScopeOverride_ = true;
+        debugScopedValue_ = scoped;
     }
     /// Current bindings (key test).
     int debugJumpKey() const { return keyBindings.jump; }
@@ -352,7 +357,7 @@ public:
      * @param velocity Initial velocity
      * @param lifetime How long the projectile exists
      * @param owner Owner ID (0 for local player)
-     * @param type Projectile type (0=pistol, 1=grenade, 2=flashbang, 3=shotgun)
+     * @param type Projectile type (0=pistol, 1=grenade, 2=flashbang, 3=shotgun, 4=sniper)
      * @return true if projectile was created, false if max projectiles reached
      */
     bool createProjectile(const glm::vec3& position, const glm::vec3& velocity, float lifetime, uint32_t owner, int type = 0);
@@ -423,8 +428,18 @@ private:
     Weapon* currentWeaponInstance;
     Pistol* pistol;
     PumpShotgun* shotgun;
+    Sniper* sniper;
     Grenade* grenade;
     Flashbang* flashbang;
+
+    /// Sniper scope (right mouse button): zooms the camera and draws the
+    /// scope overlay while the sniper is held.
+    bool sniperScoped_ = false;
+    /// Screenshot/test override for the scope state (see debugSetScopedForTest).
+    bool debugScopeOverride_ = false;
+    bool debugScopedValue_ = false;
+    static constexpr float kDefaultFov = 45.0f;   ///< hip-fire / normal FOV
+    static constexpr float kSniperFov  = 14.0f;   ///< scoped FOV (approx. 3.2x)
     
     // Physics system
     Physics physics;
@@ -466,6 +481,7 @@ private:
     enum WeaponType {
         PISTOL,
         PUMP_SHOTGUN,
+        SNIPER,
         GRENADE,
         FLASHBANG
     };
@@ -555,7 +571,7 @@ private:
 
         // Gameplay specific
         bool gameplayGPressed  = false;
-        bool gameplayWeaponPressed[5] = {false, false, false, false, false}; // indices 1-4
+        bool gameplayWeaponPressed[5] = {false, false, false, false, false}; // indices 0-4
 
         InputState() {
             memset(digitPressed,  0, sizeof(digitPressed));
@@ -655,7 +671,7 @@ private:
         bool active;
         bool detonated; // Prevents double detonation
         uint32_t owner; // 0 = local player, other = remote player ID
-        int type; // 0=pistol bullet, 1=grenade, 2=flashbang, 3=shotgun pellet
+        int type; // 0=pistol bullet, 1=grenade, 2=flashbang, 3=shotgun pellet, 4=sniper
     };
     
     /// Bullet hole structure for wall impacts
@@ -1206,6 +1222,16 @@ private:
      * @brief Render crosshair in center of screen
      */
     void renderCrosshair();
+
+    /**
+     * @brief Render the sniper scope mask, reticle and mil-dot tick marks
+     */
+    void renderScopeOverlay();
+
+    /**
+     * @brief Update the sniper scope (right mouse button) and FOV transition
+     */
+    void updateScope(float deltaTime);
     
     /**
      * @brief Build/clear bomb sites from the current map and game mode.

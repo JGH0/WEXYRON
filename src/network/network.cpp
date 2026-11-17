@@ -1008,7 +1008,7 @@ void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_
             // sender, or a client could spawn projectiles as someone else.
             spawn->header.clientId = owner->id;
             spawn->ownerId = owner->id;
-            if (spawn->projectileType > 3) break;
+            if (spawn->projectileType > 4) break;
             if (spawn->lifetime <= 0.0f || spawn->lifetime > 10.0f) break;
 
             if (onProjectileSpawned) {

@@ -370,11 +370,14 @@ void Game::processGameInput(float deltaTime) {
     }
     
     // Weapon switching input.
-    // Key 1..4 selects the weapon in array order; the grenade key toggles
+    // Key 1..5 selects the weapon in array order (1 pistol, 2 shotgun,
+    // 3 sniper, 4 grenade, 5 flashbang); the grenade key toggles
     // grenade/flashbang. Only the press edge is handled, so holding a key
     // doesn't re-trigger it.
-    static const WeaponType weaponForKey[4] = { PISTOL, PUMP_SHOTGUN, GRENADE, FLASHBANG };
-    for (int key = 0; key < 4; key++) {
+    static const WeaponType weaponForKey[5] = {
+        PISTOL, PUMP_SHOTGUN, SNIPER, GRENADE, FLASHBANG
+    };
+    for (int key = 0; key < 5; key++) {
         if (glfwGetKey(window, GLFW_KEY_1 + key) != GLFW_PRESS) {
             inp.gameplayWeaponPressed[key] = false;
             continue;

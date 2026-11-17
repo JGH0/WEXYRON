@@ -34,6 +34,7 @@ struct MixEntry { const char* name; float volume; };
 const MixEntry kMix[] = {
     {"pistol_fire",       0.9f},
     {"shotgun_fire",      1.0f},
+    {"sniper_fire",       1.0f},
     {"dry_fire",          0.6f},
     {"reload",            0.7f},
     {"grenade_throw",     0.6f},

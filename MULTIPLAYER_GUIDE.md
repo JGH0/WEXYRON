@@ -124,9 +124,11 @@ sudo ufw disable
 ### Weapons
 - **1**: Pistol
 - **2**: Pump Shotgun
-- **3**: Grenade
-- **4**: Flashbang
+- **3**: Sniper Rifle
+- **4**: Grenade
+- **5**: Flashbang
 - **G**: Toggle between Grenade/Flashbang
+- **Right Mouse (hold)**: Scope with the sniper rifle
 
 ### Other
 - **ESC**: Menu/Disconnect

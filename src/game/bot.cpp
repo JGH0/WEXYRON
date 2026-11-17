@@ -932,7 +932,7 @@ void Bot::fireAt(const Target& target, float distance, std::vector<Action>& acti
             Action action;
             action.type = Action::FireBullet;
             action.origin = eye;
-            action.velocity = directionWithSpread(hit) * 50.0f;
+            action.velocity = directionWithSpread(hit) * 110.0f;
             action.lifetime = 1.0f;
             action.projectileType = 3;
             action.weaponId = 3;
@@ -948,7 +948,7 @@ void Bot::fireAt(const Target& target, float distance, std::vector<Action>& acti
         Action action;
         action.type = Action::FireBullet;
         action.origin = eye;
-        action.velocity = directionWithSpread(hit) * 120.0f;
+        action.velocity = directionWithSpread(hit) * 150.0f;
         action.lifetime = 3.0f;
         action.projectileType = 0;
         action.weaponId = 0;

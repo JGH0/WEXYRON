@@ -14,6 +14,7 @@ public:
     enum WeaponType {
         PISTOL,
         PUMP_SHOTGUN,
+        SNIPER,
         GRENADE,
         FLASHBANG
     };
@@ -56,6 +57,15 @@ public:
 class PumpShotgun : public Weapon {
 public:
     PumpShotgun(bool infiniteAmmo = false);
+    void shoot(Game* game) override;
+};
+
+/**
+ * @brief Bolt-action sniper rifle with a right-mouse scope (scope handled by Game)
+ */
+class Sniper : public Weapon {
+public:
+    Sniper(bool infiniteAmmo = false);
     void shoot(Game* game) override;
 };
 

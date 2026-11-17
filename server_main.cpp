@@ -356,7 +356,15 @@ int main(int argc, char* argv[]) {
         ServerPlayer* victim = server.getPlayer(victimId);
         if (!victim || victim->isDead) return;
 
-        damage = weaponId >= 1 ? std::min(damage, 75.0f) : std::min(damage, 100.0f);
+        // A sniper body shot (100) is lethal; its headshot (200) is capped at
+        // 160. Grenade blasts stay lethal but are not stacked.
+        if (weaponId == 4) {
+            damage = std::min(damage, 160.0f);
+        } else if (weaponId >= 1) {
+            damage = std::min(damage, 75.0f);
+        } else {
+            damage = std::min(damage, 100.0f);
+        }
         if (damage <= 0.0f) return;
 
         victim->health -= damage;

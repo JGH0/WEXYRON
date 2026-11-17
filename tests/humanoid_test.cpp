@@ -31,6 +31,7 @@ int main() {
     // Base weapon damage before the zone multiplier.
     CHECK(humanoid::projectileBaseDamage(0) == 25.0f);   // pistol
     CHECK(humanoid::projectileBaseDamage(3) == 10.0f);   // shotgun pellet
+    CHECK(humanoid::projectileBaseDamage(4) == 100.0f);  // sniper
 
     std::printf("head x2 / body x1 / limb x0.5: %s\n",
                 failures ? "FAILED" : "OK");

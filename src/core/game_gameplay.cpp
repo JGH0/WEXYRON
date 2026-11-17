@@ -547,6 +547,7 @@ void Game::shoot() {
         // hard, throwables barely move the hand.
         float kick = 0.45f;
         if (currentWeapon == PUMP_SHOTGUN)      kick = 0.95f;
+        else if (currentWeapon == SNIPER)       kick = 1.0f;
         else if (currentWeapon == GRENADE ||
                  currentWeapon == FLASHBANG)    kick = 0.25f;
         weaponRecoil_ = std::min(1.0f, weaponRecoil_ + kick);
@@ -573,6 +574,10 @@ void Game::switchWeapon(WeaponType weapon) {
             currentWeaponInstance = shotgun;
             std::cout << "Switched to Pump Shotgun! Ammo: " << (infiniteAmmoMode ? "∞" : std::to_string(shotgunAmmo)) << std::endl;
             break;
+        case SNIPER:
+            currentWeaponInstance = sniper;
+            std::cout << "Switched to Sniper! Ammo: " << (infiniteAmmoMode ? "∞" : std::to_string(sniper->getAmmo())) << std::endl;
+            break;
         case GRENADE:
             currentWeaponInstance = grenade;
             std::cout << "Switched to Grenade! Count: " << (infiniteAmmoMode ? "∞" : std::to_string(grenadeCount)) << std::endl;
@@ -581,6 +586,44 @@ void Game::switchWeapon(WeaponType weapon) {
             currentWeaponInstance = flashbang;
             std::cout << "Switched to Flashbang! Count: " << (infiniteAmmoMode ? "∞" : std::to_string(flashbangCount)) << std::endl;
             break;
+    }
+}
+
+void Game::updateScope(float deltaTime) {
+    // Leaving the match (menu, death screen, editor) ends the scope. Do not
+    // touch camera.Zoom outside PLAYING afterwards: the map editor has its own
+    // scroll zoom and must keep it.
+    if (gameState != PLAYING) {
+        if (sniperScoped_) {
+            sniperScoped_ = false;
+            camera.Zoom = kDefaultFov;
+        }
+        return;
+    }
+
+    // The scope is a held right mouse button while the sniper is the active
+    // weapon. The round-freeze releases it like everything else.
+    const bool roundIntermission =
+        roundEndTimer > 0.0f &&
+        (currentGameMode == TEAM_VS_TEAM || currentGameMode == BOMB_DEFUSAL);
+    const bool canScope =
+        window && !spectatorMode && !isDead && !roundIntermission &&
+        currentWeapon == SNIPER;
+
+    const bool rmbDown =
+        canScope &&
+        glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+    sniperScoped_ = debugScopeOverride_ ? debugScopedValue_
+                                        : (canScope && rmbDown);
+
+    // Smooth FOV transition instead of a hard snap; the blend is frame-rate
+    // independent. Mouse look is also slowed down while scoped
+    // (see Game::mouseCallback).
+    const float targetFov = sniperScoped_ ? kSniperFov : kDefaultFov;
+    const float blend = 1.0f - std::exp(-deltaTime * 22.0f);
+    camera.Zoom += (targetFov - camera.Zoom) * blend;
+    if (std::abs(camera.Zoom - targetFov) < 0.05f) {
+        camera.Zoom = targetFov;
     }
 }
 
@@ -600,7 +643,7 @@ void Game::shootPistol() {
         return;
     }
     
-    createProjectile(camera.Position, camera.Front * 120.0f, 3.0f, 0, 0); // owner=0, type=0 (pistol) for local player
+    createProjectile(camera.Position, camera.Front * 150.0f, 2.0f, 0, 0); // owner=0, type=0 (pistol) for local player
     lastLocalShot_ = std::chrono::steady_clock::now();
     if (!infiniteAmmoMode) {
         pistolAmmo--;
@@ -631,7 +674,7 @@ void Game::shootShotgun() {
                 (rand() % 100 - 50) * 0.002f, // -0.1 to 0.1 (reduced from 0.5)
                 0.0f
             );
-            createProjectile(camera.Position, (camera.Front + spread) * 50.0f, 1.0f, 0, 3); // owner=0, type=3 (shotgun) for local player
+            createProjectile(camera.Position, (camera.Front + spread) * 110.0f, 1.0f, 0, 3); // owner=0, type=3 (shotgun) for local player
             pelletsShot++;
         }
     }

@@ -65,11 +65,13 @@ inline float damageMultiplier(HitZone zone) {
 }
 
 /// Base bullet damage before the hit-zone multiplier. Matches the weapon
-/// system: pistol bullet 25, shotgun pellet 10, everything else 20.
+/// system: pistol bullet 25, shotgun pellet 10, sniper round 100, everything
+/// else 20.
 inline float projectileBaseDamage(int projectileType) {
     switch (projectileType) {
         case 0: return 25.0f;   // pistol
         case 3: return 10.0f;   // shotgun pellet
+        case 4: return 100.0f;  // sniper
         default: return 20.0f;
     }
 }
