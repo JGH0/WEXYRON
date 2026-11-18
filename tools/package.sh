@@ -91,6 +91,10 @@ case "$TARGET" in
         # the launcher cds there.
         stage_assets "$APPDIR/usr/bin/assets"
 
+        # License notices, as required by the bundled third-party components.
+        mkdir -p "$APPDIR/usr/share/doc/cube-cs-lite"
+        cp "$ROOT/LICENSE" "$ROOT/THIRD_PARTY_NOTICES.md" "$APPDIR/usr/share/doc/cube-cs-lite/"
+
         # Launch through a tiny wrapper so the working directory is right.
         mv "$APPDIR/usr/bin/cube-cs-lite" "$APPDIR/usr/bin/cube-cs-lite.real"
         cat > "$APPDIR/usr/bin/cube-cs-lite" <<'EOF'
@@ -118,6 +122,7 @@ EOF
         mkdir -p "$STAGE"
         cp "$GAME_BIN" "$STAGE/game.exe"
         cp "$ROOT/README.md" "$STAGE/README.md"
+        cp "$ROOT/LICENSE" "$ROOT/THIRD_PARTY_NOTICES.md" "$STAGE/"
 
         # MinGW runtime + glfw DLLs, taken from the sysroot next to the
         # compiler that built the exe (MSYS2 or mingw-w64). CI exports

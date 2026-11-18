@@ -282,6 +282,9 @@ cube-cs-lite/
 
 ## Contributing
 
+Feature requests are welcome! If there is something you would like to see in
+the game, open an issue describing the idea and how it would improve gameplay.
+
 1. Fork the repository
 2. Create feature branch
 3. Test multiplayer functionality
@@ -289,7 +292,10 @@ cube-cs-lite/
 
 ## License
 
-[Add your license here]
+Cube CS Lite is released under the [MIT License](LICENSE).
+
+It bundles third-party libraries with their own permissive licenses; see
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for details.
 
 ## Support
 
