@@ -81,8 +81,8 @@ CUBE_MENU_TEST="menu:main;dump" xvfb-run -a ./build/bin/game
 - `Mesh` is included. `Model` remains in `src/core/` because it requires Assimp,
   which is not part of the current build. It is optional and can move into the
   engine once Assimp is a declared dependency.
-- The older `src/engine/` files are an earlier prototype and are not part of
-  the library target. The production engine is this directory.
+- The earlier `src/engine/` prototype has been removed. The production engine
+  is this directory.
 
 ## Extraction summary
 

@@ -7,8 +7,8 @@
  * samples it produces. That is what the device thread would hear.
  *
  * Build/run (from the project root):
- *   g++ -std=c++17 -Iinclude -Isrc tests/audio_test.cpp \
- *       src/engine/audio_manager.cpp build/obj/miniaudio.o -o build/bin/audio_test
+ *   g++ -std=c++17 -Iinclude -Isrc -Iengine/include tests/audio_test.cpp \
+ *       engine/src/audio_manager.cpp build/obj/miniaudio.o -o build/bin/audio_test
  *   ./build/bin/audio_test          # needs assets/audio (generated)
  */
 

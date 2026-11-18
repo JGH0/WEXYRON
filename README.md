@@ -66,7 +66,6 @@ Or use the batch scripts:
 
 ### Linux/macOS
 ```bash
-cd OpenGl-Game
 make clean && make
 ```
 
@@ -254,7 +253,7 @@ make run-server
 
 ## File Structure
 ```
-OpenGl-Game/
+cube-cs-lite/
 |-- engine/                 # Reusable, game-agnostic engine library
 |   |-- include/engine/     # Public engine headers
 |   |-- src/                # Engine implementation
@@ -265,20 +264,20 @@ OpenGl-Game/
 |   |-- network/            # Multiplayer networking
 |   |-- ui/                 # User interface
 |   `-- main.cpp            # Game entry point
-|-- assets/                 # Game assets (textures, maps)
+|-- assets/                 # Game assets (textures, maps, audio)
+|-- docs/                   # Guides and legacy notes
+|-- tools/                  # Packaging, asset and documentation generators
 |-- build/                  # Compiled binaries
 |-- .vscode/                # VS Code configuration
-|   |-- c_cpp_properties_windows.json  # Windows IntelliSense
-|   |-- launch_windows.json            # Windows debug configs
-|   `-- tasks.json                    # Build tasks
-|-- Makefile.windows         # Windows Makefile (MinGW)
+|-- Makefile / Makefile.windows
+|-- CMakeLists.txt
+|-- BUILD.bat               # Windows build script
+|-- run.bat                 # Windows game launcher
+|-- runServer.bat           # Windows server launcher
 |-- WINDOWS_SETUP.md        # Windows setup guide
-|-- build.bat              # Windows build script
-|-- run_game.bat           # Windows game launcher
-|-- run_server.bat         # Windows server launcher
-|-- test_multiplayer.bat   # Windows multiplayer test
-|-- MULTIPLAYER_GUIDE.md   # Detailed multiplayer setup
-`-- test_multiplayer.sh   # Linux multiplayer test script
+|-- MULTIPLAYER_GUIDE.md    # Detailed multiplayer setup
+|-- MENUS.md                # Menu framework
+`-- WEAPON_CONTROLS.md      # Weapon controls
 ```
 
 ## Contributing
@@ -361,5 +360,4 @@ distance limit as long as `projectilePrevPos` is tracked.
 The reusable rendering, map, camera, audio and thread-pool code lives in
 `engine/` and builds as the `cube_engine` library. The game links it from
 `src/`. See [`engine/README.md`](engine/README.md) for the boundary rules and
-the smoke test. The older `src/engine/` files are an earlier prototype, not part
-of the library target.
+the smoke test. The earlier `src/engine/` prototype has been removed.

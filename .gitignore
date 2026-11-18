@@ -1,4 +1,12 @@
-docs
+# Generated Doxygen output
+/docs/html/
+
+# Vendored toolchain docs
+/.mingw-deps/**/docs/
+
+# Legacy pre-engine checkout, kept locally but not tracked
+/OpenGl-Game/
+
 build
 settings.cfg
 
