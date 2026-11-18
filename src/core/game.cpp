@@ -702,6 +702,8 @@ void Game::refreshBombSitesForMode() {
     bomb.plantingTeam = 0;
     activeBombSites = 0;
     serverRoundEnded = false;
+    serverPlantActor_ = 0;
+    serverDefuseActor_ = 0;
     roundWinner = -1;
     roundEndReason = ROUND_END_NONE;
     roundTimeLeft = 0.0f;

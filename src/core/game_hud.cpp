@@ -211,8 +211,10 @@ void Game::renderBombSites() {
         }
     }
     
-    // Render planted bomb (BIG and prominent)
-    if (bomb.planted && !bomb.defused) {
+    // Render planted bomb (BIG and prominent). `active` is false once the
+    // bomb exploded or was defused, so the model disappears immediately
+    // instead of lingering through the round-end window.
+    if (bomb.planted && !bomb.defused && bomb.active) {
         glm::vec3 bombPos = bomb.position;
         float bombTimeLeft = bomb.explodeTime - bomb.plantTime;
         
@@ -416,7 +418,7 @@ void Game::renderGameHUD() {
     if (roundBased) {
         header = "ROUND " + std::to_string(roundNumber_);
 
-        if (bombDefusalMode && bomb.planted && !bomb.defused) {
+        if (bombDefusalMode && bomb.planted && !bomb.defused && bomb.active) {
             const int secs = static_cast<int>(std::ceil(
                 std::max(0.0f, bomb.explodeTime - bomb.plantTime)));
             timerText = "BOMB " + std::to_string(secs);
@@ -694,6 +696,13 @@ void Game::renderBombDefusalHUD() {
     auto _b = UIHelpers::getBounds(window);
     float left=_b.left, right=_b.right, top=_b.top, bottom=_b.bottom;
 
+    auto panel = [&](float cx, float cy, float w, float h, const glm::vec3& color) {
+        glm::mat4 m = glm::translate(glm::mat4(1.0f), glm::vec3(cx, cy, 0.0f));
+        m = glm::scale(m, glm::vec3(w, h, 1.0f));
+        renderer.drawColoredQuad(m, color);
+    };
+    const glm::vec3 kPanel(0.045f, 0.055f, 0.070f);
+
     // The general HUD owns the bottom-left health panel, the bottom-right
     // weapon panel, the top-right K/D counters and the top-centre round
     // panel. The mode-specific elements here use the remaining corners so
@@ -740,15 +749,18 @@ void Game::renderBombDefusalHUD() {
         renderer.drawTextFit(teamName, teamX + 10.0f, teamY + 6.0f, teamWidth - 20.0f, 0.45f);
     }
 
-    // ── Round end overlay ──
+    // ── Round end banner (top-centre) ──────────────────────────────────────
     if (roundEndTimer > 0.0f) {
-        // Semi-transparent dark overlay
-        glm::mat4 overlay = glm::mat4(1.0f);
-        overlay = glm::translate(overlay, glm::vec3((left + right) * 0.5f, (top + bottom) * 0.5f, 0.0f));
-        overlay = glm::scale(overlay, glm::vec3(right - left, bottom - top, 1.0f));
-        renderer.drawColoredQuad(overlay, glm::vec3(0.0f, 0.0f, 0.0f) * 0.4f);
-        
-        // Two short centred lines, fitted to the screen width. The old single
+        // A compact top-of-screen result banner instead of the old full-screen
+        // dark overlay: the body stays visible (and movable) during the short
+        // post-round window, while the result is still unmissable.
+        const float popupW = 270.0f;
+        const float popupH = 104.0f;
+        const float popupX = (left + right) * 0.5f - popupW * 0.5f;
+        const float popupY = top + 12.0f;
+        const float popupCx = popupX + popupW * 0.5f;
+
+        // Two short centred lines, fitted to the popup width. The old single
         // line was wider than the viewport and got clipped on both sides.
         char reasonLine[64] = "ROUND OVER";
         switch (roundEndReason) {
@@ -777,42 +789,47 @@ void Game::renderBombDefusalHUD() {
         if (shownWinner < 0 && roundEndReason == ROUND_END_NONE) {
             shownWinner = bomb.defused ? 1 - bomb.plantingTeam : bomb.plantingTeam;
         }
-        char teamLine[48];
-        glm::vec3 winColor(0.95f);
-        if (shownWinner == 0) {
-            snprintf(teamLine, sizeof(teamLine), "TEAM A (RED) WINS");
-            winColor = glm::vec3(1.0f, 0.25f, 0.22f);
-        } else if (shownWinner == 1) {
-            snprintf(teamLine, sizeof(teamLine), "TEAM B (BLUE) WINS");
-            winColor = glm::vec3(0.28f, 0.48f, 1.0f);
+
+        // Personal result, not just the winning team's name: the player wants
+        // to know at a glance whether *they* won the round.
+        char resultLine[32];
+        glm::vec3 resultColor(0.95f);
+        if (shownWinner == 0 || shownWinner == 1) {
+            if (shownWinner == playerTeam) {
+                snprintf(resultLine, sizeof(resultLine), "ROUND WON");
+                resultColor = glm::vec3(0.30f, 0.95f, 0.40f);
+            } else {
+                snprintf(resultLine, sizeof(resultLine), "ROUND LOST");
+                resultColor = glm::vec3(1.0f, 0.28f, 0.24f);
+            }
         } else {
-            snprintf(teamLine, sizeof(teamLine), "DRAW");
-            winColor = glm::vec3(0.85f);
+            snprintf(resultLine, sizeof(resultLine), "ROUND DRAW");
+            resultColor = glm::vec3(0.85f);
         }
 
-        const float centreX = (left + right) * 0.5f;
-        const float centreY = (top + bottom) * 0.5f;
-        const float maxLineWidth = (right - left) * 0.82f;
-        renderer.drawTextCenteredColored(reasonLine, centreX, centreY - 40.0f,
-                                         1.05f, glm::vec3(1.0f), maxLineWidth);
-        renderer.drawTextCenteredColored(teamLine, centreX, centreY + 4.0f,
-                                         0.9f, winColor, maxLineWidth);
+        panel(popupCx, popupY + popupH * 0.5f, popupW, popupH, kPanel);
+        panel(popupCx, popupY + popupH - 2.0f, popupW, 3.0f, resultColor * 0.85f);
+
+        const float maxLineWidth = popupW - 22.0f;
+        renderer.drawTextCenteredColored(resultLine, popupCx, popupY + 9.0f,
+                                         0.78f, resultColor, maxLineWidth);
+        renderer.drawTextCenteredColored(reasonLine, popupCx, popupY + 35.0f,
+                                         0.42f, glm::vec3(0.88f), maxLineWidth);
 
         // Match score: the popup keeps the score visible like the CS round
         // result instead of only naming the winner.
         char scoreLine[64];
         snprintf(scoreLine, sizeof(scoreLine), "TEAM A  %d   :   %d  TEAM B",
                  teamAScore_, teamBScore_);
-        renderer.drawTextCenteredColored(scoreLine, centreX, centreY + 42.0f,
-                                         0.7f, glm::vec3(0.82f), maxLineWidth);
+        renderer.drawTextCenteredColored(scoreLine, popupCx, popupY + 56.0f,
+                                         0.34f, glm::vec3(0.82f), maxLineWidth);
 
         // Countdown text
         char countdownMsg[48];
         snprintf(countdownMsg, sizeof(countdownMsg), "Next round in %d...",
                  static_cast<int>(ceilf(roundEndTimer)));
-        renderer.drawTextCenteredColored(countdownMsg, centreX, centreY + 78.0f,
-                                         0.6f, glm::vec3(0.85f),
-                                         (right - left) * 0.55f);
+        renderer.drawTextCenteredColored(countdownMsg, popupCx, popupY + 77.0f,
+                                         0.36f, glm::vec3(0.85f), maxLineWidth);
     }
     
     // ── Planting / Defusing progress bar (center of screen) ──
@@ -865,7 +882,7 @@ void Game::renderBombDefusalHUD() {
         }
     }
     
-    if (bomb.planted && !bomb.defused && !isDefusing && !isDead) {
+    if (bomb.planted && !bomb.defused && bomb.active && !isDefusing && !isDead) {
         if (isNearBomb() && playerTeam != bomb.plantingTeam) {
             renderer.drawTextCentered("[E] Defuse Bomb", (left + right) * 0.5f, (top + bottom) * 0.5f + 40.0f, 0.7f);
         }
@@ -888,7 +905,7 @@ void Game::renderBombDefusalHUD() {
                 snprintf(distStr, sizeof(distStr), "Site %c  %.0fm", bombSites[nearestSite].label, minDist);
                 renderer.drawText(distStr, left + 14.0f, bottom - 104.0f, 0.5f);
             }
-        } else if (bomb.planted && !bomb.defused && !isDead) {
+        } else if (bomb.planted && !bomb.defused && bomb.active && !isDead) {
             float dist = glm::length(playerPos - bomb.position);
             if (dist > 3.0f) {
                 char bombDistStr[32];

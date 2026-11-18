@@ -538,6 +538,8 @@ void ServerBombManager::broadcastState(const std::string& mapName, MapState& sta
                            ? static_cast<uint8_t>(state.siteIndex)
                            : static_cast<uint8_t>(255);
     packet.siteLabel = static_cast<uint8_t>(state.siteLabel);
+    packet.plantActor = state.plantActor;
+    packet.defuseActor = state.defuseActor;
 
     server.broadcastToMap(mapName, &packet, sizeof(packet), 0);
 }

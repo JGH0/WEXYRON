@@ -323,13 +323,50 @@ void Game::processGameInput(float deltaTime) {
         camera.Position = glm::vec3(0.0f, playerPos.y + eyeHeight, 0.0f); // Reset camera
     }
     
-    // Bomb defusal mode - USE key (E by default) for planting/defusing
-    if (!roundIntermission && bindingDown(keyBindings.use)) {
-        if (bombDefusalMode) {
-            if (bomb.planted && !bomb.defused) {
-                startDefusing();
-            } else if (!bomb.planted) {
+    // Bomb defusal mode - USE key (E by default) for planting/defusing.
+    // Only the attacking team may plant and only the defending team may
+    // defuse. Checking the role before calling the action also avoids the
+    // per-frame "cannot defuse your own bomb" console spam while E is held
+    // next to a bomb that was just planted.
+    if (bombDefusalMode) {
+        const bool useHeld = !roundIntermission && bindingDown(keyBindings.use);
+        // If the server has already assigned the interaction to another
+        // player or a bot, do not start a competing local request. Otherwise
+        // the local state would flip on and off with every state packet and
+        // replay the start sound.
+        const uint32_t selfId = networkClient ? networkClient->getClientId() : 0;
+        const bool otherIsPlanting = serverPlantActor_ != 0 && serverPlantActor_ != selfId;
+        const bool otherIsDefusing = serverDefuseActor_ != 0 && serverDefuseActor_ != selfId;
+        if (useHeld) {
+            if (bomb.planted) {
+                if (!bomb.defused && playerTeam != bomb.plantingTeam && !otherIsDefusing) {
+                    startDefusing();
+                }
+            } else if (playerTeam == attackingTeam && !otherIsPlanting) {
                 startPlanting();
+            }
+        }
+
+        // Releasing USE (or the round ending) cancels the local interaction.
+        // The server expires the request as soon as the re-sends stop.
+        if (!useHeld) {
+            isPlanting = false;
+            isDefusing = false;
+            plantProgress = 0.0f;
+            defuseProgress = 0.0f;
+            bombInteractResend_ = 0.0f;
+        } else if (networkClient && networkClient->isConnected()) {
+            // Walked off the site / away from the bomb while still holding
+            // E: drop the local interaction instead of crouching in place.
+            // The bomb becoming planted ends a plant; it is not a reason to
+            // cancel one that is still in progress.
+            if (isPlanting && (bomb.planted || getNearbyBombSite() < 0)) {
+                isPlanting = false;
+                plantProgress = 0.0f;
+            }
+            if (isDefusing && (bomb.defused || !isNearBomb())) {
+                isDefusing = false;
+                defuseProgress = 0.0f;
             }
         }
     }

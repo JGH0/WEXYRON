@@ -196,6 +196,11 @@ struct BombStatePacket {
     uint8_t plantingTeam;      ///< 255 when no bomb has been planted
     uint8_t siteIndex;         ///< index in the map's bomb-site list (255 = none)
     uint8_t siteLabel;         ///< 'A' or 'B'
+    /// Player currently doing the interaction (0 = none). Only this client
+    /// may enter the crouched/locked plant or defuse pose; the progress
+    /// fields alone describe the whole map, not the local player.
+    uint32_t plantActor;
+    uint32_t defuseActor;
 };
 
 // New player joined

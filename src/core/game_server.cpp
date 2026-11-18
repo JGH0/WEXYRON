@@ -209,12 +209,35 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
 
         if (packet.roundActive) roundActive = true;
 
-        // Progress bars follow the server's authoritative timers. A human
-        // pressing E only sends the request; the server starts the progress.
-        isPlanting = packet.plantProgress > 0.0f;
-        plantProgress = packet.plantProgress;
-        isDefusing = packet.defuseProgress > 0.0f;
-        defuseProgress = packet.defuseProgress;
+        // Progress bars and the crouched/locked interaction pose belong only
+        // to the client that is actually doing the planting/defusing. The
+        // progress values are map-global (they also advance for bots), so
+        // using them directly made every player sneak in place whenever a
+        // bot somewhere on the map was planting.
+        const uint32_t selfId = networkClient ? networkClient->getClientId() : 0;
+        const bool iAmPlanting = packet.plantActor != 0 && packet.plantActor == selfId;
+        const bool iAmDefusing = packet.defuseActor != 0 && packet.defuseActor == selfId;
+        serverPlantActor_ = packet.plantActor;
+        serverDefuseActor_ = packet.defuseActor;
+
+        if (packet.plantActor != 0) {
+            isPlanting = iAmPlanting;
+            plantProgress = iAmPlanting ? packet.plantProgress : 0.0f;
+        } else if (packet.planted != 0 || packet.roundEnded != 0 || packet.exploded != 0) {
+            isPlanting = false;
+            plantProgress = 0.0f;
+        }
+        // actor == 0: no server-side actor yet. Keep the local request that
+        // processGameInput() started, so it is not restarted (and re-logged)
+        // on every incoming packet before the server picks an actor.
+
+        if (packet.defuseActor != 0) {
+            isDefusing = iAmDefusing;
+            defuseProgress = iAmDefusing ? packet.defuseProgress : 0.0f;
+        } else if (packet.defused != 0 || packet.roundEnded != 0 || packet.exploded != 0) {
+            isDefusing = false;
+            defuseProgress = 0.0f;
+        }
 
         if (packet.roundActive != 0 && packet.roundEnded == 0) {
             // New/reset round: re-arm the one-shot round-result guard.
@@ -305,6 +328,8 @@ void Game::disconnectFromServer() {
     roundWinner = -1;
     roundEndReason = ROUND_END_NONE;
     roundTimeLeft = 0.0f;
+    serverPlantActor_ = 0;
+    serverDefuseActor_ = 0;
 
     // Clear remote players completely
     for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {

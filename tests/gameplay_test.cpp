@@ -172,11 +172,12 @@ int main() {
         CHECK(game.debugWeaponCanShootForTest());
     }
 
-    // ── CS-style round end: players may move during the result popup ────────
+    // ── CS-style round end: 3 s result popup, players may move ─────────────
     if (game.debugStartMapForTest("large.map")) {
         game.debugSetGameModeForTest(2);   // bomb defusal, round-based
         game.debugEndRoundForTest(0, ROUND_END_DEFENDERS_ELIMINATED);
-        CHECK(game.debugRoundEndTimerForTest() > 4.0f);
+        CHECK(game.debugRoundEndTimerForTest() > 2.5f);
+        CHECK(game.debugRoundEndTimerForTest() <= 3.0f);
 
         glm::vec3 before, vel;
         bool onGround = false;

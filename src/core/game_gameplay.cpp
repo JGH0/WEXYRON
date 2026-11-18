@@ -2078,10 +2078,7 @@ void Game::startPlanting() {
     if (!bombDefusalMode || bomb.planted || isPlanting) return;
     
     // Only attacking team can plant
-    if (playerTeam != attackingTeam) {
-        std::cout << "Only attacking team can plant the bomb!" << std::endl;
-        return;
-    }
+    if (playerTeam != attackingTeam) return;
     
     int siteIndex = getNearbyBombSite();
     if (siteIndex >= 0) {
@@ -2092,7 +2089,6 @@ void Game::startPlanting() {
         if (networkClient && networkClient->isConnected()) {
             networkClient->sendBombInteract(BOMB_INTERACT_PLANT);
         }
-        std::cout << "Started planting bomb..." << std::endl;
     }
 }
 
@@ -2100,10 +2096,7 @@ void Game::startDefusing() {
     if (!bombDefusalMode || !bomb.planted || bomb.defused || isDefusing) return;
     
     // Only defending team can defuse
-    if (playerTeam == bomb.plantingTeam) {
-        std::cout << "Cannot defuse your own bomb!" << std::endl;
-        return;
-    }
+    if (playerTeam == bomb.plantingTeam) return;
     
     if (isNearBomb()) {
         isDefusing = true;
@@ -2112,7 +2105,6 @@ void Game::startDefusing() {
         if (networkClient && networkClient->isConnected()) {
             networkClient->sendBombInteract(BOMB_INTERACT_DEFUSE);
         }
-        std::cout << "Started defusing bomb..." << std::endl;
     }
 }
 
@@ -2135,7 +2127,7 @@ int Game::getNearbyBombSite() {
 }
 
 bool Game::isNearBomb() {
-    if (!bomb.planted || bomb.defused) return false;
+    if (!bomb.planted || bomb.defused || !bomb.active) return false;
 
     constexpr float kUseRange = 2.5f;
     constexpr float kUseHeight = 2.5f;
@@ -2152,8 +2144,10 @@ void Game::endRound(int winner, RoundEndReason reason) {
     roundWinner = winner;
     roundEndReason = reason;
     // CS-style post-round window: players can keep moving for a few seconds
-    // while the result popup is up, then the next round starts.
-    roundEndTimer = 5.0f;
+    // while the result popup is up, then the next round starts. Bomb defusal
+    // uses the short 3 s window requested for the blast result; team modes
+    // keep the slightly longer pause.
+    roundEndTimer = (currentGameMode == BOMB_DEFUSAL) ? 3.0f : 5.0f;
     if (winner == 0)      teamAScore_++;
     else if (winner == 1) teamBScore_++;
     playUiSound("round_end");
@@ -2254,6 +2248,8 @@ void Game::startRound() {
     bomb.defused = false;
     bomb.active = false;
     bomb.plantTime = 0.0f;
+    serverPlantActor_ = 0;
+    serverDefuseActor_ = 0;
     
     // Reset players
     resetGame();

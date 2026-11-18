@@ -370,8 +370,10 @@ void ServerBotManager::reviveBotsForNewRound(NetworkServer& server, const std::s
 
         ServerPlayer* player = server.getPlayer(runtime.id);
         if (!player) continue;
-        if (!player->isDead && runtime.ai->alive()) continue;
 
+        // Every bot starts the new round at a spawn point. Living bots used to
+        // be skipped here, so a bot that survived the previous round stayed
+        // frozen wherever it happened to be when the round ended.
         const bots::SpawnResult spawn =
             map->findSpawn(gameMode >= 1, player->team, rng_);
 

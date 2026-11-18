@@ -1172,6 +1172,11 @@ private:
     /// Re-send an active plant / defuse request so a dropped UDP packet does
     /// not silently cancel the interaction (multiplayer is server-owned).
     float bombInteractResend_ = 0.0f;
+    /// Last server-reported plant/defuse actor (0 = none). While another
+    /// player or bot owns the interaction, the local client must not restart
+    /// its own request (which would replay the start sound every frame).
+    uint32_t serverPlantActor_ = 0;
+    uint32_t serverDefuseActor_ = 0;
     
     /**
      * @brief Shoot specific weapon types
