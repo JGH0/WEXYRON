@@ -684,7 +684,12 @@ void Game::updateScope(float deltaTime) {
     // The scope is a held binding (right mouse button by default) and can be
     // rebound on the CONTROLS page like every other button.
     const bool scopeDown = canScope && bindingDown(gameSettings_.bindScope);
+    const bool wasScoped = sniperScoped_;
     sniperScoped_ = debugScopeOverride_ ? debugScopedValue_ : scopeDown;
+    if (sniperScoped_ && !wasScoped) {
+        // Scope-in click/zoom sound (2D so it is always audible).
+        playUiSound("sniper_scope_in");
+    }
 
     // Smooth FOV transition instead of a hard snap; the blend is frame-rate
     // independent. Mouse look is also slowed down while scoped
@@ -713,7 +718,7 @@ void Game::updateSniperBolt(float deltaTime) {
 
     sniperBoltSoundPending_ = false;
     const float pitch = 0.96f + static_cast<float>(std::rand() % 9) * 0.01f;
-    playSoundEffect("sniper_bolt", camera.Position, 0.9f, pitch);
+    playSoundEffect("sniper_bolt_custom", camera.Position, 0.9f, pitch);
 }
 
 void Game::shootPistol() {

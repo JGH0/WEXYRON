@@ -95,7 +95,7 @@ void Sniper::shoot(Game* game) {
     if (game->createProjectile(game->getCamera().Position,
                                game->getCamera().Front * kSniperBulletSpeed,
                                3.0f, 0, 4)) {
-        game->playGunshot("sniper_fire_thunder", 1.15f);
+        game->playGunshot("sniper_fire_custom", 1.1f);
         // Bolt-action: the rattle follows the shot, and the long cooldown
         // prevents another round until the bolt has been cycled.
         game->scheduleSniperBolt(0.42f);
