@@ -564,7 +564,7 @@ Game::~Game() {
 }
 
 // ---------------------------------------------------------------------------
-// init – called after constructor; sets up renderer and spawns initial enemies
+// init – called after constructor; sets up renderer and opens the main menu
 // ---------------------------------------------------------------------------
 void Game::init() {
     std::cout << "Initializing renderer..." << std::endl;
@@ -607,10 +607,6 @@ void Game::init() {
 
     playerVelocity = glm::vec3(0.0f);
     isJumping = false;
-
-    spawnEnemy(glm::vec3( 5.0f, -1.0f,  5.0f));
-    spawnEnemy(glm::vec3(-5.0f, -1.0f,  5.0f));
-    spawnEnemy(glm::vec3( 5.0f, -1.0f, -5.0f));
 
     std::cout << "[init] done" << std::endl;
     std::cout << "Game initialization complete." << std::endl;
@@ -993,14 +989,11 @@ void Game::resetGame() {
     fallTime     = 0.0f;
     playUiSound("reload");
 
-    // Re-spawn initial enemies (practice targets: single player only)
-    if (!multiplayerMode) {
-        spawnEnemy(glm::vec3( 5.0f, -1.0f,  5.0f));
-        spawnEnemy(glm::vec3(-5.0f, -1.0f,  5.0f));
-        spawnEnemy(glm::vec3( 5.0f, -1.0f, -5.0f));
-    } else {
+    // Opponents are server-driven bots only; the old local practice targets that
+    // walked straight at the player are gone. Multiplayer still resets its bot
+    // state so a new life starts clean.
+    if (multiplayerMode)
         clearBots();
-    }
 
     // Remote PVP bookkeeping: a new life starts from a clean slate.
     for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
