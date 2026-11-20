@@ -21,6 +21,7 @@
 #include <cstring>
 #include "engine/camera.hpp"
 #include "engine/renderer.hpp"
+#include "engine/gltf_model.hpp"
 #include "humanoid.hpp"
 #include "engine/map.hpp"
 #include "engine/map_loader.hpp"
@@ -228,6 +229,9 @@ public:
     /// Faces submitted for the held weapon viewmodel in the last frame.
     size_t debugViewmodelInstancesLastFrame() const {
         return renderer.debugViewmodelInstancesLastFrame();
+    }
+    size_t debugViewmodelModelsLastFrame() const {
+        return renderer.debugViewmodelModelsLastFrame();
     }
     /// Press jump exactly like a key press does: a fresh press that starts the
     /// jump (a test helper, so several jumps can follow each other).
@@ -937,6 +941,27 @@ private:
     };
     static const int MAX_REMOTE_PLAYERS = 16;
     RemotePlayer remotePlayers[MAX_REMOTE_PLAYERS];
+
+    // ── glTF assets (player / bomb / first-person weapons) ──────────────────
+    // Shared model data; each actor owns a GltfInstance with its own pose.
+    std::unique_ptr<GltfModel> playerModel_;
+    std::unique_ptr<GltfModel> bombModel_;
+    std::unique_ptr<GltfModel> weaponModels_[5];  ///< indexed by WeaponType
+    GltfInstance remoteModelAnims[MAX_REMOTE_PLAYERS];
+    GltfInstance enemyModelAnims[MAX_ENEMIES];
+    GltfInstance bombModelAnim_;
+    GltfInstance weaponModelAnims_[5];
+    int playerIdleClip_ = -1;
+    int playerWalkClip_ = -1;
+    int playerShootClip_ = -1;
+    int playerJumpClip_ = -1;
+    int playerHitClip_ = -1;
+    int playerDeathClip_ = -1;
+    int bombBlinkClip_ = -1;
+    /// Load assets/models/*.glb and bind the per-actor animation instances.
+    void initModels();
+    /// Select and blend the player's idle/walk/shoot/death clips.
+    void posePlayerInstance(GltfInstance& instance, const humanoid::Anim& anim);
 
     /// Upright body box of a player at `feet` (feet = bottom centre).
     /// `height` defaults to the standing body; pass currentBodyHeight() for

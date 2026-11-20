@@ -22,6 +22,7 @@
 #include <filesystem>
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #if defined(_WIN32)
 #include <cstdio>
 #include <cstring>
@@ -562,6 +563,14 @@ Game::~Game() {
     delete grenade;
     delete flashbang;
     if (currentMap) delete currentMap;
+
+    // glTF models own GL buffers/textures: release them while the context is
+    // still current, before glfwTerminate().
+    playerModel_.reset();
+    bombModel_.reset();
+    for (auto& weapon : weaponModels_) weapon.reset();
+    renderer.shutdown();
+
     glfwTerminate();
 }
 
@@ -575,6 +584,8 @@ void Game::init() {
     // Re-apply the video settings now that a GL context exists (swap interval).
     applySettings();
     std::cout << "Renderer initialized." << std::endl;
+
+    initModels();
 
     // Scan maps folder for available maps
     scanMapsFolder();
@@ -612,6 +623,105 @@ void Game::init() {
 
     std::cout << "[init] done" << std::endl;
     std::cout << "Game initialization complete." << std::endl;
+}
+
+void Game::initModels() {
+    // Player / enemies / remote players share one skinned humanoid asset.
+    playerModel_ = std::make_unique<GltfModel>();
+    if (!playerModel_->load("assets/models/player.glb")) {
+        std::cerr << "[models] player.glb: " << playerModel_->error()
+                  << " (falling back to procedural humanoid)" << std::endl;
+        playerModel_.reset();
+    } else {
+        playerIdleClip_ = playerModel_->findAnimation("Idle");
+        playerWalkClip_ = playerModel_->findAnimation("Walk");
+        playerShootClip_ = playerModel_->findAnimation("Shoot");
+        playerJumpClip_ = playerModel_->findAnimation("Jump");
+        playerHitClip_ = playerModel_->findAnimation("Hit");
+        playerDeathClip_ = playerModel_->findAnimation("Death");
+        for (int i = 0; i < MAX_REMOTE_PLAYERS; ++i) remoteModelAnims[i].init(playerModel_.get());
+        for (int i = 0; i < MAX_ENEMIES; ++i) enemyModelAnims[i].init(playerModel_.get());
+        std::cout << "[models] player.glb (" << playerModel_->animationCount()
+                  << " clips)" << std::endl;
+    }
+
+    // Bomb prop with a baked blinking-light clip.
+    bombModel_ = std::make_unique<GltfModel>();
+    if (!bombModel_->load("assets/models/bomb.glb")) {
+        std::cerr << "[models] bomb.glb: " << bombModel_->error()
+                  << " (falling back to box bomb)" << std::endl;
+        bombModel_.reset();
+    } else {
+        bombBlinkClip_ = bombModel_->findAnimation("Blink");
+        bombModelAnim_.init(bombModel_.get());
+        std::cout << "[models] bomb.glb" << std::endl;
+    }
+
+    // First-person weapon viewmodels, indexed like WeaponType.
+    static const char* const kFiles[5] = {
+        "assets/models/weapon_pistol.glb",
+        "assets/models/weapon_shotgun.glb",
+        "assets/models/weapon_sniper.glb",
+        "assets/models/weapon_grenade.glb",
+        "assets/models/weapon_flashbang.glb",
+    };
+    for (int i = 0; i < 5; ++i) {
+        weaponModels_[i] = std::make_unique<GltfModel>();
+        if (!weaponModels_[i]->load(kFiles[i])) {
+            std::cerr << "[models] " << kFiles[i] << ": " << weaponModels_[i]->error()
+                      << " (falling back to box viewmodel)" << std::endl;
+            weaponModels_[i].reset();
+            continue;
+        }
+        weaponModelAnims_[i].init(weaponModels_[i].get());
+        weaponModelAnims_[i].setPose(-1, 0.0f, 0.0f);
+        weaponModelAnims_[i].update();
+        std::cout << "[models] " << kFiles[i] << std::endl;
+    }
+}
+
+void Game::posePlayerInstance(GltfInstance& instance, const humanoid::Anim& anim) {
+    if (!playerModel_ || !instance.valid()) return;
+
+    const float twoPi = 6.28318530718f;
+    const float idleDuration = playerModel_->animationDuration(playerIdleClip_);
+    const float walkDuration = playerModel_->animationDuration(playerWalkClip_);
+    const float shootDuration = playerModel_->animationDuration(playerShootClip_);
+    const float hitDuration = playerModel_->animationDuration(playerHitClip_);
+    const float deathDuration = playerModel_->animationDuration(playerDeathClip_);
+
+    const float idleTime = idleDuration > 0.0f
+                               ? std::fmod(static_cast<float>(glfwGetTime()), idleDuration)
+                               : 0.0f;
+    const float walkTime = walkDuration > 0.0f
+                               ? std::fmod(anim.walkPhase / twoPi * walkDuration, walkDuration)
+                               : 0.0f;
+
+    if (anim.death > 0.001f) {
+        // The clip itself falls around the model's feet, so no extra root
+        // rotation is applied here.
+        instance.setPose(playerDeathClip_, anim.death * deathDuration, 1.0f);
+    } else if (!anim.onGround && playerJumpClip_ >= 0) {
+        instance.setPose(playerJumpClip_, 0.0f, 1.0f);
+    } else if (anim.shoot > 0.01f) {
+        const bool walking = anim.walkBlend > 0.5f;
+        instance.setPose(playerShootClip_,
+                         (1.0f - anim.shoot) * shootDuration, anim.shoot,
+                         walking ? playerWalkClip_ : playerIdleClip_,
+                         walking ? walkTime : idleTime,
+                         1.0f - anim.shoot);
+    } else if (anim.damage > 0.01f && playerHitClip_ >= 0) {
+        const bool walking = anim.walkBlend > 0.5f;
+        instance.setPose(playerHitClip_,
+                         (1.0f - anim.damage) * hitDuration, anim.damage,
+                         walking ? playerWalkClip_ : playerIdleClip_,
+                         walking ? walkTime : idleTime,
+                         1.0f - anim.damage);
+    } else {
+        instance.setPose(playerWalkClip_, walkTime, anim.walkBlend,
+                         playerIdleClip_, idleTime, 1.0f - anim.walkBlend);
+    }
+    instance.update();
 }
 
 // ---------------------------------------------------------------------------

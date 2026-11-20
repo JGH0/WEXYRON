@@ -7,6 +7,7 @@
 add_library(cube_engine STATIC
     src/audio_manager.cpp
     src/camera.cpp
+    src/gltf_model.cpp
     src/map.cpp
     src/map_loader.cpp
     src/mesh.cpp

@@ -43,9 +43,12 @@ public:
     GLint location(const char* name);
 
     void setMat4(const char* name, const float* value);
+    /// Upload `count` mat4 values (a uniform array such as uBones[64]).
+    void setMat4Array(const char* name, const float* value, int count);
     void setInt(const char* name, int value);
     void setFloat(const char* name, float value);
     void setVec3(const char* name, const glm::vec3& v);
+    void setVec4(const char* name, const glm::vec4& v);
     void setUint(const char* name, unsigned int value);
 
     ~Shader();

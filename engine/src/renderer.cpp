@@ -8,6 +8,7 @@
 #include "engine/renderer.hpp"
 #include "engine/map.hpp"
 #include "engine/texture.hpp"
+#include "engine/gltf_model.hpp"
 #include <iostream>
 #include <algorithm>
 #include <cstdlib>
@@ -88,6 +89,7 @@ Renderer::~Renderer() {
     // GL objects are released explicitly in shutdown() (on the GL thread);
     // deleting GL handles from the destructor on another thread is undefined.
     delete shader_;
+    delete gltfShader_;
 }
 
 void Renderer::init() {
@@ -96,6 +98,13 @@ void Renderer::init() {
     if (!shader_->valid()) {
         std::cerr << "Renderer: instanced shader failed to compile; "
                      "falling back to flat-colour output." << std::endl;
+    }
+
+    gltfShader_ = new Shader("assets/shaders/gltf_vertex.glsl",
+                             "assets/shaders/gltf_fragment.glsl");
+    if (!gltfShader_->valid()) {
+        std::cerr << "Renderer: glTF shader failed to compile; "
+                     "glTF models will not be drawn." << std::endl;
     }
 
     glGenVertexArrays(1, &cubeVAO_);
@@ -370,6 +379,9 @@ void Renderer::beginFrame() {
     batches_[WORLD_VIEWMODEL].needsUpload = true;
     batches_[WORLD_VIEWMODEL].dirty = true;
 
+    worldModels_.clear();
+    viewmodelModels_.clear();
+
     inUi_ = false;
     setCamera(glm::mat4(1.0f), glm::mat4(1.0f));
 }
@@ -575,6 +587,41 @@ void Renderer::submitViewBoxOriented(const glm::vec3& center,
                  glm::vec4(1.0f), glm::vec4(0.0f, 0.0f, 0.0f, 0.0f));
 }
 
+void Renderer::submitModel(GltfModel* model, GltfInstance* instance,
+                           const glm::mat4& transform, const glm::vec3& tint) {
+    if (!model || !instance) return;
+    worldModels_.push_back(ModelDraw{model, instance, transform, tint});
+}
+
+void Renderer::submitViewModelModel(GltfModel* model, GltfInstance* instance,
+                                    const glm::mat4& transform, const glm::vec3& tint) {
+    if (!model || !instance) return;
+    viewmodelModels_.push_back(ModelDraw{model, instance, transform, tint});
+}
+
+void Renderer::bindBoxPipeline() {
+    if (!shader_) return;
+    shader_->use();
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, textureArray_);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, fontTexture_);
+    glActiveTexture(GL_TEXTURE0);
+    shader_->setInt("uTextures", 0);
+    shader_->setInt("uFont", 1);
+}
+
+void Renderer::drawModels(const std::vector<ModelDraw>& draws,
+                          const glm::mat4& viewProjection) {
+    if (!gltfShader_ || !gltfShader_->valid()) return;
+    for (const ModelDraw& draw : draws) {
+        if (!draw.model || !draw.instance) continue;
+        draw.model->draw(*draw.instance, *gltfShader_, draw.transform,
+                         draw.tint, viewProjection);
+    }
+    glBindVertexArray(0);
+}
+
 void Renderer::submitQuad(const glm::vec2& center, const glm::vec2& size,
                           const glm::vec3& color, float alpha, BlendMode mode) {
     const BatchId id = UI_SCRATCH;
@@ -708,14 +755,7 @@ void Renderer::endFrame() {
 
     // The frame UBO is updated between draw passes, so its contents must be
     // written back from the buffer that was actually bound (see setFrameMatrix).
-    shader_->use();
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D_ARRAY, textureArray_);
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, fontTexture_);
-    glActiveTexture(GL_TEXTURE0);
-    shader_->setInt("uTextures", 0);
-    shader_->setInt("uFont", 1);
+    bindBoxPipeline();
 
     // Each space has its own view-projection. UI states only call
     // setProjection(), which must not disturb the 3D camera, so keep them apart.
@@ -747,6 +787,12 @@ void Renderer::endFrame() {
     drawBatch(WORLD_OPAQUE);
     drawBatch(WORLD_ALPHA);
 
+    // glTF models: drawn after the box batches, with the same world
+    // view-projection and depth buffer so they occlude/interleave correctly.
+    worldModelsLastFrame_ = worldModels_.size();
+    drawModels(worldModels_, worldProjection_ * worldView_);
+    bindBoxPipeline();
+
     // ── First-person weapon ──
     // Its camera space is independent of where the player stands, and the depth
     // buffer is cleared first so the gun is always visible instead of being
@@ -754,11 +800,15 @@ void Renderer::endFrame() {
     // it in half). Nothing else is drawn after this point, so clearing depth is
     // safe.
     viewmodelInstancesLastFrame_ = 0;
-    if (!batches_[WORLD_VIEWMODEL].instances.empty()) {
+    viewmodelModelsLastFrame_ = 0;
+    if (!batches_[WORLD_VIEWMODEL].instances.empty() || !viewmodelModels_.empty()) {
         viewmodelInstancesLastFrame_ = batches_[WORLD_VIEWMODEL].instances.size();
+        viewmodelModelsLastFrame_ = viewmodelModels_.size();
         glClear(GL_DEPTH_BUFFER_BIT);
         setFrameMatrix(viewmodelProjection_ * viewmodelView_);
         drawBatch(WORLD_VIEWMODEL);
+        drawModels(viewmodelModels_, viewmodelProjection_ * viewmodelView_);
+        bindBoxPipeline();
     }
     glDisable(GL_CULL_FACE);
 
@@ -1043,4 +1093,8 @@ void Renderer::shutdown() {
     if (fontTexture_) glDeleteTextures(1, &fontTexture_);
     delete shader_;
     shader_ = nullptr;
+    delete gltfShader_;
+    gltfShader_ = nullptr;
+    worldModels_.clear();
+    viewmodelModels_.clear();
 }

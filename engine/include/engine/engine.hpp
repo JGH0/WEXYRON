@@ -20,6 +20,7 @@
 #include "engine/audio_manager.hpp"
 #include "engine/camera.hpp"
 #include "engine/font_atlas.hpp"
+#include "engine/gltf_model.hpp"
 #include "engine/map.hpp"
 #include "engine/map_loader.hpp"
 #include "engine/mesh.hpp"

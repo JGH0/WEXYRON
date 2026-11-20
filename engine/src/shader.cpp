@@ -93,6 +93,10 @@ void Shader::setMat4(const char* name, const float* value) {
     glUniformMatrix4fv(location(name), 1, GL_FALSE, value);
 }
 
+void Shader::setMat4Array(const char* name, const float* value, int count) {
+    if (count > 0) glUniformMatrix4fv(location(name), count, GL_FALSE, value);
+}
+
 void Shader::setInt(const char* name, int value) {
     glUniform1i(location(name), value);
 }
@@ -103,6 +107,10 @@ void Shader::setFloat(const char* name, float value) {
 
 void Shader::setVec3(const char* name, const glm::vec3& v) {
     glUniform3fv(location(name), 1, glm::value_ptr(v));
+}
+
+void Shader::setVec4(const char* name, const glm::vec4& v) {
+    glUniform4fv(location(name), 1, glm::value_ptr(v));
 }
 
 void Shader::setUint(const char* name, unsigned int value) {

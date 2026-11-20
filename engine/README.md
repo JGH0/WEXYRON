@@ -16,6 +16,7 @@ engine/
 │   ├── audio_manager.hpp
 │   ├── camera.hpp
 │   ├── font_atlas.hpp
+│   ├── gltf_model.hpp
 │   ├── map.hpp
 │   ├── map_loader.hpp
 │   ├── mesh.hpp

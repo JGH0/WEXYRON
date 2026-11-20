@@ -21,6 +21,8 @@
 
 class Map;
 class Texture;
+class GltfModel;
+class GltfInstance;
 
 /// Alpha-blend mode for submitted instances.
 enum class BlendMode : uint8_t {
@@ -109,6 +111,20 @@ public:
     void submitViewBoxOriented(const glm::vec3& center,
                                const glm::vec3& axisX, const glm::vec3& axisY,
                                const glm::vec3& axisZ, const glm::vec3& color);
+
+    // ── glTF models ──────────────────────────────────────────────────────────
+
+    /// Queue a glTF model instance for the 3D world pass. The instance pose must
+    /// already have been updated (see GltfInstance::update()).
+    void submitModel(GltfModel* model, GltfInstance* instance,
+                     const glm::mat4& transform,
+                     const glm::vec3& tint = glm::vec3(1.0f));
+
+    /// Queue a glTF model for the first-person viewmodel pass (drawn into a
+    /// cleared depth buffer, in viewmodel camera space).
+    void submitViewModelModel(GltfModel* model, GltfInstance* instance,
+                              const glm::mat4& transform,
+                              const glm::vec3& tint = glm::vec3(1.0f));
 
     /// Flush all queued instances to the GPU. Call once at the end of a frame.
     void endFrame();
@@ -245,6 +261,19 @@ private:
     /// Composite the queued UI elements in submission order (see UiItem).
     void drawUi();
 
+    /// Restore the instanced box program and its texture-unit bindings after a
+    /// glTF pass (the two paths use different shaders and samplers).
+    void bindBoxPipeline();
+
+    /// One queued glTF draw. `instance` holds the evaluated skeleton pose.
+    struct ModelDraw {
+        GltfModel* model = nullptr;
+        GltfInstance* instance = nullptr;
+        glm::mat4 transform{1.0f};
+        glm::vec3 tint{1.0f};
+    };
+    void drawModels(const std::vector<ModelDraw>& draws, const glm::mat4& viewProjection);
+
     /// Whether a UI instance is completely inside UI-rect `r`.
     bool instanceInsideRect(const InstanceGPU& inst, const glm::mat4& invView,
                             const glm::mat4& invProj,
@@ -281,6 +310,9 @@ public:
 
 private:
     Shader* shader_ = nullptr;
+    Shader* gltfShader_ = nullptr;
+    std::vector<ModelDraw> worldModels_;
+    std::vector<ModelDraw> viewmodelModels_;
 
     unsigned int cubeVAO_ = 0;
     unsigned int cubeVBO_ = 0;
@@ -324,6 +356,8 @@ private:
     int worldDrawsThisFrame_ = 0;      ///< map batch draws in the current frame
     size_t mapInstancesLastFrame_ = 0; ///< map batch size at frame end
     size_t viewmodelInstancesLastFrame_ = 0; ///< held-weapon faces submitted
+    size_t worldModelsLastFrame_ = 0;        ///< glTF draws in the world pass
+    size_t viewmodelModelsLastFrame_ = 0;    ///< glTF draws in the viewmodel pass
 
 public:
     /// How many times the map batch was drawn during the last frame. It must be
@@ -334,6 +368,9 @@ public:
     /// Faces submitted for the first-person weapon in the last frame (0 when
     /// no viewmodel was drawn).
     size_t debugViewmodelInstancesLastFrame() const { return viewmodelInstancesLastFrame_; }
+    /// glTF model draws in the world / viewmodel passes last frame.
+    size_t debugWorldModelsLastFrame() const { return worldModelsLastFrame_; }
+    size_t debugViewmodelModelsLastFrame() const { return viewmodelModelsLastFrame_; }
 };
 
 #endif // RENDERER_HPP

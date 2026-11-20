@@ -7,9 +7,9 @@ A multiplayer-enabled 3D first-person shooter game built with OpenGL and C++.
 ### Single Player
 - 3D first-person shooter gameplay
 - Multiple weapons (Pistol, Shotgun, Sniper, Grenade, Flashbang)
-- First-person weapon viewmodel with bob/sway, recoil and switch animation
+- First-person glTF weapon viewmodels with bob/sway, recoil and switch animation
 - HUD with health, current weapon + ammo, round details, team score and K/D
-- Blocky animated humanoid enemies/teammates with health-reactive faces
+- Blocky animated humanoid enemies/teammates (skinned glTF model) with hit zones
 - Hit zones: head shots deal 2x, body 1x, arms/legs/feet 0.5x; explosions deal fixed damage
 - Physics-based movement and collisions
 - Enemy AI

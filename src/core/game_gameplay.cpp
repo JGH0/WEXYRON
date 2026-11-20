@@ -1955,8 +1955,15 @@ void Game::renderRemotePlayers() {
         const float healthPct = remote.isDead
                                     ? 0.0f
                                     : glm::clamp(remote.health / 100.0f, 0.0f, 1.0f);
-        humanoid::render(renderer, remote.renderPosition, remote.yaw, color,
-                         healthPct, remote.anim, remote.pitch, !remote.isDead);
+        if (playerModel_ && remoteModelAnims[i].valid()) {
+            posePlayerInstance(remoteModelAnims[i], remote.anim);
+            renderer.submitModel(playerModel_.get(), &remoteModelAnims[i],
+                                 humanoid::rootTransform(remote.renderPosition, remote.yaw),
+                                 color);
+        } else {
+            humanoid::render(renderer, remote.renderPosition, remote.yaw, color,
+                             healthPct, remote.anim, remote.pitch, !remote.isDead);
+        }
     }
 }
 

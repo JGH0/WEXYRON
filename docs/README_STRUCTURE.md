@@ -6,7 +6,7 @@
 OpenGl-Game/
 ├── assets/                 # Game assets
 │   ├── textures/          # Texture files (PNG, JPG, etc.)
-│   ├── models/            # 3D model files (future)
+│   ├── models/            # glTF 2.0 models (.glb), see MODELS.md
 │   ├── maps/              # Map definition files
 │   └── shaders/           # OpenGL shader files
 ├── build/                 # Build output

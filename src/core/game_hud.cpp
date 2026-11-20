@@ -28,11 +28,20 @@ void Game::renderEnemies() {
         const float healthPct = enemies[i].alive
                                     ? glm::clamp(enemies[i].health / 50.0f, 0.0f, 1.0f)
                                     : 0.0f;
-        humanoid::render(renderer,
-                         glm::vec3(enemies[i].x, enemies[i].y, enemies[i].z),
-                         enemies[i].yaw,
-                         glm::vec3(0.95f, 0.18f, 0.15f),
-                         healthPct, enemies[i].anim, 0.0f, enemies[i].alive);
+        if (playerModel_ && enemyModelAnims[i].valid()) {
+            posePlayerInstance(enemyModelAnims[i], enemies[i].anim);
+            renderer.submitModel(
+                playerModel_.get(), &enemyModelAnims[i],
+                humanoid::rootTransform(glm::vec3(enemies[i].x, enemies[i].y, enemies[i].z),
+                                        enemies[i].yaw),
+                glm::vec3(0.95f, 0.18f, 0.15f));
+        } else {
+            humanoid::render(renderer,
+                             glm::vec3(enemies[i].x, enemies[i].y, enemies[i].z),
+                             enemies[i].yaw,
+                             glm::vec3(0.95f, 0.18f, 0.15f),
+                             healthPct, enemies[i].anim, 0.0f, enemies[i].alive);
+        }
     }
 }
 
@@ -231,26 +240,37 @@ void Game::renderBombSites() {
         bombAura2 = glm::scale(bombAura2, glm::vec3(auraSize * 1.5f, 0.02f, auraSize * 1.5f));
         renderer.drawCube(bombAura2, glm::vec3(1.0f, 0.3f, 0.0f) * 0.4f); // Dim orange outer
         
-        // Bomb main body (bigger cube)
-        glm::mat4 bombBody = glm::mat4(1.0f);
-        bombBody = glm::translate(bombBody, bombPos + glm::vec3(0.0f, 0.15f, 0.0f));
-        bombBody = glm::scale(bombBody, glm::vec3(0.6f, 0.3f, 0.6f));
-        renderer.drawCube(bombBody, glm::vec3(0.3f, 0.3f, 0.25f)); // Dark green/grey
-        
-        // Bomb top dome
-        glm::mat4 bombDome = glm::mat4(1.0f);
-        bombDome = glm::translate(bombDome, bombPos + glm::vec3(0.0f, 0.35f, 0.0f));
-        bombDome = glm::scale(bombDome, glm::vec3(0.4f, 0.15f, 0.4f));
-        renderer.drawCube(bombDome, glm::vec3(0.5f, 0.5f, 0.4f)); // Light grey top
-        
-        // Blinking red light on top of bomb
-        float blinkSpeed = (bombTimeLeft < 5.0f) ? 10.0f : 6.0f;
-        float blink = static_cast<float>((sin(currentTime * blinkSpeed) + 1.0f) * 0.5f);
-        
-        glm::mat4 lightMarker = glm::mat4(1.0f);
-        lightMarker = glm::translate(lightMarker, bombPos + glm::vec3(0.0f, 0.45f, 0.0f));
-        lightMarker = glm::scale(lightMarker, glm::vec3(0.15f, 0.08f, 0.15f));
-        renderer.drawCube(lightMarker, glm::vec3(1.0f, blink * 0.2f, blink * 0.2f)); // Bright red pulse
+        // Bomb main body, dome and blinking light come from the glTF prop.
+        if (bombModel_ && bombModelAnim_.valid()) {
+            const float blinkSpeed = (bombTimeLeft < 5.0f) ? 1.8f : 0.9f;
+            const float blinkTime = std::fmod(static_cast<float>(currentTime) * blinkSpeed,
+                                              1.0f);
+            bombModelAnim_.setPose(bombBlinkClip_, blinkTime, 1.0f);
+            bombModelAnim_.update();
+            renderer.submitModel(bombModel_.get(), &bombModelAnim_,
+                                 glm::translate(glm::mat4(1.0f), bombPos),
+                                 glm::vec3(1.0f));
+        } else {
+            // Bomb main body (bigger cube)
+            glm::mat4 bombBody = glm::mat4(1.0f);
+            bombBody = glm::translate(bombBody, bombPos + glm::vec3(0.0f, 0.15f, 0.0f));
+            bombBody = glm::scale(bombBody, glm::vec3(0.6f, 0.3f, 0.6f));
+            renderer.drawCube(bombBody, glm::vec3(0.3f, 0.3f, 0.25f)); // Dark green/grey
+
+            // Bomb top dome
+            glm::mat4 bombDome = glm::mat4(1.0f);
+            bombDome = glm::translate(bombDome, bombPos + glm::vec3(0.0f, 0.35f, 0.0f));
+            bombDome = glm::scale(bombDome, glm::vec3(0.4f, 0.15f, 0.4f));
+            renderer.drawCube(bombDome, glm::vec3(0.5f, 0.5f, 0.4f)); // Light grey top
+
+            // Blinking red light on top of bomb
+            const float blinkSpeed = (bombTimeLeft < 5.0f) ? 10.0f : 6.0f;
+            const float blink = static_cast<float>((sin(currentTime * blinkSpeed) + 1.0f) * 0.5f);
+            glm::mat4 lightMarker = glm::mat4(1.0f);
+            lightMarker = glm::translate(lightMarker, bombPos + glm::vec3(0.0f, 0.45f, 0.0f));
+            lightMarker = glm::scale(lightMarker, glm::vec3(0.15f, 0.08f, 0.15f));
+            renderer.drawCube(lightMarker, glm::vec3(1.0f, blink * 0.2f, blink * 0.2f));
+        }
         
         // Siren effect: spinning red particles around the bomb
         float sirenAngle = static_cast<float>(currentTime * 4.0f);
@@ -574,6 +594,43 @@ void Game::renderWeaponViewmodel() {
             sleeve, glm::vec3(-8.0f, 0.0f, -3.0f));
     };
 
+    const int weaponIndex = static_cast<int>(currentWeapon);
+    const bool useModel = weaponIndex >= 0 && weaponIndex < 5 &&
+                          weaponModels_[weaponIndex] &&
+                          weaponModels_[weaponIndex]->isLoaded();
+
+    if (useModel) {
+        GltfInstance& instance = weaponModelAnims_[weaponIndex];
+        instance.setPose(-1, 0.0f, 0.0f);
+        instance.update();
+        renderer.submitViewModelModel(weaponModels_[weaponIndex].get(), &instance, model);
+
+        // The model owns the gun and hands; only the muzzle flash is dynamic.
+        switch (currentWeapon) {
+            case PISTOL:
+                if (weaponRecoil_ > 0.40f) {
+                    add(glm::vec3(0.0f, 0.025f, -0.43f), glm::vec3(0.10f, 0.10f, 0.12f),
+                        glm::vec3(1.0f, 0.78f, 0.22f));
+                }
+                break;
+            case PUMP_SHOTGUN:
+                if (weaponRecoil_ > 0.55f) {
+                    add(glm::vec3(0.0f, 0.030f, -0.66f), glm::vec3(0.14f, 0.14f, 0.16f),
+                        glm::vec3(1.0f, 0.72f, 0.16f));
+                }
+                break;
+            case SNIPER:
+                if (weaponRecoil_ > 0.55f) {
+                    add(glm::vec3(0.0f, 0.030f, -0.98f), glm::vec3(0.16f, 0.16f, 0.20f),
+                        glm::vec3(1.0f, 0.72f, 0.16f));
+                }
+                break;
+            default:
+                break;
+        }
+    } else {
+    // Fallback: the original procedural viewmodel, used when an asset is
+    // missing or fails to load.
     switch (currentWeapon) {
         case PISTOL: {
             const glm::vec3 metal(0.40f, 0.42f, 0.46f);
@@ -686,6 +743,7 @@ void Game::renderWeaponViewmodel() {
             addHands(false);
             break;
         }
+    }
     }
 }
 

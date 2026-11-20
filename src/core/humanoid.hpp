@@ -146,6 +146,28 @@ inline HitZone hitZone(const glm::vec3& point, const glm::vec3& feet,
     return HitZone::Body;
 }
 
+/// Root matrix for an actor whose feet are at `feet` and that faces `yawDeg`
+/// (camera yaw convention). The same facing the procedural body uses.
+///
+/// This must be a *proper* rotation (determinant +1): a mirrored basis flips
+/// the triangle winding of a glTF mesh, so back-face culling removes the
+/// front faces and the model looks inside-out. The old per-face box renderer
+/// corrected its own winding, which is why this was harmless before.
+inline glm::mat4 rootTransform(const glm::vec3& feet, float yawDeg) {
+    const float yaw = glm::radians(yawDeg);
+    const float cy = std::cos(yaw);
+    const float sy = std::sin(yaw);
+    const glm::vec3 forward(cy, 0.0f, sy);
+    // local +X (the model's left) = up x forward
+    const glm::vec3 left(sy, 0.0f, -cy);
+    glm::mat4 root(1.0f);
+    root[0] = glm::vec4(left, 0.0f);
+    root[1] = glm::vec4(0.0f, 1.0f, 0.0f, 0.0f);
+    root[2] = glm::vec4(forward, 0.0f);
+    root[3] = glm::vec4(feet, 1.0f);
+    return root;
+}
+
 /// Draw one blocky humanoid.
 /// @param feet       feet position (bottom centre)
 /// @param yawDeg     facing direction (camera yaw convention)

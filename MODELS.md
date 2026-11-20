@@ -1,167 +1,130 @@
-# 3D Model Loading System
+# 3D Models (glTF 2.0)
 
-This game now supports loading complex 3D models from Blender using Assimp library.
+The game uses **glTF 2.0**, packaged as **binary `.glb`**, for its authored
+models. The runtime loader is part of the engine (`engine/include/engine/gltf_model.hpp`)
+and has no external dependencies: it reads the JSON/binary glTF directly and
+uses the stb_image already in the project.
 
-## Setup
+> The old Assimp/OBJ loader in `src/core/model.cpp` is **legacy and not part of
+> the build**. Use the glTF path below.
 
-The system uses Assimp for loading 3D models. Make sure you have Assimp installed:
+## Assets
 
-### Linux (Arch/Manjaro)
+| File | Used by | Animation |
+| --- | --- | --- |
+| `assets/models/player.glb` | remote players, practice enemies | `Idle`, `Walk`, `Shoot`, `Hit`, `Jump`, `Death` |
+| `assets/models/bomb.glb` | planted bomb (bomb defusal) | `Blink` |
+| `assets/models/weapon_pistol.glb` | first-person viewmodel | – (recoil/bob are applied by the game) |
+| `assets/models/weapon_shotgun.glb` | first-person viewmodel | – |
+| `assets/models/weapon_sniper.glb` | first-person viewmodel | – |
+| `assets/models/weapon_grenade.glb` | first-person viewmodel | – |
+| `assets/models/weapon_flashbang.glb` | first-person viewmodel | – |
+
+The player model is authored in the same Box/Blockbench layout the procedural
+`humanoid.hpp` used: feet at the origin, **+Y up**, facing **+Z**, roughly
+1.8 units tall. It is skinned to a small skeleton (hips, spine, head, arms and
+legs) and tinted per team at runtime.
+
+## Authoring in Blockbench
+
+1. Build the model from cuboids; keep the feet at `y = 0` and the front facing
+   `+Z`. The player should fit the 0.8 × 1.8 body used by the hit boxes.
+2. Add bones/pivots for the parts that animate (hips, spine, head, upper/lower
+   arms, upper/lower legs). Rigid (one-bone-per-cuboid) weights are fine.
+3. Create clips named `Idle`, `Walk`, `Shoot`, `Hit`, `Jump` and `Death` for
+   characters, or `Blink` for the bomb. Clip names are looked up
+   case-insensitively.
+4. `File → Export → glTF`, choose **`.glb`**, embed textures, Y-up, and a unit
+   scale that keeps the player at 1.8 units tall.
+5. Save under `assets/models/`.
+
+For first-person weapons, author them in the same local space the viewmodel
+used before (barrel towards `-Z`, grip near the origin). The game applies the
+bob/sway/recoil transform, so the file itself can stay static.
+
+### Regenerating the built-in models
+
+The checked-in assets are produced by a dependency-free script:
+
 ```bash
-sudo pacman -S assimp
+python3 tools/gen_gltf_models.py
 ```
 
-### Linux (Ubuntu/Debian)
-```bash
-sudo apt-get install libassimp-dev
-```
+Edit the box lists / clips in `tools/gen_gltf_models.py` if you want to change
+the built-in player, bomb or weapons without opening Blockbench.
 
-## Exporting from Blender
-
-To export a model from Blender for use in the game:
-
-1. Create your model in Blender
-2. Select File > Export > Wavefront (.obj)
-3. Make sure to check:
-   - Include Normals
-   - Include UVs
-   - Include Materials
-   - Apply Modifiers (optional, but recommended)
-4. Save the .obj file and .mtl file in the `assets/models/` directory
-5. Copy any texture images to the same directory or a subdirectory
-
-## Model Format
-
-The game supports the following model formats through Assimp:
-- OBJ (recommended)
-- FBX
-- GLTF/GLB
-- Collada (DAE)
-- And many more
-
-## Using Models in the Game
-
-### Loading a Model
+## Runtime API
 
 ```cpp
-#include "model.hpp"
+#include "engine/gltf_model.hpp"
 
-// Load a model
-Model* playerModel = new Model();
-playerModel->loadModel("assets/models/player.obj");
-```
-
-### Rendering a Model
-
-```cpp
-#include "renderer.hpp"
-
-// Render the model at a specific position with scale and rotation
-renderer.drawModel(playerModel, 
-                   glm::vec3(0.0f, 0.0f, 0.0f),  // position
-                   glm::vec3(1.0f, 1.0f, 1.0f),  // scale
-                   glm::vec3(0.0f, 0.0f, 0.0f)); // rotation (degrees)
-```
-
-### Example: Adding a Player Model
-
-To use a custom model for the player instead of the default cube:
-
-1. Add a Model pointer to your Game class in `game.hpp`:
-```cpp
-class Game {
-private:
-    Model* playerModel;
-    // ... other members
-};
-```
-
-2. Initialize the model in the Game constructor or init function:
-```cpp
-Game::Game(int width, int height) {
-    // ... other initialization
-    playerModel = new Model();
-    playerModel->loadModel("assets/models/player.obj");
+GltfModel model;
+if (!model.load("assets/models/player.glb")) {
+    std::cerr << model.error() << std::endl;
 }
+
+const int walk = model.findAnimation("Walk");
+
+GltfInstance instance;
+instance.init(&model);
+
+// Each frame: blend walk/idle and update the pose.
+instance.setPose(walk, walkTime, walkWeight,
+                 model.findAnimation("Idle"), idleTime, 1.0f - walkWeight);
+instance.update();
+
+// Queue the draw (the renderer batches it after the world boxes).
+renderer.submitModel(&model, &instance, transform, teamColor);
 ```
 
-3. Render the model in your render function instead of the cube:
+`GltfInstance::setPose()` blends two clips (translation/scale lerp, rotation
+slerp) and blends the result against the rest pose when the weights sum to
+less than one. Negative clip indices mean "rest pose".
+
+For the first-person pass use:
+
 ```cpp
-void Game::render() {
-    // ... other rendering
-    
-    // Render player with model
-    glm::mat4 model = glm::mat4(1.0f);
-    model = glm::translate(model, playerPos);
-    model = glm::rotate(model, glm::radians(-camera.Yaw), glm::vec3(0.0f, 1.0f, 0.0f));
-    model = glm::scale(model, glm::vec3(1.0f, 1.8f, 1.0f)); // Human-like proportions
-    
-    renderer.drawModel(playerModel, playerPos, glm::vec3(1.0f, 1.8f, 1.0f), 
-                      glm::vec3(0.0f, -camera.Yaw, 0.0f));
-}
+renderer.submitViewModelModel(&model, &instance, viewSpaceTransform);
 ```
 
-4. Clean up in the destructor:
-```cpp
-Game::~Game() {
-    if (playerModel) delete playerModel;
-    // ... other cleanup
-}
-```
+## Supported glTF features
 
-## Texturing Your Models
+- `.glb` and `.gltf` (external files or data-URI buffers/images)
+- buffers, bufferViews, accessors (all component types, normalized integers,
+  sparse accessors)
+- `POSITION`, `NORMAL`, `TEXCOORD_0`, `COLOR_0`, `JOINTS_0`, `WEIGHTS_0`
+- indexed and non-indexed TRIANGLES primitives
+- node hierarchies with matrix or TRS transforms
+- PBR metallic/roughness factors, base-colour and emissive textures,
+  alpha modes `OPAQUE`/`MASK`/`BLEND`, double-sided materials
+- skins with inverse bind matrices, GPU linear-blend skinning (32 bones)
+- animation channels for translation/rotation/scale with `LINEAR`, `STEP` and
+  `CUBICSPLINE` interpolation
+- two-clip cross-fading per instance
 
-1. Create your textures in Blender
-2. UV unwrap your model
-3. Apply textures in Blender
-4. When exporting as OBJ, make sure to include materials
-5. The texture images should be in the same directory as the .obj file
-6. Supported texture formats: PNG, JPG, TGA, BMP
-
-## Model Requirements
-
-For best results, your models should:
-
-- Have proper UV mapping
-- Include normals for lighting
-- Be centered at origin (0, 0, 0)
-- Have reasonable polygon count (keep it optimized for real-time rendering)
-- Be scaled appropriately (typically 1 unit = 1 meter in-game)
-- Face the +Z direction (forward) for proper orientation
+Not supported (ignored): morph targets, geometry-changing extensions, cameras
+and punctual lights, non-triangle primitive modes, and metallic/roughness,
+normal or occlusion textures (the scalar factors are used instead).
 
 ## Troubleshooting
 
-### Model doesn't appear
-- Check console for loading errors
-- Verify the file path is correct
-- Ensure the model file exists in the assets/models directory
-- Check that Assimp is properly installed
+**Model does not appear**
+- Check the console for `[models] ...` errors from `Game::initModels()`.
+- Verify the file exists relative to the process working directory (the game
+  searches for `assets/` next to the executable/project root).
+- If loading fails, the game falls back to the old procedural boxes; if you see
+  a plain cube, the asset is the problem, not the renderer.
 
-### Textures don't load
-- Make sure texture files are in the same directory as the .obj file
-- Verify texture paths in the .mtl file are correct
-- Check that stb_image is properly linked
+**Model is too small / large**
+- glTF units are metres. A Blockbench model exported at 1 block = 1 metre
+  should match the 1.8-unit player. Scale the model in Blockbench and re-export
+  (the game's outer transform is unit-scale for characters).
 
-### Model appears black
-- Check that normals are included in the export
-- Verify lighting is working in the scene
-- Make sure the model shader is compiling correctly
+**Model faces the wrong way**
+- Characters must face `+Z`. The game applies the same feet/yaw basis as the
+  old procedural body (`humanoid::rootTransform`).
 
-### Model is too small/large
-- Adjust the scale parameter in drawModel()
-- Or scale the model in Blender before exporting
-
-## Advanced Features
-
-The model system supports:
-- Multiple meshes per model (for complex objects)
-- Multiple textures per mesh (diffuse, specular, normal maps)
-- Tangent and bitangent data for normal mapping
-- Automatic texture loading from material files
-
-## Performance Tips
-
-- Keep polygon counts reasonable for real-time rendering
-- Use texture atlases when possible
-- Consider using LOD (Level of Detail) models for distant objects
-- Optimize your models by removing hidden faces
+**Animation looks wrong / T-posed**
+- Check the clip name and that the channels target the nodes you expect.
+- The player expects `Idle`, `Walk`, `Shoot`, `Hit`, `Jump`, `Death`; the bomb
+  expects `Blink`. Missing clips fall back to the rest pose.

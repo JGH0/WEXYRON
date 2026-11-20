@@ -29,17 +29,20 @@ int main() {
     CHECK(game.debugKills() == 0);
     CHECK(game.debugDeaths() == 0);
     CHECK(game.debugRoundNumber() == 1);
-    CHECK(game.debugViewmodelInstancesLastFrame() > 0);
+    CHECK(game.debugViewmodelInstancesLastFrame() > 0 ||
+          game.debugViewmodelModelsLastFrame() > 0);
 
     // Every held weapon has a model and the HUD reports that weapon.
     for (int weapon = 0; weapon < 5; ++weapon) {
         game.debugSelectWeaponForTest(weapon);
         game.debugStepForTest(2, kDt);
         game.render();
-        std::printf("weapon %d: viewmodel faces=%zu ammo=%d\n", weapon,
-                    game.debugViewmodelInstancesLastFrame(), game.debugCurrentAmmo());
+        std::printf("weapon %d: viewmodel faces=%zu models=%zu ammo=%d\n", weapon,
+                    game.debugViewmodelInstancesLastFrame(),
+                    game.debugViewmodelModelsLastFrame(), game.debugCurrentAmmo());
         CHECK(game.debugCurrentWeapon() == weapon);
-        CHECK(game.debugViewmodelInstancesLastFrame() > 0);
+        CHECK(game.debugViewmodelInstancesLastFrame() > 0 ||
+              game.debugViewmodelModelsLastFrame() > 0);
     }
 
     // Two point-blank blasts (65 damage each) kill the player through the
@@ -63,7 +66,8 @@ int main() {
     CHECK(game.debugKills() == 0);
     CHECK(game.debugDeaths() == 0);
     CHECK(game.debugRoundNumber() == 1);
-    CHECK(game.debugViewmodelInstancesLastFrame() > 0);
+    CHECK(game.debugViewmodelInstancesLastFrame() > 0 ||
+          game.debugViewmodelModelsLastFrame() > 0);
 
     std::printf(failures ? "HUD TEST: %d FAILURES\n" : "HUD TEST: ALL OK\n", failures);
     game.cleanup();
