@@ -13,7 +13,7 @@ A multiplayer-enabled 3D first-person shooter game built with OpenGL and C++.
 - Hit zones: head shots deal 2x, body 1x, arms/legs/feet 0.5x; explosions deal fixed damage
 - Physics-based movement and collisions
 - Enemy AI
-- Map editor
+- Map editor with mouse placement, undo/redo, new/open/save dialogs and spawn tools
 - Various game modes
 
 ### Local Multiplayer (NEW!)
@@ -277,6 +277,7 @@ cube-cs-lite/
 |-- WINDOWS_SETUP.md        # Windows setup guide
 |-- MULTIPLAYER_GUIDE.md    # Detailed multiplayer setup
 |-- MENUS.md                # Menu framework
+|-- docs/MAP_EDITOR.md      # Map editor controls and file format
 `-- WEAPON_CONTROLS.md      # Weapon controls
 ```
 

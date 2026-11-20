@@ -368,6 +368,7 @@ void Map::clear() {
     rebuildCollisionGrid();
     spawnPoints.clear();
     teamSpawns.clear();
+    bombSites.clear();
 
     // Clean up textures
     for (auto* texture : textures) {
@@ -376,6 +377,24 @@ void Map::clear() {
         }
     }
     textures.clear();
+}
+
+void Map::setBlocks(const std::vector<MapBlock>& newBlocks) {
+    blocks = newBlocks;
+    for (MapBlock& block : blocks) block.updateBoundsCache();
+    rebuildCollisionGrid();
+}
+
+void Map::setSpawnPoints(const std::vector<SpawnPoint>& newSpawns) {
+    spawnPoints = newSpawns;
+}
+
+void Map::setTeamSpawns(const std::vector<TeamSpawn>& newSpawns) {
+    teamSpawns = newSpawns;
+}
+
+void Map::setBombSites(const std::vector<BombSiteData>& newSites) {
+    bombSites = newSites;
 }
 
 void Map::setDimensions(const glm::vec3& dims) {

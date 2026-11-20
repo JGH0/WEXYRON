@@ -58,12 +58,15 @@ public:
     /// Load on the calling thread (used at startup and as the fallback path).
     static std::unique_ptr<Map> loadBlocking(const std::string& mapFile);
 
+    /// Load the eight stock material textures into `map`. A map that was not
+    /// read from a file (the editor's "new map") starts with no textures, so
+    /// it calls this to get the same look as the shipped maps.
+    static void ensureTextures(Map& map);
+
     /// Forget any in-flight result; waits for the worker to finish its write.
     void cancel();
 
 private:
-    static void ensureTextures(Map& map);
-
     std::future<bool> future_;
     std::atomic<bool> loading_{false};
     std::atomic<bool> hasResult_{false};

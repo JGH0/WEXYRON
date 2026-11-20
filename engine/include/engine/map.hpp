@@ -313,6 +313,20 @@ public:
      */
     glm::vec3 getDimensions() const;
 
+    /// Display name stored in the map file (`name <token>`).
+    const std::string& getMapName() const { return mapName; }
+    /// Change the display name (the editor sets it when saving).
+    void setMapName(const std::string& name) { mapName = name; }
+
+    // ── Editor bulk updates ────────────────────────────────────────────────
+    // Undo/redo and "new map" replace a whole collection at once. These keep
+    // the loaded textures (unlike clear(), which is meant for re-parsing a
+    // file) and refresh the collision grid exactly once.
+    void setBlocks(const std::vector<MapBlock>& newBlocks);
+    void setSpawnPoints(const std::vector<SpawnPoint>& newSpawns);
+    void setTeamSpawns(const std::vector<TeamSpawn>& newSpawns);
+    void setBombSites(const std::vector<BombSiteData>& newSites);
+
     /**
      * @brief Set map dimensions
      *

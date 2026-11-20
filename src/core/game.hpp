@@ -1075,7 +1075,6 @@ private:
     std::unordered_map<std::string, size_t> discoveredIndexByKey;
 
     /// Map Editor
-    bool editorNoclip = true;
     float editorSpeed = 15.0f;
     glm::vec3 editorGridPos = glm::vec3(0.0f);
     glm::vec3 editorBlockSize = glm::vec3(2.0f, 2.0f, 2.0f);
@@ -1085,6 +1084,113 @@ private:
     float editorBlockOffset = 5.0f;  // Distance in front of player for block placement
     float editorBlockRotation = 0.0f;  // Y-axis rotation for blocks
     float editorBlockPitch = 0.0f;      // X-axis rotation (pitch) for blocks
+
+    /// Editor tool: what the left mouse button does in the 3D view.
+    enum class EditorTool {
+        Build,   ///< place a block (the brush)
+        Paint,   ///< recolor the aimed block with the selected texture
+        Erase,   ///< delete the aimed block / spawn point
+        Pick,    ///< copy the aimed block into the brush
+        Spawn    ///< place spawn points / bomb sites
+    };
+    EditorTool editorTool = EditorTool::Build;
+
+    /// Modal panels of the editor UI.
+    enum class EditorModal {
+        None,
+        Save,      ///< name the map and save it
+        NewMap,    ///< blank map: name, size and starter room
+        OpenMap,   ///< pick an existing map file to edit
+        Confirm,   ///< unsaved-changes prompt
+        Help       ///< controls reference
+    };
+    EditorModal editorModal = EditorModal::None;
+
+    /// Action waiting for the unsaved-changes prompt.
+    enum class EditorPending { None, NewMap, OpenMap, Exit };
+    EditorPending editorPending = EditorPending::None;
+
+    // Editor UI state (the panels are drawn in game_editor.cpp).
+    bool editorDirty = false;            ///< changed since the last save
+    bool editorSnapToGrid = true;        ///< snap free placement to the grid
+    bool editorShowSpawns = true;        ///< draw spawn markers
+    std::string editorMapName = "UNTITLED";
+    std::string editorFileName = "untitled";   ///< file stem, no .map
+    std::string editorNameInput = "UNTITLED";  ///< text field in Save/New dialogs
+    std::string activeMapFile_;          ///< file currently installed (menu/editor)
+    std::string editorToast;             ///< transient message at the bottom
+    double editorToastUntil = 0.0;
+    double editorBlink = 0.0;
+    int editorOpenSelection = 0;         ///< highlighted row in the OPEN dialog
+    int editorNewSize = 1;               ///< 0=small, 1=medium, 2=large
+    bool editorNewStarter = true;        ///< add floor/walls/spawns
+    std::string editorNewName = "NEW MAP";
+    /// Wheel notches queued by scrollCallback() for the editor.
+    int pendingEditorScroll_ = 0;
+    /// True while the right mouse button drives the editor camera.
+    bool editorLookActive_ = false;
+    /// True when the left button started on a panel (must not paint).
+    bool editorUiCapture_ = false;
+    /// Undo is pushed once per stroke, not once per held brush stamp.
+    bool editorStrokeActive_ = false;
+    double editorLastBrushTime_ = 0.0;
+    /// Result of the aim ray for the current frame.
+    bool editorAimValid_ = false;
+    bool editorAimHit_ = false;
+    int editorAimBlock_ = -1;
+    glm::vec3 editorAimPoint_{0.0f};
+    glm::vec3 editorAimNormal_{0.0f, 1.0f, 0.0f};
+    /// Key-edge bookkeeping for the editor (one full keyboard scan per frame,
+    /// so text input and shortcuts cannot leak pressed keys between screens).
+    bool editorKeyCur_[GLFW_KEY_LAST + 1] = {};
+    bool editorKeyPrev_[GLFW_KEY_LAST + 1] = {};
+    std::string editorNameBeforeEdit_;
+
+    /// A complete, restorable copy of the editable map data.
+    struct EditorSnapshot {
+        std::vector<MapBlock> blocks;
+        std::vector<SpawnPoint> spawnPoints;
+        std::vector<TeamSpawn> teamSpawns;
+        std::vector<BombSiteData> bombSites;
+        glm::vec3 dimensions{20.0f, 5.0f, 20.0f};
+    };
+    std::vector<EditorSnapshot> editorUndo_;
+    std::vector<EditorSnapshot> editorRedo_;
+    static constexpr size_t kEditorUndoLimit = 40;
+
+    /// Open the editor on the current map.
+    void enterEditor();
+    /// Leave the editor for the main menu (cursor restored).
+    void leaveEditor();
+    /// Save the editor map under a display name / file stem.
+    bool saveEditorMap(const std::string& name);
+    /// Load `assets/maps/<file>` into the editor (no match reset).
+    bool editorOpenMapFile(const std::string& file);
+    /// Build a blank/starter map from the New Map dialog.
+    void editorCreateNewMap();
+    /// Ask for a destructive action, prompting when there are unsaved edits.
+    void editorRequestNew();
+    void editorRequestOpen();
+    void editorRequestExit();
+    void editorResolvePending(bool discard);
+    /// Transient toast message (seconds).
+    void editorShowToast(const std::string& text, double seconds = 2.5);
+    /// Snapshot / restore for undo+redo.
+    EditorSnapshot editorCaptureState() const;
+    void editorRestoreState(const EditorSnapshot& snapshot);
+    void editorPushUndo();
+    void editorUndo();
+    void editorRedo();
+    /// Rebuild the GPU world batch after geometry edits.
+    void editorRebuildWorld();
+    /// True on the frame `key` went down (editor input).
+    bool editorKeyPressed(int key) const;
+    /// True while `key` is held.
+    bool editorKeyDown(int key) const;
+    /// Copy the current keyboard state into the edge tracker.
+    void syncEditorKeyEdges();
+    /// Apply the current tool to the aim result.
+    void editorApplyTool();
 
     /// Editor spawn point placement mode
     enum EditorSpawnMode {
@@ -1118,22 +1224,6 @@ private:
     RoundEndReason roundEndReason;
     /// Authoritative seconds left to plant (from BombStatePacket).
     float roundTimeLeft;
-
-    /// Editor mode (block placement vs shape creation)
-    enum EditorMode {
-        MODE_BLOCK,      // Place individual blocks
-        MODE_SHAPE       // Create shapes by selecting points
-    };
-    EditorMode editorMode = MODE_BLOCK;
-
-    /// Shape creation state
-    struct ShapeCreation {
-        int selectedPoints = 0;  // Number of points selected (0-3 for corners)
-        glm::vec3 corners[3] = {glm::vec3(0.0f), glm::vec3(0.0f), glm::vec3(0.0f)};    // Corner positions
-        std::vector<glm::vec3> nodes;  // Control points for curvature
-        bool editingNodes = false;     // Whether editing nodes after corners selected
-    };
-    ShapeCreation shapeCreation;
 
     /// Shooting cooldown
     float shootCooldown;
@@ -1545,12 +1635,16 @@ private:
     /**
      * @brief Process map editor input
      */
-    void processEditorInput();
+    void processEditorInput(float deltaTime);
     
     /**
      * @brief Save current map to file
+     *
+     * @param filename File name inside assets/maps (".map" is appended when missing)
+     * @param mapName Display name written to the map header
+     * @return true when the file was written
      */
-    void saveMap(const std::string& filename);
+    bool saveMap(const std::string& filename, const std::string& mapName = "Custom");
     
     /**
      * @brief Load the settings file (creating it with defaults when missing)

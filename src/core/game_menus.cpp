@@ -98,18 +98,7 @@ void Game::openMainMenu() {
 
     if (!isConnectedToServer()) {
         page.add(menu::action("MAP EDITOR", [this]() {
-            inp.resetNavKeys();
-            menuJustEntered = true;
-            gameState = MAP_EDITOR;
-            editorNoclip = true;
-            editorMode = MODE_BLOCK;
-            editorSpawnMode = SPAWN_NONE;
-            camera.Position = glm::vec3(0.0f, 5.0f, 10.0f);
-            camera.Yaw = -90.0f;
-            camera.Pitch = 0.0f;
-            camera.updateCameraVectors();
-            editorGridPos = camera.Position + camera.Front * 5.0f;
-            capturePlayCursor(true);
+            enterEditor();
         }, "Build and save maps"));
     }
 

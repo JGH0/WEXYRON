@@ -274,7 +274,6 @@ Game::Game(int width, int height)
       editorBlockRotation(0.0f),
       editorBlockPitch(0.0f),
       editorSpawnMode(SPAWN_NONE),
-      editorMode(MODE_BLOCK),
       bombDefusalMode(false),
       attackingTeam(0),
       roundActive(false),
@@ -387,7 +386,6 @@ Game::Game(int width, int height)
     activeBombSites = 0;
 
     // Editor initialization (remaining editor vars not in init list)
-    editorNoclip = true;
     editorSpeed = 15.0f;
     editorGridPos = glm::vec3(0.0f);
     editorBlockSize = glm::vec3(2.0f, 2.0f, 2.0f);
@@ -744,6 +742,7 @@ void Game::setPerformanceLevel(int level) {
 bool Game::loadMap(const std::string& mapFile) {
     // Blocking path: used at startup and whenever a worker context can't be
     // created. Parsing + texture upload happen here, on the GL thread.
+    activeMapFile_ = mapFile;
     std::unique_ptr<Map> loaded = MapLoader::loadBlocking(mapFile);
     if (!loaded) return false;
     installMap(std::move(loaded));
@@ -753,6 +752,7 @@ bool Game::loadMap(const std::string& mapFile) {
 void Game::requestMapLoad(const std::string& mapFile) {
     // Keep the current map on screen while the new one is parsed and its
     // textures are uploaded on a worker thread.
+    activeMapFile_ = mapFile;
     if (!mapLoader_.start(mapFile, window)) {
         loadMap(mapFile);
     }
@@ -1187,9 +1187,12 @@ void Game::mouseCallback(GLFWwindow* window, double xpos, double ypos) {
         xoffset *= 0.35f;
         yoffset *= 0.35f;
     }
-    // Only process mouse look while playing or in the editor
-    if (game->gameState == PLAYING || game->gameState == MAP_EDITOR)
+    // Player look is always active; the editor only looks while the right
+    // mouse button is held, so its panels stay clickable.
+    if (game->gameState == PLAYING ||
+        (game->gameState == MAP_EDITOR && game->editorLookActive_)) {
         game->camera.ProcessMouseMovement(xoffset, yoffset);
+    }
 }
 
 void Game::scrollCallback(GLFWwindow* window, double /*xoffset*/, double yoffset) {
@@ -1197,10 +1200,13 @@ void Game::scrollCallback(GLFWwindow* window, double /*xoffset*/, double yoffset
     if (!game) return;
 
     // The wheel switches weapons during a match. It no longer zooms the world
-    // camera (the sniper scope stays on its own held binding). Menus, death
-    // screens and the editor ignore the wheel.
+    // camera (the sniper scope stays on its own held binding). Menus and death
+    // screens ignore the wheel; the editor uses it for placement distance and
+    // texture cycling.
     if (game->gameState == PLAYING && !game->isDead && !game->spectatorMode &&
         yoffset != 0.0) {
         game->pendingWeaponScroll_ = yoffset > 0.0 ? -1 : 1;
+    } else if (game->gameState == MAP_EDITOR && yoffset != 0.0) {
+        game->pendingEditorScroll_ += yoffset > 0.0 ? 1 : -1;
     }
 }

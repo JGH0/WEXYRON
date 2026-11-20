@@ -82,12 +82,43 @@ void testMap() {
     CHECK(map.findBlockAt(position) < 0);
 }
 
+void testMapEditing() {
+    Map map("");
+    map.clear();
+    CHECK(map.getBlocks().empty());
+
+    // Bulk replacement (undo/redo / new-map path) keeps every collection in
+    // sync and refreshes the collision index.
+    std::vector<MapBlock> blocks{
+        MapBlock(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(2.0f), 1, 1, true),
+        MapBlock(glm::vec3(4.0f, 0.0f, 0.0f), glm::vec3(2.0f), 0, 1, true),
+    };
+    map.setBlocks(blocks);
+    CHECK(map.getBlocks().size() == 2);
+    CHECK(map.findBlockAt(glm::vec3(0.0f)) == 0);
+    CHECK(map.checkCollision(glm::vec3(4.0f, 0.0f, 0.0f), 0.1f));
+
+    map.setSpawnPoints({SpawnPoint(glm::vec3(1.0f, 0.0f, 1.0f))});
+    map.setTeamSpawns({TeamSpawn(glm::vec3(2.0f, 0.0f, 2.0f), 1)});
+    map.setBombSites({BombSiteData(glm::vec3(3.0f, 0.0f, 3.0f), 'B')});
+    CHECK(map.getSpawnPoints().size() == 1);
+    CHECK(map.getTeamSpawns().size() == 1);
+    CHECK(map.getBombSites().size() == 1);
+
+    // clear() must drop authored bomb sites too, or a new map would inherit
+    // them from the previous parse.
+    map.clear();
+    CHECK(map.getBlocks().empty());
+    CHECK(map.getSpawnPoints().empty());
+    CHECK(map.getTeamSpawns().empty());
+    CHECK(map.getBombSites().empty());
+}
+
 void testFontAtlas() {
     CHECK(font_atlas::kGlyphCount == 98);
     CHECK(font_atlas::glyphPattern('A') != 0);
     CHECK(font_atlas::glyphPattern(' ') == 0);
 }
-
 void testAudioLifecycle() {
     AudioManager audio;
     audio.setMasterVolume(0.25f);
@@ -107,6 +138,7 @@ int main() {
     testCamera();
     testThreadPool();
     testMap();
+    testMapEditing();
     testFontAtlas();
     testAudioLifecycle();
 

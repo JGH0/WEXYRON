@@ -118,18 +118,8 @@ void Game::processInput(float deltaTime) {
                gameState == MAP_SELECTION || gameState == SERVER_CONNECT) {
         processMenuInput();
     } else if (gameState == MAP_EDITOR) {
-        // ESC leaves the editor back to the main menu.
-        if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS && !inp.escapePressed) {
-            inp.escapePressed = true;
-            inp.resetNavKeys();
-            menuJustEntered = true;
-            openMainMenu();
-            gameState = MENU;
-            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-        } else if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_RELEASE) {
-            inp.escapePressed = false;
-        }
-        processEditorInput();
+        // The editor handles ESC itself so it can warn about unsaved changes.
+        processEditorInput(deltaTime);
     } else if (gameState == DEAD) {
         if (!isConnectedToServer()) {
             // Single player: ENTER/SPACE/click restarts the run as before.
@@ -161,7 +151,14 @@ void Game::processInput(float deltaTime) {
     // (that happens once on entry via capturePlayCursor(true)).
     if (gameState == PLAYING) {
         capturePlayCursor(false);
-    } else if (gameState != MAP_EDITOR) {
+    } else if (gameState == MAP_EDITOR) {
+        // The editor keeps a visible pointer for its panels; only the
+        // right-mouse look owns the pointer (it sets DISABLED itself).
+        if (!editorLookActive_) {
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        }
+    } else {
+        // Menus and other screens use a visible pointer.
         glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
     }
 }
