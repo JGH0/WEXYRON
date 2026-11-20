@@ -1,22 +1,22 @@
 {
   "servers": [
     {
-      "name": "Official Cube Game Server",
-      "address": "cube-game.example.com",
+      "name": "Official WEXYRON Server",
+      "address": "wexyron.example.com",
       "port": 7777,
       "region": "US-East",
       "description": "Official game server"
     },
     {
       "name": "Community Server EU",
-      "address": "eu-cube.example.com",
+      "address": "eu.wexyron.example.com",
       "port": 7777,
       "region": "EU-West",
       "description": "Community hosted server in Europe"
     },
     {
       "name": "Asia Pacific Server",
-      "address": "ap-cube.example.com",
+      "address": "ap.wexyron.example.com",
       "port": 7777,
       "region": "AP-Southeast",
       "description": "Server for Asia Pacific players"

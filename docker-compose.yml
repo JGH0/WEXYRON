@@ -1,15 +1,15 @@
 version: '3.8'
 
 services:
-  cube-game-server:
+  wexyron-server:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: cube-game-server
+    container_name: wexyron-server
     ports:
       - "${SERVER_PORT:-7777}:7777/udp"
     environment:
-      - SERVER_NAME=${SERVER_NAME:-Cube Game Server}
+      - SERVER_NAME=${SERVER_NAME:-WEXYRON Server}
       - SERVER_PORT=${SERVER_PORT:-7777}
       - MAX_PLAYERS=${MAX_PLAYERS:-16}
       - MAX_PLAYERS_PER_MACHINE=${MAX_PLAYERS_PER_MACHINE:-}
@@ -32,7 +32,7 @@ services:
       - ./server_logs:/app/logs
     restart: unless-stopped
     networks:
-      - cube-game-net
+      - wexyron-net
     healthcheck:
       test: ["CMD-SHELL", "nc -z localhost 7777 || timeout 5 bash -c 'cat < /dev/null > /dev/udp/127.0.0.1/7777' || exit 1"]
       interval: 30s
@@ -41,5 +41,5 @@ services:
       start_period: 10s
 
 networks:
-  cube-game-net:
+  wexyron-net:
     driver: bridge

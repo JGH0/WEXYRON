@@ -1,4 +1,4 @@
-# Cube Engine: reusable, game-agnostic core extracted from Cube CS Lite.
+# Cube Engine: reusable, game-agnostic core extracted from WEXYRON.
 #
 # The target is a static library. It links the graphics/audio dependencies and
 # exposes only the public headers in engine/include. It must never include

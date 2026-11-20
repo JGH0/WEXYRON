@@ -34,7 +34,7 @@ make --version
 ## Step 5: Build the Game
 1. Navigate to the game directory (adjust the path to yours):
 ```bash
-cd /c/Users/JGH/Documents/GitHub/cube-cs-lite
+cd /c/Users/JGH/Documents/GitHub/wexyron
 ```
 
 2. Build the game:

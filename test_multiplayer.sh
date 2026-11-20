@@ -3,7 +3,7 @@
 # Multiplayer Test Script
 # This script tests the local multiplayer functionality
 
-echo "=== Cube Game Multiplayer Test ==="
+echo "=== WEXYRON Multiplayer Test ==="
 echo ""
 
 # Check if build exists

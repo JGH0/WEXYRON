@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
-Name=Cube CS Lite
-Comment=Lightweight OpenGL multiplayer shooter
+Name=WEXYRON
+Comment=Warfare EXperimentation & Yield-based Reconnaissance Operations Network
 Exec=@EXEC@
 Icon=@ICON@
 Categories=Game;ActionGame;

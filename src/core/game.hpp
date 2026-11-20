@@ -423,6 +423,10 @@ private:
     /// Take ownership of a loaded map and make it the active one (GL thread).
     void installMap(std::unique_ptr<Map> loaded);
 
+    /// Publish the current menu / match / editor state to Discord. No-op when
+    /// Rich Presence is disabled or Discord is not running.
+    void updateDiscordPresence();
+
     /// Hide/grab the cursor for gameplay (PLAYING / MAP_EDITOR): focus the
     /// window, enable raw motion where supported, hide the cursor and forget
     /// the last mouse position so the first move does not spin the camera.

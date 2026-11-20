@@ -8,7 +8,7 @@ REM driver). Set CUBE_RENDERER=gpu to disable Mesa, =software to force it.
 cd /d "%~dp0"
 color 0A
 echo.
-echo === Cube CS Lite launcher ===
+echo === WEXYRON launcher ===
 echo.
 
 if not exist "build\bin\game.exe" (

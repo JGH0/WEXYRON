@@ -88,7 +88,7 @@ sudo ufw disable
 
 ### Windows Firewall
 1. Open Windows Defender Firewall
-2. Allow "Cube Game" through firewall
+2. Allow "WEXYRON" through firewall
 3. Or add UDP port 7777 manually
 
 ## Troubleshooting

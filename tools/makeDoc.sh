@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# makeDoc.sh - Generate Doxygen documentation for Cube CS Lite.
+# makeDoc.sh - Generate Doxygen documentation for WEXYRON.
 # The Doxyfile lives next to this script; output goes to docs/html.
 
 set -e
@@ -27,7 +27,7 @@ if [ ! -f "$DOXYFILE" ]; then
     doxygen -g "$DOXYFILE"
 
     # Configure Doxyfile for this project
-    sed -i 's/^PROJECT_NAME.*$/PROJECT_NAME = "Cube CS Lite"/' "$DOXYFILE"
+    sed -i 's/^PROJECT_NAME.*$/PROJECT_NAME = "WEXYRON"/' "$DOXYFILE"
     sed -i 's/^PROJECT_BRIEF.*$/PROJECT_BRIEF = "A multiplayer 3D first-person shooter built on OpenGL"/' "$DOXYFILE"
     sed -i 's/^INPUT .*$/INPUT = src engine/' "$DOXYFILE"
     sed -i 's/^RECURSIVE.*$/RECURSIVE = YES/' "$DOXYFILE"

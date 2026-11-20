@@ -69,22 +69,22 @@ case "$TARGET" in
         fi
         [ -f "$GAME_BIN" ] || { echo "error: $GAME_BIN not found" >&2; exit 1; }
 
-        APPDIR="$DIST/CubeCSLite.AppDir"
+        APPDIR="$DIST/WEXYRON.AppDir"
         rm -rf "$APPDIR"
         mkdir -p "$APPDIR/usr/bin"
 
         # linuxdeploy wants a ready-made desktop file + icon.
-        DESKTOP="$DIST/cube-cs-lite.desktop"
-        sed "s|@EXEC@|cube-cs-lite|g; s|@ICON@|cube-cs-lite|g" \
-            "$ROOT/packaging/cube-cs-lite.desktop" > "$DESKTOP"
+        DESKTOP="$DIST/wexyron.desktop"
+        sed "s|@EXEC@|wexyron|g; s|@ICON@|wexyron|g" \
+            "$ROOT/packaging/wexyron.desktop" > "$DESKTOP"
 
         # Copy the binary and pull in the shared libraries it needs (glfw,
         # libGL, libstdc++, ...) into the AppDir.
-        cp "$GAME_BIN" "$APPDIR/usr/bin/cube-cs-lite"
+        cp "$GAME_BIN" "$APPDIR/usr/bin/wexyron"
         "$LINUXDEPLOY" --appdir "$APPDIR" \
-            --executable "$APPDIR/usr/bin/cube-cs-lite" \
+            --executable "$APPDIR/usr/bin/wexyron" \
             --desktop-file "$DESKTOP" \
-            --icon-file "$ROOT/packaging/cube-cs-lite.png"
+            --icon-file "$ROOT/packaging/wexyron.png"
 
         # The game resolves everything relative to its working directory
         # (assets/...), so assets live next to the binary inside the AppDir and
@@ -92,19 +92,19 @@ case "$TARGET" in
         stage_assets "$APPDIR/usr/bin/assets"
 
         # License notices, as required by the bundled third-party components.
-        mkdir -p "$APPDIR/usr/share/doc/cube-cs-lite"
-        cp "$ROOT/LICENSE" "$ROOT/THIRD_PARTY_NOTICES.md" "$APPDIR/usr/share/doc/cube-cs-lite/"
+        mkdir -p "$APPDIR/usr/share/doc/wexyron"
+        cp "$ROOT/LICENSE" "$ROOT/THIRD_PARTY_NOTICES.md" "$APPDIR/usr/share/doc/wexyron/"
 
         # Launch through a tiny wrapper so the working directory is right.
-        mv "$APPDIR/usr/bin/cube-cs-lite" "$APPDIR/usr/bin/cube-cs-lite.real"
-        cat > "$APPDIR/usr/bin/cube-cs-lite" <<'EOF'
+        mv "$APPDIR/usr/bin/wexyron" "$APPDIR/usr/bin/wexyron.real"
+        cat > "$APPDIR/usr/bin/wexyron" <<'EOF'
 #!/bin/sh
 cd "$(dirname "$(readlink -f "$0")")" || exit 1
-exec ./cube-cs-lite.real "$@"
+exec ./wexyron.real "$@"
 EOF
-        chmod +x "$APPDIR/usr/bin/cube-cs-lite"
+        chmod +x "$APPDIR/usr/bin/wexyron"
 
-        OUTPUT="$DIST/Cube-CS-Lite-${VERSION}-x86_64.AppImage"
+        OUTPUT="$DIST/WEXYRON-${VERSION}-x86_64.AppImage"
         ARCH=x86_64 "$APPIMAGE_TOOL" "$APPDIR" "$OUTPUT"
         rm -rf "$APPDIR" "$DESKTOP"
         echo "Created $OUTPUT"
@@ -117,7 +117,7 @@ EOF
         fi
         [ -f "$GAME_BIN" ] || { echo "error: $GAME_BIN not found" >&2; exit 1; }
 
-        STAGE="$DIST/cube-cs-lite"
+        STAGE="$DIST/wexyron"
         rm -rf "$STAGE"
         mkdir -p "$STAGE"
         cp "$GAME_BIN" "$STAGE/game.exe"
@@ -159,12 +159,12 @@ EOF
 
         stage_assets "$STAGE/assets"
 
-        ZIP="$DIST/Cube-CS-Lite-${VERSION}-windows-x86_64.zip"
+        ZIP="$DIST/WEXYRON-${VERSION}-windows-x86_64.zip"
         rm -f "$ZIP"
         if command -v zip >/dev/null 2>&1; then
-            (cd "$DIST" && zip -qr "$ZIP" cube-cs-lite)
+            (cd "$DIST" && zip -qr "$ZIP" wexyron)
         else
-            (cd "$DIST" && python3 -m zipfile -c "$ZIP" cube-cs-lite)
+            (cd "$DIST" && python3 -m zipfile -c "$ZIP" wexyron)
         fi
         rm -rf "$STAGE"
         echo "Created $ZIP"

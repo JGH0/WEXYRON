@@ -10,7 +10,7 @@
  *
  * The file format is the same key=value convention as the map files:
  *
- *     # Cube CS Lite settings
+ *     # WEXYRON settings
  *     show_fps=true
  *     max_fps=144
  *     bind_forward=87          (GLFW key code)
@@ -102,6 +102,10 @@ struct GameSettings {
     int masterVolume = 100;        ///< 0..100, applied live
     int musicVolume = 70;          ///< 0..100, applied live
     int effectsVolume = 90;        ///< 0..100, applied live
+
+    // Interface --------------------------------------------------------------
+    /// Show "WEXYRON" + map/mode in Discord while the game runs.
+    bool discordRichPresence = true;
 
     // Controls ---------------------------------------------------------------
     int bindForward = 87;           ///< GLFW_KEY_W

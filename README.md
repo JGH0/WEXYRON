@@ -1,4 +1,6 @@
-# OpenGL 3D Game with Local Multiplayer
+# WEXYRON
+
+**Warfare EXperimentation & Yield-based Reconnaissance Operations Network**
 
 A multiplayer-enabled 3D first-person shooter game built with OpenGL and C++.
 
@@ -14,6 +16,7 @@ A multiplayer-enabled 3D first-person shooter game built with OpenGL and C++.
 - Physics-based movement and collisions
 - Enemy AI
 - Map editor with mouse placement, undo/redo, new/open/save dialogs and spawn tools
+- Discord Rich Presence (optional): shows the current mode, map or editor state
 - Various game modes
 
 ### Local Multiplayer (NEW!)
@@ -137,6 +140,27 @@ mouse button). Bindings and the other settings are saved to
   first launch); see [MENUS.md](MENUS.md) for the menu framework and how to add
   a setting or a screen
 
+## Discord Rich Presence
+
+While Discord is running, WEXYRON shows your current activity (main menu, map
+editor, game mode and map). It uses the local Discord IPC connection and the
+public Application ID in `src/core/brand.hpp`; **no bot token or client secret
+is needed or shipped**. Rich Presence can be switched off under
+**Settings → INTERFACE → DISCORD STATUS**.
+
+To customize the application card:
+
+1. Open <https://discord.com/developers/applications> and select the WEXYRON
+   application (`1573411705831161957`).
+2. Set the application name to **WEXYRON**.
+3. Under **Rich Presence → Art Assets**, upload these image keys:
+   - `logo` (large image)
+   - `menu`, `editor`, `deathmatch`, `team`, `bomb` (small images)
+4. Restart the game after uploading assets.
+
+If Discord is closed, the integration silently retries in the background.
+See [`docs/DISCORD.md`](docs/DISCORD.md) for setup, asset keys and Linux notes.
+
 ## Multiplayer Setup
 
 ### Network Requirements
@@ -253,7 +277,7 @@ make run-server
 
 ## File Structure
 ```
-cube-cs-lite/
+wexyron/
 |-- engine/                 # Reusable, game-agnostic engine library
 |   |-- include/engine/     # Public engine headers
 |   |-- src/                # Engine implementation
@@ -278,6 +302,7 @@ cube-cs-lite/
 |-- MULTIPLAYER_GUIDE.md    # Detailed multiplayer setup
 |-- MENUS.md                # Menu framework
 |-- docs/MAP_EDITOR.md      # Map editor controls and file format
+|-- docs/DISCORD.md         # Discord Rich Presence setup
 `-- WEAPON_CONTROLS.md      # Weapon controls
 ```
 
@@ -293,7 +318,7 @@ the game, open an issue describing the idea and how it would improve gameplay.
 
 ## License
 
-Cube CS Lite is released under the [MIT License](LICENSE).
+WEXYRON is released under the [MIT License](LICENSE).
 
 It bundles third-party libraries with their own permissive licenses; see
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for details.

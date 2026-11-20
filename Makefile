@@ -1,4 +1,4 @@
-# Cross-platform Makefile for Cube CS Lite.
+# Cross-platform Makefile for WEXYRON.
 #
 #   Linux    make -j"$$(nproc)"
 #   macOS    make -j"$$(sysctl -n hw.ncpu)"      (brew install glfw glm)
@@ -27,7 +27,8 @@ DEPFLAGS = -MMD -MP
 # fast projectiles. Prefer the live checkout next to this repository; fall back
 # to the vendored header snapshot so CI and fresh clones build without it.
 SPATIALKIT_DIR ?= $(if $(wildcard ../Einzelkleinprojekt/spartialkit/include/spatialkit/geometry.hpp),../Einzelkleinprojekt/spartialkit,third_party/spatialkit)
-CPPFLAGS = -I./include -I./include/stb -I./engine/include -I./src -I$(SPATIALKIT_DIR)/include
+CPPFLAGS = -I./include -I./include/stb -I./engine/include -I./src -I$(SPATIALKIT_DIR)/include \
+           -I./third_party/discord-rpc/include -I./third_party/rapidjson
 CXXFLAGS = -std=c++17 -Wall $(CPPFLAGS)
 
 # Platform-specific libraries.
@@ -62,7 +63,7 @@ TARGET = $(BIN_DIR)/game
 SERVER_TARGET = $(BIN_DIR)/server
 
 # Source files
-CORE_SOURCES = $(CORE_DIR)/game.cpp $(CORE_DIR)/game_input.cpp $(CORE_DIR)/game_loop.cpp $(CORE_DIR)/game_gameplay.cpp $(CORE_DIR)/game_hud.cpp $(CORE_DIR)/game_menus.cpp $(CORE_DIR)/game_server.cpp $(CORE_DIR)/game_server_menu.cpp $(CORE_DIR)/game_audio.cpp $(CORE_DIR)/game_editor.cpp $(CORE_DIR)/settings.cpp
+CORE_SOURCES = $(CORE_DIR)/game.cpp $(CORE_DIR)/game_input.cpp $(CORE_DIR)/game_loop.cpp $(CORE_DIR)/game_gameplay.cpp $(CORE_DIR)/game_hud.cpp $(CORE_DIR)/game_menus.cpp $(CORE_DIR)/game_server.cpp $(CORE_DIR)/game_server_menu.cpp $(CORE_DIR)/game_audio.cpp $(CORE_DIR)/game_editor.cpp $(CORE_DIR)/discord_presence.cpp $(CORE_DIR)/settings.cpp
 SYSTEMS_SOURCES = $(SYSTEMS_DIR)/input.cpp $(SYSTEMS_DIR)/weapon.cpp $(SYSTEMS_DIR)/physics.cpp $(SYSTEMS_DIR)/enemy.cpp $(SYSTEMS_DIR)/projectile.cpp $(SYSTEMS_DIR)/player.cpp $(SYSTEMS_DIR)/game_state.cpp
 NETWORK_SOURCES = $(NETWORK_DIR)/network.cpp $(NETWORK_DIR)/server_config.cpp
 GAME_BOT_SOURCES = $(GAME_DIR)/bot.cpp
@@ -73,6 +74,7 @@ MINIAUDIO_SOURCES = third_party/miniaudio/miniaudio.c
 MAIN_SOURCES = $(SRC_DIR)/main.cpp
 SERVER_SOURCES = server_main.cpp $(NETWORK_SOURCES) $(GAME_BOT_SOURCES) $(SERVER_BOT_SOURCES)
 GLAD_SOURCES = glad.c
+DISCORD_SOURCES = third_party/discord-rpc/src/discord_rpc.cpp third_party/discord-rpc/src/rpc_connection.cpp third_party/discord-rpc/src/serialization.cpp third_party/discord-rpc/src/discord_register_stub.cpp third_party/discord-rpc/src/connection_unix.cpp
 ENGINE_TEST_SOURCES = engine/tests/engine_smoke_test.cpp
 ALL_SOURCES = $(CORE_SOURCES) $(SYSTEMS_SOURCES) $(NETWORK_SOURCES) $(GAME_BOT_SOURCES) $(UI_SOURCES) $(MAIN_SOURCES)
 
@@ -84,9 +86,10 @@ GAME_BOT_OBJECTS = $(addprefix $(BUILD_DIR)/game/, $(notdir $(GAME_BOT_SOURCES:.
 SERVER_BOT_OBJECTS = $(addprefix $(BUILD_DIR)/network/, $(notdir $(SERVER_BOT_SOURCES:.cpp=.o)))
 UI_OBJECTS = $(addprefix $(BUILD_DIR)/ui/, $(notdir $(UI_SOURCES:.cpp=.o)))
 ENGINE_LIB_OBJECTS = $(addprefix $(BUILD_DIR)/engine_lib/, $(notdir $(ENGINE_LIB_SOURCES:.cpp=.o))) $(BUILD_DIR)/engine_lib/glad.o $(BUILD_DIR)/engine_lib/miniaudio.o
+DISCORD_OBJECTS = $(addprefix $(BUILD_DIR)/discord/, $(notdir $(DISCORD_SOURCES:.cpp=.o)))
 MAIN_OBJECT = $(BUILD_DIR)/main.o
 SERVER_MAIN_OBJECT = $(BUILD_DIR)/server_main.o
-ALL_OBJECTS = $(CORE_OBJECTS) $(SYSTEMS_OBJECTS) $(NETWORK_OBJECTS) $(GAME_BOT_OBJECTS) $(UI_OBJECTS) $(MAIN_OBJECT)
+ALL_OBJECTS = $(CORE_OBJECTS) $(SYSTEMS_OBJECTS) $(NETWORK_OBJECTS) $(GAME_BOT_OBJECTS) $(UI_OBJECTS) $(DISCORD_OBJECTS) $(MAIN_OBJECT)
 SERVER_OBJECTS = $(SERVER_MAIN_OBJECT) $(NETWORK_OBJECTS) $(GAME_BOT_OBJECTS) $(SERVER_BOT_OBJECTS)
 
 all: $(TARGET) $(SERVER_TARGET)
@@ -143,6 +146,10 @@ $(BUILD_DIR)/network/%.o: $(NETWORK_DIR)/%.cpp | $(BUILD_DIR)/network
 $(BUILD_DIR)/ui/%.o: $(UI_DIR)/%.cpp | $(BUILD_DIR)/ui
 	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
 
+# Discord RPC object files
+$(BUILD_DIR)/discord/%.o: third_party/discord-rpc/src/%.cpp | $(BUILD_DIR)/discord
+	$(CXX) $(CXXFLAGS) -Wno-unknown-pragmas $(DEPFLAGS) -c $< -o $@
+
 # Game object files
 $(BUILD_DIR)/game/%.o: $(GAME_DIR)/%.cpp | $(BUILD_DIR)/game
 	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
@@ -176,6 +183,9 @@ $(BUILD_DIR)/engine_lib:
 
 $(BUILD_DIR)/game:
 	mkdir -p $(BUILD_DIR)/game
+
+$(BUILD_DIR)/discord:
+	mkdir -p $(BUILD_DIR)/discord
 
 $(LIB_DIR):
 	mkdir -p $(LIB_DIR)
@@ -230,6 +240,7 @@ help:
 -include $(ALL_OBJECTS:.o=.d)
 -include $(SERVER_OBJECTS:.o=.d)
 -include $(ENGINE_LIB_OBJECTS:.o=.d)
+-include $(DISCORD_OBJECTS:.o=.d)
 
 .DELETE_ON_ERROR:
 

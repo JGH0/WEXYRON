@@ -143,7 +143,7 @@ int main(int argc, char* argv[]) {
     SettingSource srcPort, srcMax, srcPerMachine, srcBots, srcBotAccuracy;
 
     uint16_t port = static_cast<uint16_t>(settingInt(config, "SERVER_PORT", "server", "port", 7777, &srcPort));
-    std::string serverName = settingString(config, "SERVER_NAME", "server", "name", "Cube Game Server");
+    std::string serverName = settingString(config, "SERVER_NAME", "server", "name", "WEXYRON Server");
     int maxPlayers = settingInt(config, "MAX_PLAYERS", "server", "maxPlayers", 16, &srcMax);
     // Players allowed from one machine (same PC/IP + machine id).
     //   -1 = unlimited, 0 = nobody, N = up to N instances per PC.

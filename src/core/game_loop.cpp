@@ -1,5 +1,7 @@
 #define GLFW_INCLUDE_NONE
 #include "game.hpp"
+#include "brand.hpp"
+#include "discord_presence.hpp"
 #include "../ui/ui_helpers.hpp"
 #include <iostream>
 #include <chrono>
@@ -7,6 +9,11 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 void Game::update(float deltaTime) {
+    // Discord Rich Presence: dispatch callbacks and publish the current
+    // menu / match / editor state. No-op while Discord is closed.
+    discord_presence::poll();
+    updateDiscordPresence();
+
     // Swap in a background-loaded map as soon as it is ready (main thread).
     pollMapLoad();
 
@@ -344,8 +351,89 @@ void Game::render() {
     glfwPollEvents();
 }
 
+// ---------------------------------------------------------------------------
+// Discord Rich Presence
+// ---------------------------------------------------------------------------
+void Game::updateDiscordPresence() {
+    if (!discord_presence::isEnabled()) return;
+
+    std::string mapName;
+    if (!activeMapFile_.empty()) {
+        mapName = formatMapDisplayName(activeMapFile_);
+    } else if (currentMap && !currentMap->getMapName().empty()) {
+        mapName = currentMap->getMapName();
+    } else {
+        mapName = "UNKNOWN";
+    }
+
+    std::string modeText = "Deathmatch";
+    std::string modeKey = "deathmatch";
+    switch (currentGameMode) {
+        case TEAM_VS_TEAM:
+            modeText = "Team vs Team";
+            modeKey = "team";
+            break;
+        case BOMB_DEFUSAL:
+            modeText = "Bomb Defusal";
+            modeKey = "bomb";
+            break;
+        case DEATHMATCH:
+        default:
+            break;
+    }
+
+    std::string details;
+    std::string state;
+    std::string smallImage = "menu";
+    std::string smallText = "Main Menu";
+
+    switch (gameState) {
+        case PLAYING:
+            details = "Playing " + modeText;
+            state = "Map: " + mapName;
+            if (multiplayerMode && playerCount > 1) {
+                state += " | " + std::to_string(playerCount) + " players";
+            }
+            smallImage = modeKey;
+            smallText = modeText;
+            break;
+        case DEAD:
+            details = "Eliminated - waiting to respawn";
+            state = "Map: " + mapName;
+            smallImage = modeKey;
+            smallText = modeText;
+            break;
+        case MAP_EDITOR:
+            details = "Building a map";
+            state = "Editing: " + (editorMapName.empty() ? std::string("UNTITLED")
+                                                         : editorMapName);
+            smallImage = "editor";
+            smallText = "Map Editor";
+            break;
+        case SERVER_CONNECT:
+            details = "Looking for a server";
+            state = "Multiplayer";
+            smallImage = "menu";
+            smallText = "Main Menu";
+            break;
+        case MENU:
+        case SETTINGS:
+        case MAP_SELECTION:
+        default:
+            details = "In the main menu";
+            state = brand::kShortName;
+            smallImage = "menu";
+            smallText = "Main Menu";
+            break;
+    }
+
+    discord_presence::setActivity(details, state, brand::kDiscordLargeImage,
+                                  brand::kShortName, smallImage, smallText);
+}
+
 void Game::cleanup() {
     // currentMap is cleaned up in ~Game(); avoid double-delete here.
+    discord_presence::shutdown();
     audio.shutdown();
 }
 

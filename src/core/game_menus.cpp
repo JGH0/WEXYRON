@@ -20,6 +20,8 @@
 
 #define GLFW_INCLUDE_NONE
 #include "game.hpp"
+#include "brand.hpp"
+#include "discord_presence.hpp"
 #include "../ui/ui_helpers.hpp"
 #include <iostream>
 #include <algorithm>
@@ -75,7 +77,7 @@ void Game::openMainMenu() {
     inp.resetNavKeys();
     menuJustEntered = true;
 
-    menu::Page page("CUBE CS LITE", "MAIN MENU");
+    menu::Page page(brand::kShortName, brand::kTagline);
     if (isConnectedToServer()) {
         page.add(menu::info("CONNECTION", std::to_string(playerCount) + " PLAYERS ONLINE",
                             "Connected to a LAN server"));
@@ -348,6 +350,10 @@ void Game::applySettings() {
     keyBindings.use      = gameSettings_.bindUse;
     keyBindings.unstuck  = gameSettings_.bindUnstuck;
     keyBindings.menu     = gameSettings_.bindMenu;
+
+    // Discord Rich Presence is optional and can be toggled from Settings.
+    // The integration no-ops when Discord is not running.
+    discord_presence::setEnabled(gameSettings_.discordRichPresence);
 }
 
 void Game::loadSettings() {

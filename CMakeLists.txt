@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(CubeGame VERSION 1.0 LANGUAGES C CXX)
+project(WEXYRON VERSION 1.0 LANGUAGES C CXX)
 
 enable_testing()
 
@@ -122,6 +122,7 @@ set(CORE_SOURCES
     src/core/game_server_menu.cpp
     src/core/game_audio.cpp
     src/core/game_editor.cpp
+    src/core/discord_presence.cpp
     src/core/settings.cpp
 )
 
@@ -165,6 +166,25 @@ set(SERVER_SOURCES
     server_main.cpp
 )
 
+# Optional Discord Rich Presence (local IPC, no bot token). The client id is a
+# public application identifier; see src/core/brand.hpp.
+set(DISCORD_SOURCES
+    third_party/discord-rpc/src/discord_rpc.cpp
+    third_party/discord-rpc/src/rpc_connection.cpp
+    third_party/discord-rpc/src/serialization.cpp
+    third_party/discord-rpc/src/discord_register_stub.cpp
+)
+if(WIN32)
+    list(APPEND DISCORD_SOURCES third_party/discord-rpc/src/connection_win.cpp)
+else()
+    list(APPEND DISCORD_SOURCES third_party/discord-rpc/src/connection_unix.cpp)
+endif()
+
+# The vendored client uses MSVC-style #pragma warning guards.
+if(NOT MSVC)
+    set_source_files_properties(${DISCORD_SOURCES} PROPERTIES COMPILE_OPTIONS "-Wno-unknown-pragmas")
+endif()
+
 # Client executable. Rendering, maps, audio and GLAD are provided by the
 # extracted cube_engine library.
 add_executable(game
@@ -174,6 +194,12 @@ add_executable(game
     ${NETWORK_SOURCES}
     ${BOT_AI_SOURCES}
     ${UI_SOURCES}
+    ${DISCORD_SOURCES}
+)
+
+target_include_directories(game PRIVATE
+    ${CMAKE_SOURCE_DIR}/third_party/discord-rpc/include
+    ${CMAKE_SOURCE_DIR}/third_party/rapidjson
 )
 
 target_link_libraries(game PRIVATE

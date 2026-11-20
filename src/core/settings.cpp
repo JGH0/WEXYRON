@@ -375,6 +375,8 @@ std::vector<SettingDef> makeGameSettingDefs(GameSettings& s) {
            "Teleport back to the map centre if stuck", &GameSettings::bindUnstuck);
     addKey("bind_menu", "BACK TO MENU", "INTERFACE",
            "Leave the game and open the menu", &GameSettings::bindMenu);
+    addBool("discord_presence", "DISCORD STATUS", "INTERFACE",
+            "Show the game and current map in Discord", &GameSettings::discordRichPresence);
 
     for (SettingDef& def : defs) store.defs.push_back(std::move(def));
     store.built = true;
@@ -550,7 +552,7 @@ bool SettingsFile::writeText(const std::string& text) const {
 
 bool SettingsFile::writeFile(const std::vector<SettingDef>& defs) const {
     std::ostringstream out;
-    out << "# Cube CS Lite settings\n"
+    out << "# WEXYRON settings\n"
         << "# Written by the game. Missing keys keep their default value.\n"
         << "# Keys and mouse buttons are stored as GLFW codes (mouse:<button>).\n";
 

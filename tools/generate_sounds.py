@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generate the Cube CS Lite sound effects and music.
+Generate the WEXYRON sound effects and music.
 
 The game itself only ever *loads* files (assets/audio/...), so this script is
 the place where the audio content lives. Every sound is synthesized from noise

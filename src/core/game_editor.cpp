@@ -1430,7 +1430,7 @@ bool Game::saveMap(const std::string& filename, const std::string& mapName) {
     const glm::vec3 dims = currentMap->getDimensions();
     const std::string token = sanitizeStem(mapName);
 
-    file << "# Map created in the Cube CS Lite editor\n";
+    file << "# Map created in the WEXYRON editor\n";
     file << "name " << token << "\n";
     file << "dimensions " << dims.x << " " << dims.y << " " << dims.z << "\n\n";
 

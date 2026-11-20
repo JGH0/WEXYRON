@@ -6,7 +6,7 @@ REM GPU-less VM without any OpenGL DLL.
 cd /d "%~dp0"
 color 0E
 echo.
-echo === Cube CS Lite dedicated server ===
+echo === WEXYRON dedicated server ===
 echo.
 
 if not exist "build\bin\server.exe" (

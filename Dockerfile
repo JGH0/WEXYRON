@@ -22,6 +22,8 @@ COPY CMakeLists.txt ./
 COPY server_main.cpp ./
 COPY src/ ./src/
 COPY include/ ./include/
+COPY engine/ ./engine/
+COPY third_party/ ./third_party/
 COPY glad.c ./
 
 # Copy assets

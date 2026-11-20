@@ -1,6 +1,6 @@
-# Cube Engine
+# WEXYRON Engine
 
-The reusable, game-agnostic core extracted from **Cube CS Lite**.
+The reusable, game-agnostic core extracted from **WEXYRON**.
 
 The engine is a small C++17/OpenGL library. It knows about windows, shaders,
 textures, geometry, cameras, block-map data, worker threads and audio. It does

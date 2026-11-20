@@ -7,7 +7,7 @@ setlocal enabledelayedexpansion
 cd /d "%~dp0"
 color 0B
 echo.
-echo === Cube CS Lite — Windows build (MSYS2 + Makefile.windows) ===
+echo === WEXYRON — Windows build (MSYS2 + Makefile.windows) ===
 echo.
 
 REM Pick MSYS2 root (first found wins) and its bash.exe. The ucrt64.exe /

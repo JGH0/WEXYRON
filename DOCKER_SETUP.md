@@ -1,6 +1,6 @@
-# Docker Setup for Cube Game Server
+# Docker Setup for WEXYRON Server
 
-This guide explains how to run the Cube Game server using Docker and Docker Compose.
+This guide explains how to run the WEXYRON server using Docker and Docker Compose.
 
 ## Prerequisites
 
@@ -36,7 +36,7 @@ This guide explains how to run the Cube Game server using Docker and Docker Comp
 
 1. **Build the image**:
    ```bash
-   docker build -t cube-game-server .
+   docker build -t wexyron-server .
    ```
 
 2. **Run the container**:
@@ -47,8 +47,8 @@ This guide explains how to run the Cube Game server using Docker and Docker Comp
      -e MAX_PLAYERS=32 \
      -v $(pwd)/server_config.json:/app/server_config.json:ro \
      -v $(pwd)/assets:/app/assets:ro \
-     --name cube-game-server \
-     cube-game-server
+     --name wexyron-server \
+     wexyron-server
    ```
 
 ## Configuration
@@ -59,7 +59,7 @@ The server can be configured using environment variables:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `SERVER_NAME` | Server display name | "Cube Game Server" |
+| `SERVER_NAME` | Server display name | "WEXYRON Server" |
 | `SERVER_PORT` | Server port | 7777 |
 | `MAX_PLAYERS` | Maximum connected players | 16 |
 | `MAX_PLAYERS_PER_MACHINE` | Players allowed from one machine (same PC). `-1` = unlimited, `0` = nobody, `N` = up to N instances per PC | from `server_config.json` |
@@ -178,12 +178,12 @@ docker-compose ps
 
 ### View real-time logs:
 ```bash
-docker-compose logs -f cube-game-server
+docker-compose logs -f wexyron-server
 ```
 
 ### Check resource usage:
 ```bash
-docker stats cube-game-server
+docker stats wexyron-server
 ```
 
 ## Troubleshooting

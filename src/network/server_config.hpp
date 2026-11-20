@@ -6,7 +6,7 @@
  *
  *   {
  *     "server": {
- *       "name": "Cube Game Server",
+ *       "name": "WEXYRON Server",
  *       "port": 7777,
  *       "maxPlayers": 16,
  *       "maxPlayersPerMachine": 2,

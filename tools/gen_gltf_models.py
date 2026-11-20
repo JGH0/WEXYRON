@@ -200,7 +200,7 @@ def add_box(vertices, indices, center, size, color, rotation=(0, 0, 0), joint=No
 class GltfWriter:
     def __init__(self):
         self.doc = {
-            "asset": {"version": "2.0", "generator": "cube-cs-lite box-model generator"},
+            "asset": {"version": "2.0", "generator": "wexyron box-model generator"},
             "scene": 0,
             "scenes": [{"nodes": []}],
             "nodes": [],

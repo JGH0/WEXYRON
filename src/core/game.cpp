@@ -14,6 +14,8 @@
 
 #define GLFW_INCLUDE_NONE
 #include "game.hpp"
+#include "brand.hpp"
+#include "discord_presence.hpp"
 #include "network/network.hpp"
 #include <iostream>
 #include <cstdlib>
@@ -60,12 +62,12 @@ GLFWwindow* createGameWindow(int width, int height) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    GLFWwindow* win = glfwCreateWindow(width, height, "Cube CS Lite", nullptr, nullptr);
+    GLFWwindow* win = glfwCreateWindow(width, height, brand::kFullName, nullptr, nullptr);
     if (!win) {
         std::cerr << "Core profile window failed, retrying with a "
                      "compatibility profile..." << std::endl;
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_ANY_PROFILE);
-        win = glfwCreateWindow(width, height, "Cube CS Lite", nullptr, nullptr);
+        win = glfwCreateWindow(width, height, brand::kFullName, nullptr, nullptr);
     }
     return win;
 }
@@ -548,6 +550,7 @@ Game::Game(int width, int height)
 Game::~Game() {
     // Stop the audio device before the GLFW window goes away (the mixer runs
     // on its own thread; joining it here keeps shutdown deterministic).
+    discord_presence::shutdown();
     audio.shutdown();
     if (handCursor) glfwDestroyCursor(handCursor);
     disconnectFromServer();
