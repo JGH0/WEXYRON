@@ -43,12 +43,14 @@ Activity g_wanted;
 Activity g_lastSent;
 bool g_hasSent = false;
 bool g_loggedUnavailable = false;
+std::string g_username;
 
 void applyPresenceLocked();
 
 void onReady(const DiscordUser* user) {
     std::lock_guard<std::mutex> lock(g_mutex);
     g_loggedUnavailable = false;
+    g_username = (user && user->username) ? user->username : std::string();
     std::cout << "[discord] Rich Presence connected"
               << (user && user->username ? std::string(" as ") + user->username : std::string())
               << std::endl;
@@ -58,6 +60,7 @@ void onReady(const DiscordUser* user) {
 void onDisconnected(int errorCode, const char* message) {
     std::lock_guard<std::mutex> lock(g_mutex);
     g_hasSent = false;
+    g_username.clear();
     if (message && message[0]) {
         std::cout << "[discord] disconnected (" << errorCode << "): " << message << std::endl;
     } else {
@@ -138,6 +141,7 @@ void setEnabled(bool enabled) {
             g_lastSent = Activity{};
         }
         g_loggedUnavailable = false;
+        g_username.clear();
         return;
     }
     initializeLocked();
@@ -147,6 +151,11 @@ void setEnabled(bool enabled) {
 bool isEnabled() {
     std::lock_guard<std::mutex> lock(g_mutex);
     return g_enabled;
+}
+
+std::string username() {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    return g_username;
 }
 
 void setActivity(const std::string& details,
@@ -208,6 +217,7 @@ void shutdown() {
     g_hasSent = false;
     g_wanted = Activity{};
     g_lastSent = Activity{};
+    g_username.clear();
     g_enabled = false;
 }
 

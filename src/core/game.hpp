@@ -755,6 +755,11 @@ private:
     void sendLobbySetup(bool freshMatch = false);
     /// Start the pending map with the current setup.
     void beginMatch();
+    /// Bot counts for the current mode. Deathmatch has one shared pool, so
+    /// every bot is started on side A (the AI ignores teams there); team modes
+    /// use the Team A / Team B split from the setup screen.
+    int setupBotsTeamA() const;
+    int setupBotsTeamB() const;
     /// The old startSelectedMap() body: install the map and enter PLAYING.
     void startMatchNow(const std::string& mapFile);
     /// Apply a lobby state received from the server.
@@ -905,9 +910,11 @@ private:
     int matchWinner_ = -1;        ///< 0/1 team, or the local player (DM) when 2
     bool matchEnterHeld_ = false; ///< edge guard for ENTER on the result screen
     std::string pendingMapFile_;  ///< map chosen in the map menu
-    /// Team / bot setup (also the last values sent to a server).
+    /// Team / bot setup (also the last values sent to a server). Team modes
+    /// split the bots, deathmatch uses one shared bot count.
     int botSetupTeamA_ = 2;
     int botSetupTeamB_ = 2;
+    int botSetupBots_ = 4;        ///< bots in non-team modes
     int botSetupAccuracy_ = 70;   ///< percent
     int serverBotPool_ = 0;       ///< bots the server has available
     int serverBotMaxAccuracy_ = 100;

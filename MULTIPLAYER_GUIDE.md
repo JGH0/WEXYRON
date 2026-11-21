@@ -166,12 +166,15 @@ The dedicated server can fill a match with bots. They are configured in
 - `accuracy` – hit chance from `0.0` (almost never hits) to `1.0` (very
   accurate). It also affects how much a bot misses grenade/flashbang throws.
 
-Before a match starts, the client shows a **MATCH SETUP** screen. Choose your
-team and allocate the server's bot pool between Team A and Team B. You cannot
-allocate more bots than the server has, and the bot accuracy requested by a
-client is capped by the server's `BOTS_ACCURACY` setting. In single player the
-same screen controls the offline bot count per team and accuracy (up to 100%).
-The selected match format decides the win condition:
+Before a match starts, the client shows a **MATCH SETUP** screen. In Team
+Deathmatch and Bomb Defusal it shows the Team A / Team B roster side by side
+(your Discord username when Rich Presence is connected, otherwise `playerX`)
+and allocates the server's bot pool between the two teams. Deathmatch has no
+sides, so it exposes one shared bot count instead. You cannot allocate more
+bots than the server has, and the bot accuracy requested by a client is capped
+by the server's `BOTS_ACCURACY` setting. In single player the same screen
+controls the offline bot counts and accuracy (up to 100%). The selected match
+format decides the win condition:
 
 - **Free Play** – endless (the old behaviour).
 - **Normal** – Bomb Defusal is first to 13 round wins (teams switch roles and

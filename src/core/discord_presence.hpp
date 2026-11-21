@@ -21,6 +21,11 @@ void setEnabled(bool enabled);
 /// True when the integration is enabled (Discord may still be closed).
 bool isEnabled();
 
+/// Username of the connected Discord user, or an empty string when Rich
+/// Presence is not connected. The match setup uses it for the local player's
+/// roster name.
+std::string username();
+
 /// Publish the current activity. Repeated identical calls are ignored.
 /// Image keys must exist under Rich Presence -> Art Assets in the Discord
 /// Developer Portal; unknown keys simply leave the image empty.

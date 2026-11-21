@@ -2482,10 +2482,21 @@ int Game::debugLocalBotCount() const {
     return localBots_ ? localBots_->botCount() : 0;
 }
 
+int Game::setupBotsTeamA() const {
+    // Deathmatch has a single bot pool; the bot AI ignores team sides in that
+    // mode, so all of them go on side A.
+    return matchUsesTeamScore() ? std::max(0, botSetupTeamA_)
+                                : std::max(0, botSetupBots_);
+}
+
+int Game::setupBotsTeamB() const {
+    return matchUsesTeamScore() ? std::max(0, botSetupTeamB_) : 0;
+}
+
 void Game::startLocalBots() {
     stopLocalBots();
     if (multiplayerMode || activeMapFile_.empty()) return;
-    if (botSetupTeamA_ <= 0 && botSetupTeamB_ <= 0) return;
+    if (setupBotsTeamA() <= 0 && setupBotsTeamB() <= 0) return;
 
     LocalBotHost::Config config;
     config.mapPath = "assets/maps/" + activeMapFile_;
@@ -2493,8 +2504,8 @@ void Game::startLocalBots() {
     config.gameMode = static_cast<int>(currentGameMode);
     config.matchFormat = static_cast<int>(matchFormat_);
     config.attackingTeam = attackingTeam & 1;
-    config.botsTeamA = botSetupTeamA_;
-    config.botsTeamB = botSetupTeamB_;
+    config.botsTeamA = setupBotsTeamA();
+    config.botsTeamB = setupBotsTeamB();
     config.accuracy = static_cast<float>(botSetupAccuracy_) / 100.0f;
     config.friendlyFire = false;
 
@@ -2653,7 +2664,7 @@ void Game::restartMatch() {
     teamBScore_ = 0;
     refreshBombSitesForMode();
     resetGame();
-    if (!multiplayerMode && (botSetupTeamA_ > 0 || botSetupTeamB_ > 0)) {
+    if (!multiplayerMode && (setupBotsTeamA() > 0 || setupBotsTeamB() > 0)) {
         startLocalBots();
     }
 }

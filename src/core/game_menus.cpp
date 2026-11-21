@@ -49,6 +49,37 @@ std::vector<std::string> buildAccuracyOptions(int max) {
     if (options.empty()) options.push_back("10%");
     return options;
 }
+
+/// Name shown for the local player in the match roster. Discord Rich Presence
+/// provides the username; without a connection the placeholder stays "playerX".
+std::string localPlayerName() {
+    const std::string discordName = discord_presence::username();
+    return discordName.empty() ? std::string("playerX") : discordName;
+}
+
+/// Append the two-column team roster (Team A on the left, Team B on the
+/// right). The local player always occupies the first slot of their own team;
+/// the remaining slots are the bots assigned to that side.
+void appendTeamRoster(menu::Page& page, int botsTeamA, int botsTeamB, int playerTeam) {
+    const std::string playerName = localPlayerName();
+    const int teamACount = std::max(0, botsTeamA) + (playerTeam == 0 ? 1 : 0);
+    const int teamBCount = std::max(0, botsTeamB) + (playerTeam == 1 ? 1 : 0);
+
+    auto memberName = [&](int team, int slot) {
+        const bool playerHere = (team == playerTeam);
+        if (playerHere && slot == 0) return playerName;
+        const int botSlot = slot - (playerHere ? 1 : 0);
+        return std::string("BOT ") + std::to_string(botSlot + 1);
+    };
+
+    page.add(menu::separator("TEAMS"));
+    page.add(menu::info("TEAM A", "TEAM B"));
+    const int rows = std::max(teamACount, teamBCount);
+    for (int slot = 0; slot < rows; ++slot) {
+        page.add(menu::info(slot < teamACount ? memberName(0, slot) : std::string(),
+                            slot < teamBCount ? memberName(1, slot) : std::string()));
+    }
+}
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -347,6 +378,7 @@ void Game::refreshTeamSetupRows() {
     static const char* const kModeNames[] = {"DEATHMATCH", "TEAM DEATHMATCH", "BOMB DEFUSAL"};
     static const char* const kFormatNames[] = {"FREE PLAY", "NORMAL", "SWIFT"};
 
+    const bool teamMode = matchUsesTeamScore();
     const std::string mapLabel = pendingMapFile_.empty()
         ? std::string("SELECT A MAP")
         : formatMapDisplayName(pendingMapFile_);
@@ -357,37 +389,65 @@ void Game::refreshTeamSetupRows() {
     page.add(menu::info("MODE", kModeNames[static_cast<int>(currentGameMode) % 3]));
     page.add(menu::info("MATCH", kFormatNames[static_cast<int>(matchFormat_) % 3]));
 
-    page.add(menu::separator("YOUR TEAM"));
-    page.add(menu::cycle("TEAM", {"TEAM A", "TEAM B"}, playerTeam & 1,
-                         [this](int index) {
-                             playerTeam = index & 1;
-                             sendLobbySetup();
-                         },
-                         "Switch sides before the match starts"));
+    if (teamMode) {
+        // Keep the displayed roster and the counters in sync before building
+        // either. Deathmatch has no sides, so only the team modes show this.
+        if (isConnectedToServer()) {
+            const int pool = std::max(0, serverBotPool_);
+            botSetupTeamA_ = std::max(0, std::min(botSetupTeamA_, pool));
+            botSetupTeamB_ = std::max(0, std::min(botSetupTeamB_, pool - botSetupTeamA_));
+        } else {
+            constexpr int kMaxPerTeam = 8;
+            botSetupTeamA_ = std::max(0, std::min(botSetupTeamA_, kMaxPerTeam));
+            botSetupTeamB_ = std::max(0, std::min(botSetupTeamB_, kMaxPerTeam));
+        }
+        botSetupBots_ = botSetupTeamA_ + botSetupTeamB_;
+
+        appendTeamRoster(page, botSetupTeamA_, botSetupTeamB_, playerTeam & 1);
+
+        page.add(menu::separator("YOUR TEAM"));
+        page.add(menu::cycle("TEAM", {"TEAM A", "TEAM B"}, playerTeam & 1,
+                             [this](int index) {
+                                 playerTeam = index & 1;
+                                 sendLobbySetup();
+                                 refreshTeamSetupRows();
+                             },
+                             "Switch sides before the match starts"));
+    }
 
     page.add(menu::separator("BOTS"));
     if (isConnectedToServer()) {
-        const int pool = serverBotPool_;
-        botSetupTeamA_ = std::max(0, std::min(botSetupTeamA_, pool));
-        botSetupTeamB_ = std::max(0, std::min(botSetupTeamB_, pool - botSetupTeamA_));
+        const int pool = std::max(0, serverBotPool_);
         page.add(menu::info("SERVER BOT POOL", std::to_string(pool)));
-        page.add(menu::cycle("TEAM A BOTS", buildCountOptions(pool), botSetupTeamA_,
-                             [this, pool](int index) {
-                                 botSetupTeamA_ = index;
-                                 // Never allocate more than the server owns.
-                                 botSetupTeamB_ = std::min(botSetupTeamB_, pool - index);
-                                 sendLobbySetup();
-                                 refreshTeamSetupRows();
-                             },
-                             "Bots assigned to Team A"));
-        page.add(menu::cycle("TEAM B BOTS", buildCountOptions(pool), botSetupTeamB_,
-                             [this, pool](int index) {
-                                 botSetupTeamB_ = index;
-                                 botSetupTeamA_ = std::min(botSetupTeamA_, pool - index);
-                                 sendLobbySetup();
-                                 refreshTeamSetupRows();
-                             },
-                             "Bots assigned to Team B"));
+        if (teamMode) {
+            page.add(menu::cycle("TEAM A BOTS", buildCountOptions(pool), botSetupTeamA_,
+                                 [this, pool](int index) {
+                                     botSetupTeamA_ = index;
+                                     // Never allocate more than the server owns.
+                                     botSetupTeamB_ = std::min(botSetupTeamB_, pool - index);
+                                     botSetupBots_ = botSetupTeamA_ + botSetupTeamB_;
+                                     sendLobbySetup();
+                                     refreshTeamSetupRows();
+                                 },
+                                 "Bots assigned to Team A"));
+            page.add(menu::cycle("TEAM B BOTS", buildCountOptions(pool), botSetupTeamB_,
+                                 [this, pool](int index) {
+                                     botSetupTeamB_ = index;
+                                     botSetupTeamA_ = std::min(botSetupTeamA_, pool - index);
+                                     botSetupBots_ = botSetupTeamA_ + botSetupTeamB_;
+                                     sendLobbySetup();
+                                     refreshTeamSetupRows();
+                                 },
+                                 "Bots assigned to Team B"));
+        } else {
+            botSetupBots_ = std::max(0, std::min(botSetupBots_, pool));
+            page.add(menu::cycle("BOTS", buildCountOptions(pool), botSetupBots_,
+                                 [this](int index) {
+                                     botSetupBots_ = index;
+                                     sendLobbySetup();
+                                 },
+                                 "Bots in this deathmatch"));
+        }
         int maxAccuracy = serverBotMaxAccuracy_ > 0 ? serverBotMaxAccuracy_ : 100;
         maxAccuracy = (maxAccuracy / 10) * 10;
         if (maxAccuracy < 10) maxAccuracy = 10;
@@ -402,14 +462,26 @@ void Game::refreshTeamSetupRows() {
                              "Bots cannot exceed the server's accuracy setting"));
     } else {
         constexpr int kMaxPerTeam = 8;
-        botSetupTeamA_ = std::max(0, std::min(botSetupTeamA_, kMaxPerTeam));
-        botSetupTeamB_ = std::max(0, std::min(botSetupTeamB_, kMaxPerTeam));
-        page.add(menu::cycle("TEAM A BOTS", buildCountOptions(kMaxPerTeam), botSetupTeamA_,
-                             [this](int index) { botSetupTeamA_ = index; },
-                             "Single-player bots on Team A"));
-        page.add(menu::cycle("TEAM B BOTS", buildCountOptions(kMaxPerTeam), botSetupTeamB_,
-                             [this](int index) { botSetupTeamB_ = index; },
-                             "Single-player bots on Team B"));
+        constexpr int kMaxBots = 16;
+        if (teamMode) {
+            page.add(menu::cycle("TEAM A BOTS", buildCountOptions(kMaxPerTeam), botSetupTeamA_,
+                                 [this](int index) {
+                                     botSetupTeamA_ = index;
+                                     botSetupBots_ = botSetupTeamA_ + botSetupTeamB_;
+                                 },
+                                 "Single-player bots on Team A"));
+            page.add(menu::cycle("TEAM B BOTS", buildCountOptions(kMaxPerTeam), botSetupTeamB_,
+                                 [this](int index) {
+                                     botSetupTeamB_ = index;
+                                     botSetupBots_ = botSetupTeamA_ + botSetupTeamB_;
+                                 },
+                                 "Single-player bots on Team B"));
+        } else {
+            botSetupBots_ = std::max(0, std::min(botSetupBots_, kMaxBots));
+            page.add(menu::cycle("BOTS", buildCountOptions(kMaxBots), botSetupBots_,
+                                 [this](int index) { botSetupBots_ = index; },
+                                 "Single-player bots in this deathmatch"));
+        }
         page.add(menu::cycle("BOT STRENGTH", buildAccuracyOptions(100),
                              std::max(0, botSetupAccuracy_ / 10 - 1),
                              [this](int index) { botSetupAccuracy_ = (index + 1) * 10; },
@@ -432,8 +504,8 @@ void Game::sendLobbySetup(bool freshMatch) {
     if (!networkClient || !networkClient->isConnected()) return;
     networkClient->sendLobbySetup(
         static_cast<uint8_t>(playerTeam & 1),
-        static_cast<uint8_t>(std::max(0, botSetupTeamA_)),
-        static_cast<uint8_t>(std::max(0, botSetupTeamB_)),
+        static_cast<uint8_t>(setupBotsTeamA()),
+        static_cast<uint8_t>(setupBotsTeamB()),
         static_cast<uint8_t>(std::max(0, std::min(100, botSetupAccuracy_))),
         static_cast<uint8_t>(matchFormat_), freshMatch);
 }
@@ -441,7 +513,7 @@ void Game::sendLobbySetup(bool freshMatch) {
 void Game::beginMatch() {
     sendLobbySetup();
     const bool offline = !isConnectedToServer();
-    localBotsPending_ = offline && (botSetupTeamA_ > 0 || botSetupTeamB_ > 0);
+    localBotsPending_ = offline && (setupBotsTeamA() > 0 || setupBotsTeamB() > 0);
     if (!localBotsPending_) stopLocalBots();
     startMatchNow(pendingMapFile_);
 }
@@ -451,8 +523,15 @@ void Game::applyLobbyState(uint8_t /*team*/, uint8_t pool, uint8_t botsA,
                            uint8_t matchFormat) {
     serverBotPool_ = pool;
     serverBotMaxAccuracy_ = maxAccuracy > 0 ? maxAccuracy : 100;
-    botSetupTeamA_ = std::min<int>(botsA, pool);
-    botSetupTeamB_ = std::min<int>(botsB, std::max(0, pool - botSetupTeamA_));
+    if (matchUsesTeamScore()) {
+        botSetupTeamA_ = std::min<int>(botsA, pool);
+        botSetupTeamB_ = std::min<int>(botsB, std::max(0, pool - botSetupTeamA_));
+        botSetupBots_ = botSetupTeamA_ + botSetupTeamB_;
+    } else {
+        // Deathmatch has a single pool. Keep the remembered team split for a
+        // later team match, but show the server's total here.
+        botSetupBots_ = std::min<int>(botsA + botsB, pool);
+    }
     if (accuracy > 0) botSetupAccuracy_ = std::min<int>(accuracy, serverBotMaxAccuracy_);
     (void)matchFormat;   // the local map-menu choice drives this client's match
     lobbyDirty_ = true;
