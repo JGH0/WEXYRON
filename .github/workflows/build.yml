@@ -147,12 +147,18 @@ jobs:
       # The manifest already requests asInvoker + Win10 compatibility,      #
       # which is the best mitigation available without a certificate.       #
       # ------------------------------------------------------------------ #
+      # NOTE: `secrets` is not allowed in an `if:` expression (GitHub rejects
+      # the whole workflow with "Unrecognized named-value: 'secrets'"), so the
+      # secret is checked inside the script instead.
       - name: Sign Windows executables (optional)
-        if: ${{ secrets.CODESIGN_PFX_B64 != '' }}
         env:
           CODESIGN_PFX_B64:  ${{ secrets.CODESIGN_PFX_B64 }}
           CODESIGN_PFX_PASS: ${{ secrets.CODESIGN_PFX_PASS }}
         run: |
+          if [ -z "$CODESIGN_PFX_B64" ]; then
+            echo "No signing certificate configured, skipping."
+            exit 0
+          fi
           sudo apt-get install -y --no-install-recommends osslsigncode
           echo "$CODESIGN_PFX_B64" | base64 -d > /tmp/cert.pfx
           for exe in build/bin/game.exe build/bin/launcher.exe; do
