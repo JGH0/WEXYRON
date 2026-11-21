@@ -10,6 +10,7 @@
 - **4 Key** - Switch to Grenade
 - **5 Key** - Switch to Flashbang
 - **G Key** - Toggle between Grenade and Flashbang
+- **I Key** - Inspect the held weapon (animation; cancelled by firing)
 - **Left Shift** - Sprint (hold, standing only)
 - **Left Ctrl** - Sneak / crouch (hold)
 - **C** - Lie down / get up (crawl while prone; toggle or hold via settings)

@@ -651,6 +651,7 @@ void Game::initModels() {
         playerLowerLegRNode_ = playerModel_->findNode("lower_leg_r");
         playerFootLNode_ = playerModel_->findNode("foot_l");
         playerFootRNode_ = playerModel_->findNode("foot_r");
+        playerHandRNode_ = playerModel_->findNode("hand_r");
         for (int i = 0; i < MAX_REMOTE_PLAYERS; ++i) remoteModelAnims[i].init(playerModel_.get());
         for (int i = 0; i < MAX_ENEMIES; ++i) enemyModelAnims[i].init(playerModel_.get());
         std::cout << "[models] player.glb (" << playerModel_->animationCount()
@@ -776,8 +777,17 @@ void Game::posePlayerInstance(GltfInstance& instance, const humanoid::Anim& anim
                          1.0f - anim.damage);
     } else {
         const float walkWeight = stanceLocked ? 0.0f : anim.walkBlend;
-        instance.setPose(playerWalkClip_, walkTime, walkWeight,
-                         playerIdleClip_, idleTime, 1.0f - walkWeight);
+        // Armed actors keep their arms in a ready-to-fire pose even when the
+        // idle/walk clips would let them hang down: this is what keeps the
+        // held weapon visibly in their hands (and readable at a distance).
+        const float armedBlend = 0.82f;
+        if (walkWeight > 0.01f) {
+            instance.setPose(playerShootClip_, 0.0f, armedBlend,
+                             playerWalkClip_, walkTime, 1.0f - armedBlend);
+        } else {
+            instance.setPose(playerShootClip_, 0.0f, armedBlend,
+                             playerIdleClip_, idleTime, 1.0f - armedBlend);
+        }
     }
     applyPlayerStancePose(instance, stance);
     instance.update();

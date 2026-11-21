@@ -1255,6 +1255,7 @@ void NetworkServer::broadcastPlayerState(uint32_t playerId, const glm::vec3& pos
     auto stateIt = players.find(playerId);
     packet.team = (stateIt != players.end()) ? stateIt->second.team : 0;
     packet.stance = (stateIt != players.end()) ? stateIt->second.stance : 0;
+    packet.weaponId = (stateIt != players.end()) ? (stateIt->second.weaponId % 5) : 0;
     if (stateIt != players.end()) {
         packet.header.sequence = ++stateIt->second.stateSequence;
     }
@@ -1402,6 +1403,7 @@ void NetworkServer::broadcastPlayerStateToMap(uint32_t playerId, const std::stri
     auto stateIt = players.find(playerId);
     packet.team = (stateIt != players.end()) ? stateIt->second.team : 0;
     packet.stance = (stateIt != players.end()) ? stateIt->second.stance : 0;
+    packet.weaponId = (stateIt != players.end()) ? (stateIt->second.weaponId % 5) : 0;
     if (stateIt != players.end()) {
         packet.header.sequence = ++stateIt->second.stateSequence;
     }

@@ -7,7 +7,7 @@ procedural boxes. This script bakes the same box layout into real glTF assets:
 
     assets/models/player.glb            skinned humanoid + idle/walk/shoot/death
     assets/models/bomb.glb              C4 prop + animated blinking light
-    assets/models/weapon_pistol.glb     first-person viewmodels (hands included)
+    assets/models/weapon_pistol.glb     weapon models (no hands/arms)
     assets/models/weapon_shotgun.glb
     assets/models/weapon_sniper.glb
     assets/models/weapon_grenade.glb
@@ -406,7 +406,6 @@ WHITE = (1.00, 1.00, 1.00)
 HANDS = (0.55, 0.55, 0.55)
 FEET = (0.45, 0.45, 0.45)
 FACE = (0.035, 0.035, 0.045)
-GUN = (0.10, 0.10, 0.12)
 
 
 def build_player():
@@ -494,10 +493,6 @@ def build_player():
         jbox(shoulder, (0.0, -0.17, 0.0), (0.13, 0.34, 0.16), WHITE)
         jbox(elbow, (0.0, -0.15, 0.0), (0.12, 0.30, 0.14), (0.90, 0.90, 0.90))
         jbox(hand, (0.0, -0.055, 0.0), (0.12, 0.11, 0.14), HANDS)
-
-    # Compact gun in the right hand, pointing along the arm.
-    jbox("hand_r", (0.0, -0.10, 0.0), (0.065, 0.24, 0.085), GUN)
-    jbox("hand_r", (0.0, -0.215, 0.0), (0.045, 0.05, 0.055), (0.05, 0.05, 0.06))
 
     # Legs.
     for hip, knee, ankle in (("upper_leg_l", "lower_leg_l", "foot_l"),
@@ -662,15 +657,6 @@ def build_bomb():
 # First-person weapons
 # ---------------------------------------------------------------------------
 
-def add_hands(boxes, long_arm):
-    glove = (0.32, 0.26, 0.20)
-    sleeve = (0.16, 0.21, 0.17)
-    boxes.append(((0.040, -0.095, 0.030), (0.085, 0.115, 0.105), glove, (-12, 0, -4), None))
-    boxes.append(((-0.012, -0.070, 0.005), (0.034, 0.055, 0.075), glove, (-18, 0, 0), None))
-    boxes.append(((0.060, -0.170 if long_arm else -0.160, 0.105),
-                  (0.115, 0.110, 0.20 if long_arm else 0.15), sleeve, (-8, 0, -3), None))
-
-
 def build_weapon(name, body):
     writer = GltfWriter()
     material = writer.add_material(name)
@@ -698,7 +684,6 @@ def pistol_boxes(boxes):
         ((0.0, -0.050, -0.020), (0.055, 0.012, 0.095), dark, (0, 0, 0), None),
         ((0.0, -0.072, -0.065), (0.050, 0.032, 0.012), dark, (0, 0, 0), None),
     ]
-    add_hands(boxes, False)
 
 
 def shotgun_boxes(boxes):
@@ -717,7 +702,6 @@ def shotgun_boxes(boxes):
         ((0.0, -0.050, -0.010), (0.055, 0.012, 0.095), dark, (0, 0, 0), None),
         ((0.0, -0.072, -0.055), (0.050, 0.032, 0.012), dark, (0, 0, 0), None),
     ]
-    add_hands(boxes, True)
 
 
 def sniper_boxes(boxes):
@@ -738,7 +722,6 @@ def sniper_boxes(boxes):
         ((-0.030, -0.075, -0.49), (0.016, 0.095, 0.016), dark, (0, 0, 18), None),
         ((0.030, -0.075, -0.49), (0.016, 0.095, 0.016), dark, (0, 0, -18), None),
     ]
-    add_hands(boxes, True)
 
 
 def grenade_boxes(boxes):
@@ -749,7 +732,6 @@ def grenade_boxes(boxes):
         ((0.078, 0.055, -0.060), (0.014, 0.014, 0.060), (0.62, 0.62, 0.62), (0, 0, 0), None),
         ((0.040, 0.055, -0.010), (0.030, 0.012, 0.012), (0.62, 0.62, 0.62), (0, 0, 0), None),
     ]
-    add_hands(boxes, False)
 
 
 def flashbang_boxes(boxes):
@@ -761,7 +743,6 @@ def flashbang_boxes(boxes):
         ((0.045, 0.052, -0.060), (0.016, 0.016, 0.085), (0.55, 0.55, 0.55), (0, 0, 0), None),
         ((0.075, 0.062, -0.060), (0.013, 0.013, 0.055), (0.62, 0.62, 0.62), (0, 0, 0), None),
     ]
-    add_hands(boxes, False)
 
 
 # ---------------------------------------------------------------------------

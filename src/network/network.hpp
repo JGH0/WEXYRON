@@ -178,6 +178,7 @@ struct PlayerStatePacket {
     bool isDead;
     uint8_t team;                  ///< 0 = Team A, 1 = Team B
     uint8_t stance;                ///< 0 standing, 1 crouching, 2 prone
+    uint8_t weaponId;              ///< held weapon (0 pistol ... 4 flashbang)
 };
 
 /// A hit one client scored on another player (client -> server -> victim and
@@ -523,6 +524,7 @@ struct ServerPlayer {
     uint8_t gameMode = 0; ///< last game mode the client reported
     uint8_t matchFormat = 0; ///< last match format the client reported
     uint8_t stance = 0;   ///< 0 standing, 1 crouching, 2 prone
+    uint8_t weaponId = 0; ///< held weapon reported by the client / bot
     uint32_t stateSequence = 0; ///< monotonic PlayerState sequence
     bool isBot = false;   ///< server-controlled player (no socket / timeout)
     /// Seconds of invulnerability left after a spawn / respawn.

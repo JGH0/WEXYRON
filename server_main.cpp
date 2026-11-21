@@ -416,6 +416,7 @@ int main(int argc, char* argv[]) {
         player->gameMode = input.gameMode;
         player->matchFormat = input.matchFormat;
         player->stance = input.stance <= 2 ? input.stance : 0;
+        player->weaponId = input.weaponId % 5;
 
         // The client is on a menu page over a running match. Keep its player
         // record (and its body on the map) exactly as it is: no movement, no

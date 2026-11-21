@@ -120,6 +120,7 @@ make clean && make
 - **4**: Grenade
 - **5**: Flashbang
 - **G**: Toggle Grenade/Flashbang
+- **I**: Inspect the held weapon (animation; cancelled by firing)
 
 The sniper is bolt-action: selecting it racks the bolt first, and each shot
 must be cycled before the next round can be fired.

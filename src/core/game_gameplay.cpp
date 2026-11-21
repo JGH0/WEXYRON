@@ -823,6 +823,8 @@ bool Game::createProjectile(const glm::vec3& position, const glm::vec3& velocity
 
 void Game::shoot() {
     if (currentWeaponInstance && currentWeaponInstance->canShoot()) {
+        // Firing cancels an inspect so the action never gets in the way.
+        weaponInspect_ = 0.0f;
         currentWeaponInstance->shoot(this);
         // Weapon viewmodel kick: pistols snap a little, the pump shotgun kicks
         // hard, throwables barely move the hand.
@@ -845,6 +847,7 @@ void Game::switchWeapon(WeaponType weapon) {
 
     currentWeapon = weapon;
     weaponSwitch_ = 1.0f;   // lower the old gun / raise the new one
+    weaponInspect_ = 0.0f;  // a switch always returns to the normal pose
 
     // Leaving the sniper cancels a queued bolt rattle from a shot.
     if (weapon != SNIPER) sniperBoltSoundPending_ = false;
@@ -1063,7 +1066,8 @@ void Game::updateProjectiles(float deltaTime) {
             // Store position before update
             glm::vec3 prevPos = projectiles[i].position;
             
-            // Apply gravity to all projectiles so they always fall
+            // Every projectile is ballistic: bullets drop over distance just
+            // like grenades and flashbangs.
             projectiles[i].velocity.y -= 15.0f * deltaTime;
             
             // Simple position update
@@ -1516,9 +1520,14 @@ bool Game::checkProjectileCollision(Projectile& projectile) {
     const float boundZ = mapHalf.z + 2.0f;
     const float maxY = std::max(20.0f, mapHalf.y * 2.0f + 5.0f);
 
-    // Only check boundaries if projectile has moved significantly from spawn
-    float distanceFromPlayer = glm::length(projectile.position - camera.Position);
-    if (distanceFromPlayer > 1.0f) { // Only check boundaries after moving 1 unit
+    // A locally-fired projectile starts at the camera. Ignore geometry only
+    // for that first step, so the gun cannot hit the wall the player is
+    // standing next to. Bullets from other actors must always collide: using
+    // the local camera distance for them let bot/remote rounds tunnel through
+    // floors and the player and trail away into the air.
+    const bool localShot = projectile.owner == 0;
+    const float distanceFromPlayer = glm::length(projectile.position - camera.Position);
+    if (!localShot || distanceFromPlayer > 1.0f) {
         if (std::abs(projectile.position.x) >= boundX ||
             std::abs(projectile.position.z) >= boundZ ||
             projectile.position.y <= -10.0f ||
@@ -1528,7 +1537,7 @@ bool Game::checkProjectileCollision(Projectile& projectile) {
     }
 
     // Check collision with map blocks if map is loaded
-    if (currentMap && distanceFromPlayer > 0.5f) {
+    if (currentMap && (!localShot || distanceFromPlayer > 0.5f)) {
         const std::vector<MapBlock>& blocks = currentMap->getBlocks();
 
         // Use class-member tracking instead of statics so slot-reuse doesn't
@@ -1671,6 +1680,8 @@ void Game::spawnEnemy(const glm::vec3& position) {
             enemies[i].active = true;
             enemies[i].alive = true;
             enemies[i].yaw = 0.0f;
+            enemies[i].pitch = 0.0f;
+            enemies[i].weaponId = static_cast<uint8_t>(PISTOL);
             enemies[i].deathTimer = 0.0f;
             enemies[i].anim = humanoid::Anim{};
             activeEnemies++;
@@ -1805,6 +1816,16 @@ void Game::updateEnemies(float deltaTime) {
                 if (std::abs(vx) + std::abs(vz) > 0.01f) {
                     enemies[i].yaw = glm::degrees(std::atan2(vz, vx));
                 }
+                // Aim the held weapon at the player's chest so its barrel
+                // visibly points where the target is attacking.
+                const glm::vec3 eye = enemyPos + glm::vec3(0.0f, 1.4f, 0.0f);
+                const glm::vec3 target = playerPos + glm::vec3(0.0f, 1.1f, 0.0f);
+                const glm::vec3 look = target - eye;
+                const float lookLength = glm::length(look);
+                if (lookLength > 0.001f) {
+                    enemies[i].pitch = glm::degrees(
+                        std::asin(glm::clamp(look.y / lookLength, -1.0f, 1.0f)));
+                }
             }
             // Practice targets walk on the floor; the animation still reacts to
             // their own movement speed and direction.
@@ -1824,13 +1845,10 @@ void Game::updateEnemies(float deltaTime) {
 }
 
 bool Game::checkProjectilePlayerBody(Projectile& projectile) {
-    // Hits are resolved once, by the shooter's client, against the same body
-    // box and reported to the server. The victim must not apply a second copy
-    // locally: that made the victim die on its own while the server (and the
-    // other players) still saw a living player.
-    if (!networkClient || !networkClient->isConnected()) return false;
-
-    // Only check projectiles from other players (owner != 0 means remote player)
+    // Hits are resolved once, by the shooter's client (or the bot AI), and
+    // must not apply a second copy of the damage here. In singleplayer there
+    // is no network client, but bot rounds still need to visibly stop on the
+    // player's body instead of flying through and leaving a trail in the air.
     if (projectile.owner == 0) return false; // Skip own projectiles
 
     if (projectile.type == 1 || projectile.type == 2) {
@@ -2155,11 +2173,17 @@ void Game::renderRemotePlayers() {
                                     ? 0.0f
                                     : glm::clamp(remote.health / 100.0f, 0.0f, 1.0f);
         const uint8_t renderStance = remote.isDead ? 0 : remote.stance;
+        const glm::mat4 actorRoot =
+            humanoid::rootTransform(remote.renderPosition, remote.yaw);
         if (playerModel_ && remoteModelAnims[i].valid()) {
             posePlayerInstance(remoteModelAnims[i], remote.anim, renderStance);
             renderer.submitModel(playerModel_.get(), &remoteModelAnims[i],
-                                 humanoid::rootTransform(remote.renderPosition, remote.yaw),
-                                 color);
+                                 actorRoot, color);
+            // Show the weapon they actually carry, aimed along their view.
+            if (!remote.isDead) {
+                renderActorWeapon(actorRoot, remoteModelAnims[i], remote.weaponId,
+                                  remote.yaw, remote.pitch);
+            }
         } else {
             humanoid::render(renderer, remote.renderPosition, remote.yaw, color,
                              healthPct, remote.anim, remote.pitch, !remote.isDead,
@@ -2672,8 +2696,9 @@ void Game::updateLocalBots(float deltaTime) {
         deltaTime, playerPos, playerTeam & 1, playerAlive,
         [this](float damage) { damagePlayer(damage); },
         [this](const glm::vec3& origin, const glm::vec3& velocity, uint8_t type) {
-            // Visual only: the host already applied the hit. A non-zero owner
-            // makes the normal player-shot collision path ignore it.
+            // Visible tracer round. Damage is already applied by the bot AI,
+            // but the round still travels from the muzzle, collides with the
+            // player/map and stops there (see updateProjectiles).
             createProjectile(origin, velocity, 1.2f, 1u, static_cast<int>(type));
         });
 
@@ -2708,7 +2733,18 @@ void Game::updateLocalBots(float deltaTime) {
         remotePlayers[i].active   = true;
         remotePlayers[i].team     = view.team;
         remotePlayers[i].stance   = 0;   // bot AI never crouches or goes prone
+        remotePlayers[i].weaponId = view.weaponId;
+        // A fresh shot starts the firing pose/flash and plays the gunshot
+        // once per trigger (the AI reports every pellet, but the pose timer
+        // only resets once between bursts).
+        const bool newBotShot = view.shooting && remotePlayers[i].anim.shoot < 0.5f;
         if (view.shooting) remotePlayers[i].anim.shoot = 1.0f;
+        if (newBotShot) {
+            const char* sound = view.weaponId == 1 ? "shotgun_fire"
+                              : view.weaponId == 2 ? "sniper_fire"
+                                                   : "pistol_fire";
+            playSoundEffect(sound, view.position + glm::vec3(0.0f, 1.3f, 0.0f), 0.8f);
+        }
     }
 
     // The host is the scoreboard in single player.

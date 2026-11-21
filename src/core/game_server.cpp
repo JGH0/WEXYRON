@@ -146,6 +146,7 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
                     remotePlayers[i].active   = true;
                     remotePlayers[i].team     = packet.team;
                     remotePlayers[i].stance   = packet.stance <= 2 ? packet.stance : 0;
+                    remotePlayers[i].weaponId = packet.weaponId < 5 ? packet.weaponId : 0;
                     remotePlayers[i].stateSequence = packet.header.sequence;
                     // A health drop caused by anyone's shot flinches the body.
                     if (!isNew && packet.health < oldHealth - 0.5f) {
@@ -178,6 +179,7 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
                 remotePlayers[i].isDead         = false;
                 remotePlayers[i].team           = packet.team;
                 remotePlayers[i].stance         = 0;
+                remotePlayers[i].weaponId       = 0;
                 remotePlayers[i].stateSequence  = 0;
                 return;
             }
@@ -198,6 +200,7 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
                 remotePlayers[i].active         = true;
                 remotePlayers[i].team           = packet.team;
                 remotePlayers[i].stance         = 0;
+                remotePlayers[i].weaponId       = 0;
                 remotePlayers[i].stateSequence  = 0;
                 remotePlayers[i].anim           = humanoid::Anim{};
                 playerCount++; // Update player count
@@ -238,11 +241,23 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
                 packet.projectileType // Use the projectile type from the packet
             );
             // Show the owner firing: their next body frame raises both arms.
+            // A shotgun reports one packet per pellet; only the first one in a
+            // burst should restart the pose and play the shot sound.
             for (int i = 0; i < MAX_REMOTE_PLAYERS; ++i) {
-                if (remotePlayers[i].active && remotePlayers[i].id == packet.ownerId) {
-                    remotePlayers[i].anim.shoot = 1.0f;
-                    break;
+                if (!remotePlayers[i].active || remotePlayers[i].id != packet.ownerId) continue;
+                const bool newShot = remotePlayers[i].anim.shoot < 0.5f;
+                remotePlayers[i].anim.shoot = 1.0f;
+                if (newShot && (packet.projectileType == 0 ||
+                                packet.projectileType == 3 ||
+                                packet.projectileType == 4)) {
+                    const char* sound = packet.projectileType == 3 ? "shotgun_fire"
+                                      : packet.projectileType == 4 ? "sniper_fire"
+                                                                   : "pistol_fire";
+                    playSoundEffect(
+                        sound,
+                        glm::vec3(packet.posX, packet.posY, packet.posZ), 0.8f);
                 }
+                break;
             }
         }
     };

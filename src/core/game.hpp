@@ -661,6 +661,7 @@ private:
         // Gameplay specific
         bool gameplayGPressed  = false;
         bool gameplayPronePressed = false;
+        bool gameplayInspectPressed = false;
         bool gameplayWeaponPressed[5] = {false, false, false, false, false}; // indices 0-4
 
         InputState() {
@@ -695,6 +696,7 @@ private:
             shapeResetPressed = false;
             gameplayGPressed = false;
             gameplayPronePressed = false;
+            gameplayInspectPressed = false;
             for (int i = 0; i < 5; i++) gameplayWeaponPressed[i] = false;
         }
     } inp;
@@ -725,6 +727,7 @@ private:
         int scopeButton;  ///< mouse button for scoping (-1 when bound to a key)
         int weaponSlot[5];///< select pistol/shotgun/sniper/grenade/flashbang
         int grenade;
+        int inspect;      ///< play the weapon inspect animation
         int use;          ///< plant / defuse
         int unstuck;
     } keyBindings;
@@ -855,6 +858,8 @@ private:
         bool active;
         bool alive;
         float yaw = 0.0f;               ///< facing direction (camera convention)
+        float pitch = 0.0f;             ///< aim pitch (weapon points at the player)
+        uint8_t weaponId = 0;           ///< held weapon (WeaponType index)
         float deathTimer = 0.0f;        ///< > 0: dead but still collapsing on screen
         humanoid::Anim anim;            ///< walk / flinch / attack animation
     };
@@ -972,6 +977,11 @@ private:
     float weaponSwitch_ = 0.0f;      ///< 0..1 lower-the-gun switch animation
     float weaponSwayX_ = 0.0f;       ///< smoothed mouse-look sway
     float weaponSwayY_ = 0.0f;
+    /// Seconds left in the "inspect weapon" viewmodel animation (0 = idle).
+    /// Pressing the inspect binding starts it; shooting or switching weapons
+    /// cancels it so it never delays gameplay.
+    float weaponInspect_ = 0.0f;
+    static constexpr float kWeaponInspectDuration = 2.4f;
     float lastViewYaw_ = 0.0f;       ///< previous frame's look direction
     float lastViewPitch_ = 0.0f;
 
@@ -1085,6 +1095,7 @@ private:
         bool active;
         uint8_t team = 0; ///< server-assigned team (0 = Team A, 1 = Team B)
         uint8_t stance = 0; ///< 0 standing, 1 crouching, 2 prone
+        uint8_t weaponId = 0; ///< held weapon (WeaponType index), from the server
         uint32_t stateSequence = 0; ///< newest applied PlayerState sequence
         humanoid::Anim anim; ///< walk / air / flinch / shooting animation
     };
@@ -1125,6 +1136,7 @@ private:
     int playerLowerLegRNode_ = -1;
     int playerFootLNode_ = -1;
     int playerFootRNode_ = -1;
+    int playerHandRNode_ = -1;  ///< right hand (the held weapon is anchored here)
 
     /// Upright body box of a player at `feet` (feet = bottom centre).
     /// `height` defaults to the standing body; pass currentBodyHeight() for
@@ -1696,6 +1708,16 @@ private:
      * clips into walls and keeps a consistent size on screen.
      */
     void renderWeaponViewmodel();
+
+    /**
+     * @brief Draw the weapon held by another actor (remote player / bot /
+     *        practice enemy) at its right-hand bone.
+     *
+     * The weapon is oriented along the actor's yaw + pitch, so you can read
+     * where they are aiming from the barrel direction.
+     */
+    void renderActorWeapon(const glm::mat4& actorRoot, GltfInstance& actorPose,
+                           uint8_t weaponId, float yaw, float pitch);
 
     /// Advance weapon bob/sway/recoil and the weapon-switch animation.
     void updateWeaponViewmodel(float deltaTime);

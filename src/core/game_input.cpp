@@ -599,4 +599,15 @@ void Game::processGameInput(float deltaTime) {
     } else {
         inp.gameplayGPressed = false;
     }
+
+    // Inspect: play the weapon's inspection animation. Only the press edge
+    // starts it, and it is allowed to finish even while other keys are held.
+    if (bindingDown(keyBindings.inspect)) {
+        if (!inp.gameplayInspectPressed) {
+            inp.gameplayInspectPressed = true;
+            weaponInspect_ = kWeaponInspectDuration;
+        }
+    } else {
+        inp.gameplayInspectPressed = false;
+    }
 }

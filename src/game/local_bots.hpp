@@ -46,6 +46,7 @@ public:
         float health = 100.0f;
         bool isDead = false;
         bool shooting = false;      ///< fired this tick (viewmodel/anim hint)
+        uint8_t weaponId = 0;       ///< weapon being fired/held (0 pistol ...)
     };
 
     struct Runtime;

@@ -256,6 +256,7 @@ void Game::resetBindingsToDefaults() {
     gameSettings_.bindProne    = defaults.bindProne;
     gameSettings_.bindShoot    = defaults.bindShoot;
     gameSettings_.bindScope    = defaults.bindScope;
+    gameSettings_.bindInspect  = defaults.bindInspect;
     gameSettings_.bindWeapon1  = defaults.bindWeapon1;
     gameSettings_.bindWeapon2  = defaults.bindWeapon2;
     gameSettings_.bindWeapon3  = defaults.bindWeapon3;
@@ -787,6 +788,7 @@ void Game::applySettings() {
     keyBindings.weaponSlot[3] = gameSettings_.bindWeapon4;
     keyBindings.weaponSlot[4] = gameSettings_.bindWeapon5;
     keyBindings.grenade  = gameSettings_.bindGrenade;
+    keyBindings.inspect  = gameSettings_.bindInspect;
     keyBindings.use      = gameSettings_.bindUse;
     keyBindings.unstuck  = gameSettings_.bindUnstuck;
     keyBindings.menu     = gameSettings_.bindMenu;

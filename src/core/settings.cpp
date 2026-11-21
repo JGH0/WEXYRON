@@ -357,6 +357,8 @@ std::vector<SettingDef> makeGameSettingDefs(GameSettings& s) {
            "Fire the current weapon", &GameSettings::bindShoot);
     addKey("bind_scope", "SCOPE", "COMBAT",
            "Scope with the sniper (hold)", &GameSettings::bindScope);
+    addKey("bind_inspect", "INSPECT WEAPON", "COMBAT",
+           "Play the weapon inspect animation", &GameSettings::bindInspect);
     addKey("bind_weapon1", "WEAPON 1 (PISTOL)", "COMBAT",
            "Select the pistol", &GameSettings::bindWeapon1);
     addKey("bind_weapon2", "WEAPON 2 (SHOTGUN)", "COMBAT",

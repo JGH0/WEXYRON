@@ -279,15 +279,15 @@ void Game::render() {
                 } else if (projectiles[i].type == 3) {
                     // Shotgun pellet
                     model = glm::scale(model, glm::vec3(0.08f, 0.08f, 0.08f));
-                    renderer.drawCube(model, glm::vec3(1.0f, 0.5f, 0.0f)); // Orange for shotgun pellets
+                    renderer.drawCube(model, glm::vec3(1.0f, 0.5f, 0.0f));
                 } else if (projectiles[i].type == 4) {
-                    // Sniper round: small and pale blue, like a tracer.
+                    // Sniper round
                     model = glm::scale(model, glm::vec3(0.07f, 0.07f, 0.07f));
                     renderer.drawCube(model, glm::vec3(0.55f, 0.80f, 1.0f));
                 } else {
-                    // Pistol bullet
+                    // Pistol bullet: a compact round, not a streaking beam.
                     model = glm::scale(model, glm::vec3(0.1f, 0.1f, 0.1f));
-                    renderer.drawCube(model, glm::vec3(1.0f, 1.0f, 0.0f)); // Yellow for pistol bullets
+                    renderer.drawCube(model, glm::vec3(1.0f, 1.0f, 0.0f));
                 }
             }
         }
