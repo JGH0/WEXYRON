@@ -28,20 +28,28 @@
 #ifndef CUBE_ENGINE_GLTF_MODEL_HPP
 #define CUBE_ENGINE_GLTF_MODEL_HPP
 
-#include <glad/glad.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
-class Shader;
+/// Vertex layout of every glTF primitive (also the GPU vertex buffer layout).
+struct GltfVertex {
+    glm::vec3 position;
+    glm::vec3 normal;
+    glm::vec2 uv;
+    glm::vec4 color;
+    glm::uvec4 joints;
+    glm::vec4 weights;
+};
 
-/// One drawable primitive (a triangle list) with its own VAO/VBO/EBO.
+/// One drawable primitive (an indexed triangle list), kept on the CPU. Render
+/// backends upload it on first use (see GltfModel::gpuData()).
 struct GltfPrimitive {
-    GLuint vao = 0;
-    GLuint vbo = 0;
-    GLuint ebo = 0;
-    GLsizei indexCount = 0;
+    std::vector<GltfVertex> vertices;
+    std::vector<uint32_t> indices;
     int material = -1;
 };
 
@@ -54,13 +62,49 @@ struct GltfMaterial {
     glm::vec3 emissiveFactor{0.0f};
     float metallicFactor = 1.0f;
     float roughnessFactor = 1.0f;
-    GLuint baseColorTexture = 0;
-    GLuint emissiveTexture = 0;
+    int baseColorTexture = -1;  ///< index into GltfModel::images(), or -1
+    int emissiveTexture = -1;   ///< index into GltfModel::images(), or -1
     bool hasBaseColorTexture = false;
     bool hasEmissiveTexture = false;
     int alphaMode = 0;  ///< 0 = OPAQUE, 1 = MASK, 2 = BLEND
     float alphaCutoff = 0.5f;
     bool doubleSided = false;
+};
+
+/// Texture sampling, in API-neutral terms (glTF sampler semantics).
+enum class GltfWrap : uint8_t { Repeat, ClampToEdge, MirroredRepeat };
+enum class GltfFilter : uint8_t { Nearest, Linear };
+
+/// A decoded texture image (RGBA8) with its sampler.
+struct GltfImage {
+    int width = 0;
+    int height = 0;
+    std::vector<unsigned char> rgba;  ///< width * height * 4
+    GltfWrap wrapS = GltfWrap::Repeat;
+    GltfWrap wrapT = GltfWrap::Repeat;
+    GltfFilter minFilter = GltfFilter::Linear;
+    GltfFilter magFilter = GltfFilter::Linear;
+    bool mipmaps = true;                     ///< min filter samples mip levels
+    GltfFilter mipFilter = GltfFilter::Linear; ///< between mip levels
+};
+
+/// Backend-owned GPU copy of a model (buffers, textures). Created lazily by
+/// the render backend and released with the model, on the render thread.
+class GltfGpuData {
+public:
+    virtual ~GltfGpuData() = default;
+};
+
+/// Maximum skinning joints per mesh (shader bone palette size).
+constexpr int kGltfMaxBones = 32;
+
+/// One mesh node to draw for an instance: what the backend needs per node.
+struct GltfNodeDraw {
+    int mesh = -1;               ///< index into GltfModel::meshes()
+    bool skinned = false;
+    glm::mat4 model{1.0f};       ///< object -> world (skinned: the instance transform)
+    /// Bone palette (kGltfMaxBones entries) when skinned, empty otherwise.
+    std::vector<glm::mat4> bones;
 };
 
 struct GltfNode {
@@ -104,7 +148,8 @@ struct GltfAnimation {
  * @brief Shared, immutable model data (geometry, materials, clips, skeleton).
  *
  * Load one per asset and draw it through any number of GltfInstance objects.
- * The destructor releases the GL resources, so destroy it on the GL thread.
+ * The destructor releases the backend's GPU copy, so destroy it on the render
+ * thread.
  */
 class GltfModel {
 public:
@@ -131,10 +176,21 @@ public:
     /// @return node index by name (case-insensitive) or -1.
     int findNode(const std::string& name) const;
 
-    /// Internal: called by Renderer after the instance pose has been updated.
-    void draw(const class GltfInstance& instance, Shader& shader,
-              const glm::mat4& transform, const glm::vec3& tint,
-              const glm::mat4& viewProjection) const;
+    // ── Render backend access ───────────────────────────────────────────────
+    const std::vector<GltfMesh>& meshes() const { return meshes_; }
+    const std::vector<GltfMaterial>& materials() const { return materials_; }
+    const std::vector<GltfImage>& images() const { return images_; }
+    /// Material used by primitives without one.
+    static GltfMaterial defaultMaterial();
+
+    /// The mesh nodes of `instance` (posed by GltfInstance::update()) placed
+    /// with `transform`, in draw order, with their bone palettes.
+    void collectNodeDraws(const class GltfInstance& instance, const glm::mat4& transform,
+                          std::vector<GltfNodeDraw>& out) const;
+
+    /// Backend-owned GPU copy (nullptr until the backend first draws it).
+    GltfGpuData* gpuData() const { return gpu_.get(); }
+    void setGpuData(std::unique_ptr<GltfGpuData> data) const { gpu_ = std::move(data); }
 
 private:
     friend class GltfInstance;
@@ -150,7 +206,9 @@ private:
     std::vector<int> roots_;       ///< scene root nodes (topological roots)
     std::vector<int> order_;       ///< parents before children
     std::vector<int> meshNodes_;   ///< node indices that carry a mesh
-    std::vector<GLuint> textures_; ///< owned GL textures (for cleanup)
+    std::vector<GltfImage> images_;  ///< decoded textures (materials index these)
+    /// Backend GPU copy; mutable because uploading does not change the model.
+    mutable std::unique_ptr<GltfGpuData> gpu_;
 };
 
 /**

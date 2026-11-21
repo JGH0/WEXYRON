@@ -35,6 +35,134 @@ const float kUnitQuad[] = {
 
 constexpr int kQuadVertexCount = 6;
 
+// ---------------------------------------------------------------------------
+// glTF models: GPU copy created on first draw, released with the model
+// ---------------------------------------------------------------------------
+
+GLenum glWrap(GltfWrap wrap) {
+    switch (wrap) {
+        case GltfWrap::ClampToEdge: return GL_CLAMP_TO_EDGE;
+        case GltfWrap::MirroredRepeat: return GL_MIRRORED_REPEAT;
+        default: return GL_REPEAT;
+    }
+}
+
+GLenum glMinFilter(const GltfImage& image) {
+    const bool nearest = image.minFilter == GltfFilter::Nearest;
+    if (!image.mipmaps) return nearest ? GL_NEAREST : GL_LINEAR;
+    const bool mipNearest = image.mipFilter == GltfFilter::Nearest;
+    if (nearest) return mipNearest ? GL_NEAREST_MIPMAP_NEAREST : GL_NEAREST_MIPMAP_LINEAR;
+    return mipNearest ? GL_LINEAR_MIPMAP_NEAREST : GL_LINEAR_MIPMAP_LINEAR;
+}
+
+class GlGltfData final : public GltfGpuData {
+public:
+    struct Primitive {
+        GLuint vao = 0;
+        GLuint vbo = 0;
+        GLuint ebo = 0;
+        GLsizei indexCount = 0;
+    };
+    std::vector<std::vector<Primitive>> meshes;  ///< [mesh][primitive]
+    std::vector<GLuint> textures;                ///< one per GltfModel::images() entry
+
+    explicit GlGltfData(const GltfModel& model) {
+        textures.reserve(model.images().size());
+        for (const GltfImage& image : model.images()) textures.push_back(uploadImage(image));
+
+        meshes.resize(model.meshes().size());
+        for (std::size_t m = 0; m < model.meshes().size(); ++m) {
+            for (const GltfPrimitive& source : model.meshes()[m].primitives) {
+                meshes[m].push_back(uploadPrimitive(source));
+            }
+        }
+    }
+
+    ~GlGltfData() override {
+        for (const auto& mesh : meshes) {
+            for (const Primitive& primitive : mesh) {
+                if (primitive.vao) glDeleteVertexArrays(1, &primitive.vao);
+                if (primitive.vbo) glDeleteBuffers(1, &primitive.vbo);
+                if (primitive.ebo) glDeleteBuffers(1, &primitive.ebo);
+            }
+        }
+        for (GLuint texture : textures) {
+            if (texture) glDeleteTextures(1, &texture);
+        }
+    }
+
+    GLuint texture(int image) const {
+        return (image >= 0 && static_cast<std::size_t>(image) < textures.size())
+                   ? textures[static_cast<std::size_t>(image)] : 0;
+    }
+
+private:
+    static GLuint uploadImage(const GltfImage& image) {
+        if (image.width <= 0 || image.height <= 0 || image.rgba.empty()) return 0;
+        GLuint texture = 0;
+        glGenTextures(1, &texture);
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, image.width, image.height, 0, GL_RGBA,
+                     GL_UNSIGNED_BYTE, image.rgba.data());
+        glGenerateMipmap(GL_TEXTURE_2D);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, static_cast<GLint>(glWrap(image.wrapS)));
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, static_cast<GLint>(glWrap(image.wrapT)));
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, static_cast<GLint>(glMinFilter(image)));
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,
+                        image.magFilter == GltfFilter::Nearest ? GL_NEAREST : GL_LINEAR);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        return texture;
+    }
+
+    static Primitive uploadPrimitive(const GltfPrimitive& source) {
+        Primitive out;
+        out.indexCount = static_cast<GLsizei>(source.indices.size());
+        glGenVertexArrays(1, &out.vao);
+        glGenBuffers(1, &out.vbo);
+        glGenBuffers(1, &out.ebo);
+        glBindVertexArray(out.vao);
+        glBindBuffer(GL_ARRAY_BUFFER, out.vbo);
+        glBufferData(GL_ARRAY_BUFFER,
+                     static_cast<GLsizeiptr>(source.vertices.size() * sizeof(GltfVertex)),
+                     source.vertices.data(), GL_STATIC_DRAW);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, out.ebo);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+                     static_cast<GLsizeiptr>(source.indices.size() * sizeof(uint32_t)),
+                     source.indices.data(), GL_STATIC_DRAW);
+
+        const GLsizei stride = sizeof(GltfVertex);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void*)offsetof(GltfVertex, position));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, (void*)offsetof(GltfVertex, normal));
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, stride, (void*)offsetof(GltfVertex, uv));
+        glEnableVertexAttribArray(3);
+        glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, stride, (void*)offsetof(GltfVertex, color));
+        glEnableVertexAttribArray(4);
+        glVertexAttribIPointer(4, 4, GL_UNSIGNED_INT, stride, (void*)offsetof(GltfVertex, joints));
+        glEnableVertexAttribArray(5);
+        glVertexAttribPointer(5, 4, GL_FLOAT, GL_FALSE, stride, (void*)offsetof(GltfVertex, weights));
+
+        glBindVertexArray(0);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+        return out;
+    }
+};
+
+/// The model's GL copy, created on first use (and replaced if another
+/// backend's copy is attached).
+const GlGltfData& glGltfData(const GltfModel& model) {
+    auto* data = dynamic_cast<GlGltfData*>(model.gpuData());
+    if (!data) {
+        model.setGpuData(std::make_unique<GlGltfData>(model));
+        data = static_cast<GlGltfData*>(model.gpuData());
+    }
+    return *data;
+}
+
 class GlRenderBackend final : public IRenderBackend {
 public:
     ~GlRenderBackend() override {
@@ -64,6 +192,8 @@ private:
     void upload(BatchId id, const std::vector<BoxInstance>* instances, size_t first, size_t count);
     void draw(BatchId id, size_t count);
     void drawModels(const std::vector<ModelDraw>* draws, const glm::mat4& viewProjection);
+    void drawModel(const ModelDraw& draw, const glm::mat4& viewProjection);
+    std::vector<GltfNodeDraw> nodeDraws_;  ///< scratch, reused between models
     void drawUi(const FramePacket& frame);
     void bindBoxPipeline();
     void setFrameMatrix(const glm::mat4& vp);
@@ -275,10 +405,96 @@ void GlRenderBackend::drawModels(const std::vector<ModelDraw>* draws,
     if (draws) {
         for (const ModelDraw& d : *draws) {
             if (!d.model || !d.instance) continue;
-            d.model->draw(*d.instance, *gltfShader_, d.transform, d.tint, viewProjection);
+            drawModel(d, viewProjection);
         }
     }
     glBindVertexArray(0);
+}
+
+void GlRenderBackend::drawModel(const ModelDraw& d, const glm::mat4& viewProjection) {
+    const GltfModel& model = *d.model;
+    model.collectNodeDraws(*d.instance, d.transform, nodeDraws_);
+    if (!model.isLoaded()) return;
+    const GlGltfData& gpu = glGltfData(model);
+
+    Shader& shader = *gltfShader_;
+    shader.use();
+    shader.setMat4("uViewProjection", glm::value_ptr(viewProjection));
+    shader.setVec3("uTint", d.tint);
+    shader.setVec3("uLightDir", glm::normalize(glm::vec3(0.4f, 0.8f, 0.5f)));
+    shader.setVec3("uLightColor", glm::vec3(0.95f));
+    shader.setInt("uBaseColorTexture", 0);
+    shader.setInt("uEmissiveTexture", 1);
+
+    const glm::mat4 inverseViewProjection = glm::inverse(viewProjection);
+    const glm::vec4 camera = inverseViewProjection * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+    shader.setVec3("uCameraPos", camera.w != 0.0f ? glm::vec3(camera) / camera.w
+                                                  : glm::vec3(0.0f));
+
+    const GltfMaterial fallback = GltfModel::defaultMaterial();
+    const GLboolean cullingWasEnabled = glIsEnabled(GL_CULL_FACE);
+    GLboolean depthWriteWasEnabled = GL_TRUE;
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &depthWriteWasEnabled);
+
+    const std::vector<GltfMaterial>& materials = model.materials();
+    for (const GltfNodeDraw& node : nodeDraws_) {
+        if (node.skinned) {
+            shader.setMat4Array("uBones", glm::value_ptr(node.bones[0]), kGltfMaxBones);
+            shader.setInt("uHasSkin", 1);
+        } else {
+            shader.setInt("uHasSkin", 0);
+        }
+        shader.setMat4("uModel", glm::value_ptr(node.model));
+
+        const auto& primitives = model.meshes()[static_cast<std::size_t>(node.mesh)].primitives;
+        const auto& gpuPrimitives = gpu.meshes[static_cast<std::size_t>(node.mesh)];
+        for (std::size_t p = 0; p < primitives.size(); ++p) {
+            const int index = primitives[p].material;
+            const GltfMaterial& material =
+                (index >= 0 && static_cast<std::size_t>(index) < materials.size())
+                    ? materials[static_cast<std::size_t>(index)] : fallback;
+
+            shader.setVec4("uBaseColorFactor", material.baseColorFactor);
+            shader.setVec3("uEmissiveFactor", material.emissiveFactor);
+            shader.setFloat("uMetallic", material.metallicFactor);
+            shader.setFloat("uRoughness", material.roughnessFactor);
+            shader.setInt("uAlphaMode", material.alphaMode);
+            shader.setFloat("uAlphaCutoff", material.alphaCutoff);
+            shader.setInt("uHasBaseColorTexture", material.hasBaseColorTexture ? 1 : 0);
+            shader.setInt("uHasEmissiveTexture", material.hasEmissiveTexture ? 1 : 0);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, gpu.texture(material.baseColorTexture));
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, gpu.texture(material.emissiveTexture));
+            glActiveTexture(GL_TEXTURE0);
+
+            if (material.doubleSided) glDisable(GL_CULL_FACE);
+            else glEnable(GL_CULL_FACE);
+
+            if (material.alphaMode == 2) {
+                glEnable(GL_BLEND);
+                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                glDepthMask(GL_FALSE);
+            } else {
+                glDisable(GL_BLEND);
+                glDepthMask(GL_TRUE);
+            }
+
+            glBindVertexArray(gpuPrimitives[p].vao);
+            glDrawElements(GL_TRIANGLES, gpuPrimitives[p].indexCount, GL_UNSIGNED_INT, nullptr);
+        }
+    }
+    glBindVertexArray(0);
+
+    // Restore the state the box pass expects.
+    if (cullingWasEnabled) glEnable(GL_CULL_FACE);
+    else glDisable(GL_CULL_FACE);
+    glDepthMask(depthWriteWasEnabled);
+    glDisable(GL_BLEND);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, 0);
 }
 
 void GlRenderBackend::drawUi(const FramePacket& frame) {

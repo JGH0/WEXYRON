@@ -4,7 +4,6 @@
  */
 
 #include "engine/gltf_model.hpp"
-#include "engine/shader.hpp"
 
 #include <stb_image.h>
 
@@ -31,7 +30,7 @@ namespace {
 
 namespace fs = std::filesystem;
 
-constexpr GLuint kMaxBones = 32;
+constexpr std::size_t kMaxBones = static_cast<std::size_t>(kGltfMaxBones);
 
 // ---------------------------------------------------------------------------
 // Bytes, base64 and data URIs
@@ -472,32 +471,28 @@ bool readAccessorUints(const Doc& doc, int accessorIndex,
 // Textures / images
 // ---------------------------------------------------------------------------
 
-GLenum glWrap(int wrap) {
+GltfWrap wrapMode(int wrap) {
     switch (wrap) {
-        case 33071: return GL_CLAMP_TO_EDGE;
-        case 33648: return GL_MIRRORED_REPEAT;
-        default: return GL_REPEAT;
+        case 33071: return GltfWrap::ClampToEdge;
+        case 33648: return GltfWrap::MirroredRepeat;
+        default: return GltfWrap::Repeat;
     }
 }
 
-GLenum glMinFilter(int filter) {
+/// glTF minFilter -> (filter, uses mipmaps, filter between mip levels).
+void minFilterMode(int filter, GltfImage& image) {
     switch (filter) {
-        case 9728: return GL_NEAREST;
-        case 9729: return GL_LINEAR;
-        case 9984: return GL_NEAREST_MIPMAP_NEAREST;
-        case 9985: return GL_LINEAR_MIPMAP_NEAREST;
-        case 9986: return GL_NEAREST_MIPMAP_LINEAR;
-        case 9987: return GL_LINEAR_MIPMAP_LINEAR;
-        default: return GL_LINEAR_MIPMAP_LINEAR;
+        case 9728: image.minFilter = GltfFilter::Nearest; image.mipmaps = false; break;
+        case 9729: image.minFilter = GltfFilter::Linear;  image.mipmaps = false; break;
+        case 9984: image.minFilter = GltfFilter::Nearest; image.mipFilter = GltfFilter::Nearest; break;
+        case 9985: image.minFilter = GltfFilter::Linear;  image.mipFilter = GltfFilter::Nearest; break;
+        case 9986: image.minFilter = GltfFilter::Nearest; image.mipFilter = GltfFilter::Linear; break;
+        default:   image.minFilter = GltfFilter::Linear;  image.mipFilter = GltfFilter::Linear; break;
     }
 }
 
-GLenum glMagFilter(int filter) {
-    switch (filter) {
-        case 9728: return GL_NEAREST;
-        case 9729: return GL_LINEAR;
-        default: return GL_LINEAR;
-    }
+GltfFilter magFilterMode(int filter) {
+    return filter == 9728 ? GltfFilter::Nearest : GltfFilter::Linear;
 }
 
 bool imageBytes(const Doc& doc, const gltfjson::Value& image,
@@ -518,64 +513,53 @@ bool imageBytes(const Doc& doc, const gltfjson::Value& image,
     return readFileBytes((fs::path(doc.baseDir) / uri).string(), out);
 }
 
-GLuint createTexture(const std::vector<unsigned char>& bytes,
-                     GLenum wrapS, GLenum wrapT, GLenum minFilter, GLenum magFilter) {
-    if (bytes.empty()) return 0;
+bool decodeImage(const std::vector<unsigned char>& bytes, GltfImage& image) {
+    if (bytes.empty()) return false;
     int width = 0, height = 0, channels = 0;
     stbi_uc* pixels = stbi_load_from_memory(bytes.data(), static_cast<int>(bytes.size()),
                                             &width, &height, &channels, 4);
     if (!pixels || width <= 0 || height <= 0) {
         if (pixels) stbi_image_free(pixels);
-        return 0;
+        return false;
     }
-
-    GLuint texture = 0;
-    glGenTextures(1, &texture);
-    glBindTexture(GL_TEXTURE_2D, texture);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-    glGenerateMipmap(GL_TEXTURE_2D);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, static_cast<GLint>(wrapS));
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, static_cast<GLint>(wrapT));
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, static_cast<GLint>(minFilter));
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, static_cast<GLint>(magFilter));
-    glBindTexture(GL_TEXTURE_2D, 0);
-
+    image.width = width;
+    image.height = height;
+    image.rgba.assign(pixels, pixels + static_cast<std::size_t>(width) * height * 4);
     stbi_image_free(pixels);
-    return texture;
+    return true;
 }
 
-GLuint loadTexture(const Doc& doc, int textureIndex,
-                   std::vector<GLuint>& ownedTextures, std::string& error) {
-    if (textureIndex < 0) return 0;
+/// Decode texture `textureIndex` into `images`; returns its index or -1.
+int loadTexture(const Doc& doc, int textureIndex,
+                std::vector<GltfImage>& images, std::string& error) {
+    if (textureIndex < 0) return -1;
     const gltfjson::Value& textures = doc.root["textures"];
-    if (static_cast<std::size_t>(textureIndex) >= textures.size()) return 0;
+    if (static_cast<std::size_t>(textureIndex) >= textures.size()) return -1;
     const gltfjson::Value& texture = textures.at(static_cast<std::size_t>(textureIndex));
 
     const int imageIndex = texture["source"].asInt(-1);
-    const gltfjson::Value& images = doc.root["images"];
-    if (imageIndex < 0 || static_cast<std::size_t>(imageIndex) >= images.size()) return 0;
+    const gltfjson::Value& imageValues = doc.root["images"];
+    if (imageIndex < 0 || static_cast<std::size_t>(imageIndex) >= imageValues.size()) return -1;
 
     std::vector<unsigned char> bytes;
-    if (!imageBytes(doc, images.at(static_cast<std::size_t>(imageIndex)), bytes, error)) {
-        return 0;
+    if (!imageBytes(doc, imageValues.at(static_cast<std::size_t>(imageIndex)), bytes, error)) {
+        return -1;
     }
 
-    GLenum wrapS = GL_REPEAT, wrapT = GL_REPEAT;
-    GLenum minFilter = GL_LINEAR_MIPMAP_LINEAR, magFilter = GL_LINEAR;
+    GltfImage image;  // defaults: repeat, linear, linear mipmaps
     const int samplerIndex = texture["sampler"].asInt(-1);
     const gltfjson::Value& samplers = doc.root["samplers"];
     if (samplerIndex >= 0 && static_cast<std::size_t>(samplerIndex) < samplers.size()) {
         const gltfjson::Value& sampler = samplers.at(static_cast<std::size_t>(samplerIndex));
-        wrapS = glWrap(sampler["wrapS"].asInt(10497));
-        wrapT = glWrap(sampler["wrapT"].asInt(10497));
-        minFilter = glMinFilter(sampler["minFilter"].asInt(9987));
-        magFilter = glMagFilter(sampler["magFilter"].asInt(9729));
+        image.wrapS = wrapMode(sampler["wrapS"].asInt(10497));
+        image.wrapT = wrapMode(sampler["wrapT"].asInt(10497));
+        minFilterMode(sampler["minFilter"].asInt(9987), image);
+        image.magFilter = magFilterMode(sampler["magFilter"].asInt(9729));
     }
 
-    const GLuint id = createTexture(bytes, wrapS, wrapT, minFilter, magFilter);
-    if (id) ownedTextures.push_back(id);
-    return id;
+    if (!decodeImage(bytes, image)) return -1;
+    images.push_back(std::move(image));
+    return static_cast<int>(images.size()) - 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -680,19 +664,6 @@ glm::vec4 sampleValues(const GltfAnimationSampler& sampler, float time,
 }
 
 // ---------------------------------------------------------------------------
-// GPU vertex layout
-// ---------------------------------------------------------------------------
-
-struct GpuVertex {
-    glm::vec3 position;
-    glm::vec3 normal;
-    glm::vec2 uv;
-    glm::vec4 color;
-    glm::uvec4 joints;
-    glm::vec4 weights;
-};
-
-// ---------------------------------------------------------------------------
 // Loader
 // ---------------------------------------------------------------------------
 
@@ -705,7 +676,7 @@ struct Loader {
     std::vector<int>& roots;
     std::vector<int>& order;
     std::vector<int>& meshNodes;
-    std::vector<GLuint>& textures;
+    std::vector<GltfImage>& images;
 
     bool buildMaterials(const Doc& doc, std::string& error) {
         const gltfjson::Value& array = doc.root["materials"];
@@ -724,8 +695,8 @@ struct Loader {
             material.metallicFactor = pbr["metallicFactor"].asFloat(1.0f);
             material.roughnessFactor = pbr["roughnessFactor"].asFloat(1.0f);
             material.baseColorTexture = loadTexture(doc, pbr["baseColorTexture"]["index"].asInt(-1),
-                                                    textures, error);
-            material.hasBaseColorTexture = material.baseColorTexture != 0;
+                                                    images, error);
+            material.hasBaseColorTexture = material.baseColorTexture >= 0;
 
             const gltfjson::Value& emissive = source["emissiveFactor"];
             if (emissive.size() >= 3) {
@@ -734,8 +705,8 @@ struct Loader {
                                                     emissive.at(2).asFloat(0.0f));
             }
             material.emissiveTexture = loadTexture(doc, source["emissiveTexture"]["index"].asInt(-1),
-                                                   textures, error);
-            material.hasEmissiveTexture = material.emissiveTexture != 0;
+                                                   images, error);
+            material.hasEmissiveTexture = material.emissiveTexture >= 0;
 
             const std::string alpha = lowerCopy(source["alphaMode"].asStringOr("OPAQUE"));
             material.alphaMode = alpha == "MASK" ? 1 : (alpha == "BLEND" ? 2 : 0);
@@ -802,9 +773,9 @@ struct Loader {
                                weightComponents, weightCount, error);
             error.clear();
 
-            std::vector<GpuVertex> vertices(vertexCount);
+            std::vector<GltfVertex> vertices(vertexCount);
             for (std::size_t v = 0; v < vertexCount; ++v) {
-                GpuVertex& out = vertices[v];
+                GltfVertex& out = vertices[v];
                 out.position = glm::vec3(positions[v * 3 + 0], positions[v * 3 + 1],
                                          positions[v * 3 + 2]);
                 out.normal = (normalCount == vertexCount && normalComponents >= 3)
@@ -866,41 +837,10 @@ struct Loader {
             }
 
             GltfPrimitive out;
-            out.indexCount = static_cast<GLsizei>(indices.size());
             out.material = primitive["material"].asInt(-1);
-
-            glGenVertexArrays(1, &out.vao);
-            glGenBuffers(1, &out.vbo);
-            glGenBuffers(1, &out.ebo);
-            glBindVertexArray(out.vao);
-            glBindBuffer(GL_ARRAY_BUFFER, out.vbo);
-            glBufferData(GL_ARRAY_BUFFER,
-                         static_cast<GLsizeiptr>(vertices.size() * sizeof(GpuVertex)),
-                         vertices.data(), GL_STATIC_DRAW);
-            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, out.ebo);
-            glBufferData(GL_ELEMENT_ARRAY_BUFFER,
-                         static_cast<GLsizeiptr>(indices.size() * sizeof(uint32_t)),
-                         indices.data(), GL_STATIC_DRAW);
-
-            const GLsizei stride = sizeof(GpuVertex);
-            glEnableVertexAttribArray(0);
-            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void*)offsetof(GpuVertex, position));
-            glEnableVertexAttribArray(1);
-            glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, (void*)offsetof(GpuVertex, normal));
-            glEnableVertexAttribArray(2);
-            glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, stride, (void*)offsetof(GpuVertex, uv));
-            glEnableVertexAttribArray(3);
-            glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, stride, (void*)offsetof(GpuVertex, color));
-            glEnableVertexAttribArray(4);
-            glVertexAttribIPointer(4, 4, GL_UNSIGNED_INT, stride, (void*)offsetof(GpuVertex, joints));
-            glEnableVertexAttribArray(5);
-            glVertexAttribPointer(5, 4, GL_FLOAT, GL_FALSE, stride, (void*)offsetof(GpuVertex, weights));
-
-            glBindVertexArray(0);
-            glBindBuffer(GL_ARRAY_BUFFER, 0);
-            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
-
-            mesh.primitives.push_back(out);
+            out.vertices = std::move(vertices);
+            out.indices = std::move(indices);
+            mesh.primitives.push_back(std::move(out));
         }
         return true;
     }
@@ -1117,35 +1057,6 @@ struct Loader {
     }
 };
 
-// ---------------------------------------------------------------------------
-// Drawing
-// ---------------------------------------------------------------------------
-
-void setMaterialUniforms(Shader& shader, const GltfMaterial& material) {
-    shader.setVec4("uBaseColorFactor", material.baseColorFactor);
-    shader.setVec3("uEmissiveFactor", material.emissiveFactor);
-    shader.setFloat("uMetallic", material.metallicFactor);
-    shader.setFloat("uRoughness", material.roughnessFactor);
-    shader.setInt("uAlphaMode", material.alphaMode);
-    shader.setFloat("uAlphaCutoff", material.alphaCutoff);
-    shader.setInt("uHasBaseColorTexture", material.hasBaseColorTexture ? 1 : 0);
-    shader.setInt("uHasEmissiveTexture", material.hasEmissiveTexture ? 1 : 0);
-
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, material.baseColorTexture);
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, material.emissiveTexture);
-    glActiveTexture(GL_TEXTURE0);
-}
-
-GltfMaterial defaultMaterial() {
-    GltfMaterial material;
-    material.baseColorFactor = glm::vec4(1.0f);
-    material.metallicFactor = 0.0f;
-    material.roughnessFactor = 0.85f;
-    return material;
-}
-
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -1154,17 +1065,15 @@ GltfMaterial defaultMaterial() {
 
 GltfModel::GltfModel() = default;
 
-GltfModel::~GltfModel() {
-    for (const GltfMesh& mesh : meshes_) {
-        for (const GltfPrimitive& primitive : mesh.primitives) {
-            if (primitive.vao) glDeleteVertexArrays(1, &primitive.vao);
-            if (primitive.vbo) glDeleteBuffers(1, &primitive.vbo);
-            if (primitive.ebo) glDeleteBuffers(1, &primitive.ebo);
-        }
-    }
-    if (!textures_.empty()) {
-        glDeleteTextures(static_cast<GLsizei>(textures_.size()), textures_.data());
-    }
+// The backend's GPU copy (gpu_) is released by its own destructor.
+GltfModel::~GltfModel() = default;
+
+GltfMaterial GltfModel::defaultMaterial() {
+    GltfMaterial material;
+    material.baseColorFactor = glm::vec4(1.0f);
+    material.metallicFactor = 0.0f;
+    material.roughnessFactor = 0.85f;
+    return material;
 }
 
 bool GltfModel::load(const std::string& path) {
@@ -1175,7 +1084,7 @@ bool GltfModel::load(const std::string& path) {
     if (!parseGltfFile(path, doc, error_)) return false;
 
     Loader loader{meshes_, materials_, nodes_, skins_, animations_,
-                  roots_, order_, meshNodes_, textures_};
+                  roots_, order_, meshNodes_, images_};
     if (!loader.buildMaterials(doc, error_)) return false;
     if (!loader.buildMeshes(doc, error_)) return false;
     loader.buildNodes(doc);
@@ -1213,91 +1122,34 @@ int GltfModel::findNode(const std::string& name) const {
     return -1;
 }
 
-void GltfModel::draw(const GltfInstance& instance, Shader& shader,
-                     const glm::mat4& transform, const glm::vec3& tint,
-                     const glm::mat4& viewProjection) const {
+void GltfModel::collectNodeDraws(const GltfInstance& instance, const glm::mat4& transform,
+                                 std::vector<GltfNodeDraw>& out) const {
+    out.clear();
     if (!loaded_ || instance.model_ != this) return;
-
-    shader.use();
-    shader.setMat4("uViewProjection", glm::value_ptr(viewProjection));
-    shader.setVec3("uTint", tint);
-    shader.setVec3("uLightDir", glm::normalize(glm::vec3(0.4f, 0.8f, 0.5f)));
-    shader.setVec3("uLightColor", glm::vec3(0.95f));
-    shader.setInt("uBaseColorTexture", 0);
-    shader.setInt("uEmissiveTexture", 1);
-
-    const glm::mat4 inverseViewProjection = glm::inverse(viewProjection);
-    const glm::vec4 camera = inverseViewProjection * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
-    shader.setVec3("uCameraPos", camera.w != 0.0f ? glm::vec3(camera) / camera.w
-                                                  : glm::vec3(0.0f));
-
-    const GltfMaterial fallback = defaultMaterial();
-    const GLboolean cullingWasEnabled = glIsEnabled(GL_CULL_FACE);
-    GLboolean depthWriteWasEnabled = GL_TRUE;
-    glGetBooleanv(GL_DEPTH_WRITEMASK, &depthWriteWasEnabled);
 
     for (int nodeIndex : meshNodes_) {
         const GltfNode& node = nodes_[static_cast<std::size_t>(nodeIndex)];
         if (node.mesh < 0 || static_cast<std::size_t>(node.mesh) >= meshes_.size()) continue;
-        const GltfMesh& mesh = meshes_[static_cast<std::size_t>(node.mesh)];
 
-        const bool skinned = node.skin >= 0 &&
-                             static_cast<std::size_t>(node.skin) < skins_.size();
-        if (skinned) {
+        GltfNodeDraw draw;
+        draw.mesh = node.mesh;
+        draw.skinned = node.skin >= 0 && static_cast<std::size_t>(node.skin) < skins_.size();
+        if (draw.skinned) {
             const GltfSkin& skin = skins_[static_cast<std::size_t>(node.skin)];
             const glm::mat4 meshInverse = glm::inverse(instance.globalTransform(nodeIndex));
-            std::vector<glm::mat4> bones(kMaxBones, glm::mat4(1.0f));
+            draw.bones.assign(kMaxBones, glm::mat4(1.0f));
             const std::size_t count = std::min<std::size_t>(skin.joints.size(), kMaxBones);
             for (std::size_t j = 0; j < count; ++j) {
                 const int joint = skin.joints[j];
-                bones[j] = meshInverse * instance.globalTransform(joint) *
-                           skin.inverseBindMatrices[j];
+                draw.bones[j] = meshInverse * instance.globalTransform(joint) *
+                                skin.inverseBindMatrices[j];
             }
-            shader.setMat4Array("uBones", glm::value_ptr(bones[0]), static_cast<int>(kMaxBones));
-            shader.setInt("uHasSkin", 1);
-            shader.setMat4("uModel", glm::value_ptr(transform));
+            draw.model = transform;
         } else {
-            shader.setInt("uHasSkin", 0);
-            const glm::mat4 model = transform * instance.globalTransform(nodeIndex);
-            shader.setMat4("uModel", glm::value_ptr(model));
+            draw.model = transform * instance.globalTransform(nodeIndex);
         }
-
-        for (const GltfPrimitive& primitive : mesh.primitives) {
-            const GltfMaterial& material =
-                (primitive.material >= 0 &&
-                 static_cast<std::size_t>(primitive.material) < materials_.size())
-                    ? materials_[static_cast<std::size_t>(primitive.material)]
-                    : fallback;
-
-            setMaterialUniforms(shader, material);
-
-            if (material.doubleSided) glDisable(GL_CULL_FACE);
-            else glEnable(GL_CULL_FACE);
-
-            if (material.alphaMode == 2) {
-                glEnable(GL_BLEND);
-                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-                glDepthMask(GL_FALSE);
-            } else {
-                glDisable(GL_BLEND);
-                glDepthMask(GL_TRUE);
-            }
-
-            glBindVertexArray(primitive.vao);
-            glDrawElements(GL_TRIANGLES, primitive.indexCount, GL_UNSIGNED_INT, nullptr);
-        }
+        out.push_back(std::move(draw));
     }
-    glBindVertexArray(0);
-
-    // Restore the state the box pass expects.
-    if (cullingWasEnabled) glEnable(GL_CULL_FACE);
-    else glDisable(GL_CULL_FACE);
-    glDepthMask(depthWriteWasEnabled);
-    glDisable(GL_BLEND);
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, 0);
 }
 
 // ---------------------------------------------------------------------------
