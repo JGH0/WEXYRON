@@ -241,6 +241,17 @@ public:
     bool debugStartMapForTest(const std::string& mapFile);
     /// Step real gameplay frames without input, with the current map loaded.
     void debugStepForTest(int frames, float dt);
+    /// Put the camera at a fixed eye position / yaw / pitch (degrees) so a
+    /// rendered frame is reproducible (render capture / backend parity tests).
+    void debugSetViewForTest(const glm::vec3& eye, float yawDeg, float pitchDeg);
+    /// The live camera (read-only, for tests).
+    const Camera& debugCamera() const { return camera; }
+    /// Start the single-player bots (default setup) on the map started with
+    /// debugStartMapForTest, so tests also draw skinned glTF bodies.
+    void debugStartLocalBotsForTest(const std::string& mapFile) {
+        activeMapFile_ = mapFile;
+        startLocalBots();
+    }
     /// Press the movement/jump keys for `frames` frames (real input path).
     void debugStepWithInputForTest(int frames, float dt, float forward, float strafe);
     /// Player feet position, velocity and on-ground flag.

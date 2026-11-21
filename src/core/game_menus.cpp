@@ -1061,6 +1061,13 @@ void Game::debugStepForTest(int frames, float dt) {
     }
 }
 
+void Game::debugSetViewForTest(const glm::vec3& eye, float yawDeg, float pitchDeg) {
+    camera.Position = eye;
+    camera.Yaw = yawDeg;
+    camera.Pitch = pitchDeg;
+    camera.updateCameraVectors();
+}
+
 void Game::debugStepWithInputForTest(int frames, float dt, float forward, float strafe) {
     // Same convention as processGameInput: horizontal velocity is set from
     // the keys each frame, then the real physics (and everything else) runs.
