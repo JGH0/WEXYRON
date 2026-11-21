@@ -3,7 +3,8 @@
  * @brief Umbrella header for the reusable Cube Engine library.
  *
  * The engine contains only game-agnostic code:
- *   - rendering: Renderer, Shader, Texture, Mesh
+ *   - rendering: Renderer (+ IRenderBackend), window creation, glTF models,
+ *     Shader (GL backend), Texture (decoded images)
  *   - scene/math: Camera
  *   - world: Map, MapLoader
  *   - utilities: ThreadPool, FontAtlas
@@ -23,7 +24,6 @@
 #include "engine/gltf_model.hpp"
 #include "engine/map.hpp"
 #include "engine/map_loader.hpp"
-#include "engine/mesh.hpp"
 #include "engine/render_backend.hpp"
 #include "engine/render_window.hpp"
 #include "engine/renderer.hpp"

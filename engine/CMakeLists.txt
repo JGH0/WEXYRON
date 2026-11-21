@@ -10,7 +10,6 @@ add_library(cube_engine STATIC
     src/gltf_model.cpp
     src/map.cpp
     src/map_loader.cpp
-    src/mesh.cpp
     src/renderer.cpp
     src/render_window.cpp
     src/backends/gl/gl_backend.cpp

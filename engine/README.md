@@ -19,7 +19,8 @@ engine/
 │   ├── gltf_model.hpp
 │   ├── map.hpp
 │   ├── map_loader.hpp
-│   ├── mesh.hpp
+│   ├── render_backend.hpp   API-neutral renderer <-> backend interface
+│   ├── render_window.hpp    window creation per graphics API
 │   ├── renderer.hpp
 │   ├── shader.hpp
 │   ├── texture.hpp
@@ -79,9 +80,8 @@ CUBE_MENU_TEST="menu:main;dump" xvfb-run -a ./build/bin/game
 - `Map` still contains spawn-point and bomb-site data used by the game. They are
   plain data structures, not game logic. A future engine version can split
   them into a game-side metadata layer.
-- `Mesh` is included. `Model` remains in `src/core/` because it requires Assimp,
-  which is not part of the current build. It is optional and can move into the
-  engine once Assimp is a declared dependency.
+- glTF (`gltf_model.hpp`) is the only model format. The old Assimp-based
+  `Model`/`Mesh` loader was never part of the build and has been removed.
 - The earlier `src/engine/` prototype has been removed. The production engine
   is this directory.
 
@@ -107,7 +107,6 @@ Stayed in the game:
 | UI / HUD / menus | `src/ui/*`, `src/core/game_hud.cpp`, `src/core/game_menus.cpp` |
 | Game settings | `src/core/settings.*` |
 | Game entity glue | `src/core/humanoid.hpp`, `src/core/game_audio.cpp` |
-| Optional model loader | `src/core/model.*` (requires Assimp) |
 
 Build-system changes:
 

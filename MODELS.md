@@ -5,8 +5,8 @@ models. The runtime loader is part of the engine (`engine/include/engine/gltf_mo
 and has no external dependencies: it reads the JSON/binary glTF directly and
 uses the stb_image already in the project.
 
-> The old Assimp/OBJ loader in `src/core/model.cpp` is **legacy and not part of
-> the build**. Use the glTF path below.
+> The old Assimp/OBJ loader (`src/core/model.cpp`) was never part of the build
+> and has been removed. glTF is the only model path.
 
 ## Assets
 
