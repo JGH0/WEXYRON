@@ -1,6 +1,6 @@
 /**
  * @file renderer.hpp
- * @brief Batched (instanced) OpenGL renderer for the game
+ * @brief Batched (instanced) renderer frontend for the game
  * @author OpenGL Game Developer
  * @date 2025
  */
@@ -8,16 +8,16 @@
 #ifndef RENDERER_HPP
 #define RENDERER_HPP
 
-#include <glad/glad.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <string>
 #include <vector>
+#include <memory>
 #include <utility>
 #include <cstdint>
 #include <cstddef>
-#include "shader.hpp"
 #include "font_atlas.hpp"
+#include "render_backend.hpp"
 
 class Map;
 class Texture;
@@ -46,15 +46,23 @@ enum class BlendMode : uint8_t {
  *
  * GL state (blend, depth) is switched at most a few times per frame: all
  * opaque geometry is queued first, then alpha-blended, then overlays.
+ *
+ * The Renderer is API-neutral: it only builds CPU-side batches. endFrame()
+ * hands them to an IRenderBackend (render_backend.hpp), which owns every GPU
+ * object; OpenGL is the default backend.
  */
 class Renderer {
 public:
     Renderer();
     ~Renderer();
 
-    /// Create shaders, cube geometry, instance buffers and the texture array.
-    /// Must be called on the GL thread with a current context.
+    /// Create the backend's pipelines, buffers and the texture array. Without
+    /// an explicit backend the OpenGL one is used (needs a current context).
     void init();
+    /// Use `backend` instead of the default OpenGL backend. Call before init().
+    void setBackend(std::unique_ptr<IRenderBackend> backend);
+    /// The active backend (nullptr before init()).
+    IRenderBackend* backend() const { return backend_.get(); }
 
     /// Set the viewport in pixels.
     void setViewport(int x, int y, int width, int height);
@@ -199,40 +207,11 @@ public:
     void shutdown();
 
 private:
-    /// One quad vertex-shader instance: a face of a box (or a UI quad).
-    struct InstanceGPU {
-        glm::vec3 offset;   ///< face centre
-        glm::vec3 right;    ///< half-extent along screen x
-        glm::vec3 up;       ///< half-extent along screen y
-        glm::vec3 normal;   ///< outward face normal (drives shading)
-        glm::vec4 color;    ///< rgb + alpha
-        glm::vec4 uv;       ///< tile u0, v0, u1, v1
-        glm::vec4 tint;     ///< rgb tint for textured instances
-        glm::vec4 atlas;    ///< x = array layer, y = textured flag
-    };
-    // 12*4 floats for offset/right/up/normal, then colour, uv, tint, atlas.
-    static_assert(sizeof(InstanceGPU) == 112, "instance layout must match the vertex attributes");
-    static_assert(offsetof(InstanceGPU, color) == 48, "color attribute offset");
-    static_assert(offsetof(InstanceGPU, uv) == 64, "uv attribute offset");
-    static_assert(offsetof(InstanceGPU, tint) == 80, "tint attribute offset");
-    static_assert(offsetof(InstanceGPU, atlas) == 96, "atlas attribute offset");
+    using InstanceGPU = BoxInstance;
 
-    /**
-     * @brief One instanced draw batch.
-     *
-     * The first `visible` instances are the ones actually drawn. Instances
-     * that land inside a UI clear rect (see clearRect) are moved to the tail,
-     * so the GPU can draw [0, visible) with a single glDrawArraysInstanced.
-     */
+    /// CPU side of one instanced draw stream.
     struct Batch {
         std::vector<InstanceGPU> instances;
-        unsigned int vao = 0;
-        unsigned int vbo = 0;
-        size_t capacity = 0;   ///< instances the VBO can hold
-        size_t uploaded = 0;   ///< instances currently in the VBO
-        /// The CPU copy changed and must be re-sent before the next draw.
-        bool needsUpload = false;
-        bool dirty = true;     ///< full (re)allocation needed before drawing
     };
 
     /// One UI element in submission (painter's) order. UI is composited by
@@ -249,36 +228,12 @@ private:
         WORLD_OPAQUE = 0,
         WORLD_ALPHA,
         WORLD_VIEWMODEL, ///< held weapon, drawn after the world into cleared depth
-        UI_SCRATCH,      ///< rebuilt per UI slot in drawUi()
+        UI_SCRATCH,      ///< UI submissions (collected in uiItems_)
         BATCH_COUNT
     };
 
-    void initBuffers();
-    /// Create/refresh the standalone glyph atlas texture (nearest, 1:1).
-    void uploadFontAtlas();
-    void uploadBatch(BatchId id);
-    void drawBatch(BatchId id);
-    /// Composite the queued UI elements in submission order (see UiItem).
-    void drawUi();
-
-    /// Restore the instanced box program and its texture-unit bindings after a
-    /// glTF pass (the two paths use different shaders and samplers).
-    void bindBoxPipeline();
-
-    /// One queued glTF draw. `instance` holds the evaluated skeleton pose.
-    struct ModelDraw {
-        GltfModel* model = nullptr;
-        GltfInstance* instance = nullptr;
-        glm::mat4 transform{1.0f};
-        glm::vec3 tint{1.0f};
-    };
-    void drawModels(const std::vector<ModelDraw>& draws, const glm::mat4& viewProjection);
-
-    /// Whether a UI instance is completely inside UI-rect `r`.
-    bool instanceInsideRect(const InstanceGPU& inst, const glm::mat4& invView,
-                            const glm::mat4& invProj,
-                            float x0, float y0, float x1, float y1) const;
-    void applyBlendState(BlendMode mode);
+    /// Order the queued UI elements into draw ranges (see UiItem).
+    void buildUiRanges();
     void pushInstance(BatchId id, const InstanceGPU& inst);
 
     /// Flat, untextured UI quad (mode 0 in the fragment shader).
@@ -299,7 +254,6 @@ public:
     // ── Legacy API (kept so existing call sites still compile) ───────────────
     // These forward to the batched path; new code should use submit*().
     void drawCube(const glm::mat4& model, const glm::vec3& color);
-    void drawTexturedCube(const glm::mat4& model, Texture* texture);
     /// Screen-space rectangle from a translate+scale model matrix. `model`'s
     /// scale is the quad's full size (matching the original per-quad renderer).
     void drawColoredQuad(const glm::mat4& model, const glm::vec3& color);
@@ -309,17 +263,19 @@ public:
     static glm::mat4 createQuadModel(float x, float y, float w, float h);
 
 private:
-    Shader* shader_ = nullptr;
-    Shader* gltfShader_ = nullptr;
+    std::unique_ptr<IRenderBackend> backend_;
     std::vector<ModelDraw> worldModels_;
     std::vector<ModelDraw> viewmodelModels_;
 
-    unsigned int cubeVAO_ = 0;
-    unsigned int cubeVBO_ = 0;
-    unsigned int frameUBO_ = 0;
-    unsigned int textureArray_ = 0;
-
     Batch batches_[BATCH_COUNT];
+    /// Bumped whenever the persistent WORLD_OPAQUE batch changes, so the
+    /// backend re-uploads the map geometry only then.
+    std::uint64_t staticRevision_ = 0;
+    /// UI instances in draw order and their draw ranges (built in endFrame).
+    std::vector<InstanceGPU> uiDrawList_;
+    std::vector<UiRange> uiRanges_;
+
+    int viewportX_ = 0, viewportY_ = 0, viewportW_ = 800, viewportH_ = 600;
 
     bool inUi_ = false;
     glm::mat4 view_{1.0f};               ///< active (UI while drawing UI)
@@ -330,19 +286,12 @@ private:
     glm::mat4 viewmodelProjection_{1.0f};
 
     std::vector<int> mapTextureLayers_;
-    std::vector<std::pair<unsigned int, int>> glTextureLayers_; ///< GL texture id -> array layer
     int checkerLayer_ = -1;
-    unsigned int fontTexture_ = 0;   ///< native-resolution 3x5 glyph atlas
-    /// Smallest glyph cell size in the atlas; glyphs are drawn from this.
-    static constexpr float kFontCellW = static_cast<float>(font_atlas::kCellW);
-    static constexpr float kFontCellH = static_cast<float>(font_atlas::kCellH);
 
     /// UI elements in submission order (see UiItem).
     std::vector<UiItem> uiItems_;
     /// Upper bound on UI draw calls per frame (see endFrame).
     static constexpr int kMaxUiSlots = 12;
-    int arrayW_ = 0;
-    int arrayH_ = 0;
 
 
     // Maps the UI geometry submitted for a frame to the GL pixels it covers, so

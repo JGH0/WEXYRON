@@ -1,6 +1,6 @@
 /**
  * @file renderer.cpp
- * @brief Batched (instanced) OpenGL renderer for the game
+ * @brief Batched (instanced) renderer frontend; GPU work is done by an IRenderBackend
  * @author OpenGL Game Developer
  * @date 2025
  */
@@ -14,24 +14,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <cctype>
-#include <glm/gtc/type_ptr.hpp>
 
 namespace {
 
-/// Unit quad (two triangles) in the XY plane, plus the corner each vertex
-/// represents for UV mapping. Every box face is built from this in the shader.
-/// Six vertices: (-,-) (+,-) (+,+) / (+,+) (-,+) (-,-)
-const float kUnitQuad[] = {
-    // aPos.x, aPos.y,  aCorner.x, aCorner.y
-    -0.5f, -0.5f,   -0.5f, -0.5f,
-     0.5f, -0.5f,    0.5f, -0.5f,
-     0.5f,  0.5f,    0.5f,  0.5f,
-     0.5f,  0.5f,    0.5f,  0.5f,
-    -0.5f,  0.5f,   -0.5f,  0.5f,
-    -0.5f, -0.5f,   -0.5f, -0.5f,
-};
-
-constexpr int kQuadVertexCount = 6;
 constexpr int kMaxTextureLayers = 64;
 
 /// One quad face of a box.
@@ -85,128 +70,25 @@ inline void normalizeBasis(glm::vec3& ax, glm::vec3& ay, glm::vec3& az) {
 
 Renderer::Renderer() = default;
 
-Renderer::~Renderer() {
-    // GL objects are released explicitly in shutdown() (on the GL thread);
-    // deleting GL handles from the destructor on another thread is undefined.
-    delete shader_;
-    delete gltfShader_;
+// GPU objects belong to the backend and are released in shutdown(), on the
+// thread that owns the device.
+Renderer::~Renderer() = default;
+
+void Renderer::setBackend(std::unique_ptr<IRenderBackend> backend) {
+    backend_ = std::move(backend);
 }
 
 void Renderer::init() {
-    shader_ = new Shader("assets/shaders/glow_vertex.glsl",
-                         "assets/shaders/glow_fragment.glsl");
-    if (!shader_->valid()) {
-        std::cerr << "Renderer: instanced shader failed to compile; "
-                     "falling back to flat-colour output." << std::endl;
+    if (!backend_) backend_ = createGlRenderBackend();
+    if (!backend_->init()) {
+        std::cerr << "Renderer: backend failed to initialise; frames will be empty." << std::endl;
     }
-
-    gltfShader_ = new Shader("assets/shaders/gltf_vertex.glsl",
-                             "assets/shaders/gltf_fragment.glsl");
-    if (!gltfShader_->valid()) {
-        std::cerr << "Renderer: glTF shader failed to compile; "
-                     "glTF models will not be drawn." << std::endl;
-    }
-
-    glGenVertexArrays(1, &cubeVAO_);
-    glGenBuffers(1, &cubeVBO_);
-    glBindVertexArray(cubeVAO_);
-    glBindBuffer(GL_ARRAY_BUFFER, cubeVBO_);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(kUnitQuad), kUnitQuad, GL_STATIC_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
-    glBindVertexArray(0);
-
-    // Frame block: view-projection matrix shared by every instance batch.
-    glGenBuffers(1, &frameUBO_);
-    glBindBuffer(GL_UNIFORM_BUFFER, frameUBO_);
-    glBufferData(GL_UNIFORM_BUFFER, sizeof(glm::mat4), nullptr, GL_STREAM_DRAW);
-    glBindBufferBase(GL_UNIFORM_BUFFER, 0, frameUBO_);
-    glBindBuffer(GL_UNIFORM_BUFFER, 0);
-
-    initBuffers();
     refreshTextures(nullptr);
-
-    glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_LEQUAL);
-    glDepthMask(GL_TRUE);
-    // Blending stays off for opaque geometry. Leaving it enabled made map pixels
-    // disappear at random (roughly half of each frame was dropped).
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glDisable(GL_BLEND);
-    // Face winding is not reliable across the hand-built map faces, and culling
-    // dropped whole faces, so it stays off for the world pass too.
-    glCullFace(GL_BACK);
-    glFrontFace(GL_CCW);
-    glDisable(GL_CULL_FACE);
-}
-
-void Renderer::initBuffers() {
-    for (int b = 0; b < BATCH_COUNT; ++b) {
-        Batch& batch = batches_[b];
-        glGenVertexArrays(1, &batch.vao);
-        glGenBuffers(1, &batch.vbo);
-        glBindVertexArray(batch.vao);
-
-        // Locations 0-1 are the shared unit quad; GL records the buffer bound
-        // to each attribute in the VAO, so bind it while setting them up.
-        glBindBuffer(GL_ARRAY_BUFFER, cubeVBO_);
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
-        glVertexAttribDivisor(0, 0);
-        glEnableVertexAttribArray(1);
-        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
-                              (void*)(2 * sizeof(float)));
-        glVertexAttribDivisor(1, 0);
-
-        // Locations 2-9 are the per-instance face data.
-        glBindBuffer(GL_ARRAY_BUFFER, batch.vbo);
-
-        const GLsizei stride = sizeof(InstanceGPU);
-        auto instanceAttrib = [&](GLuint loc, GLint size, size_t offset) {
-            glEnableVertexAttribArray(loc);
-            glVertexAttribPointer(loc, size, GL_FLOAT, GL_FALSE, stride,
-                                  (void*)offset);
-            glVertexAttribDivisor(loc, 1);
-        };
-        instanceAttrib(2, 3, offsetof(InstanceGPU, offset));
-        instanceAttrib(3, 3, offsetof(InstanceGPU, right));
-        instanceAttrib(4, 3, offsetof(InstanceGPU, up));
-        instanceAttrib(5, 3, offsetof(InstanceGPU, normal));
-        instanceAttrib(6, 4, offsetof(InstanceGPU, color));
-        instanceAttrib(7, 4, offsetof(InstanceGPU, uv));
-        instanceAttrib(8, 4, offsetof(InstanceGPU, tint));
-        instanceAttrib(9, 4, offsetof(InstanceGPU, atlas));
-
-        glBindVertexArray(0);
-        glBindBuffer(GL_ARRAY_BUFFER, 0);
-    }
 }
 
 // ---------------------------------------------------------------------------
-// Textures: one texture array holds every map texture + font + checker layer
+// Textures: one texture array holds every map texture + checker layer
 // ---------------------------------------------------------------------------
-
-void Renderer::uploadFontAtlas() {
-    std::vector<unsigned char> glyphs(static_cast<size_t>(font_atlas::kAtlasW) *
-                                      font_atlas::kAtlasH * 4);
-    font_atlas::buildAtlas(glyphs.data());
-
-    if (fontTexture_ == 0) glGenTextures(1, &fontTexture_);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, fontTexture_);
-    // Native 1:1 resolution, no scaling or filtering: 3x5 glyph pixels stay
-    // square, exactly like the original per-pixel text renderer.
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, font_atlas::kAtlasW, font_atlas::kAtlasH,
-                 0, GL_RGBA, GL_UNSIGNED_BYTE, glyphs.data());
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glBindTexture(GL_TEXTURE_2D, 0);
-}
 
 void Renderer::refreshTextures(Map* map) {
     // Collect sources for the array, in a stable layer order.
@@ -228,11 +110,6 @@ void Renderer::refreshTextures(Map* map) {
     sources.push_back(nullptr);
 
     mapTextureLayers_ = mapLayers;
-    glTextureLayers_.clear();
-    for (size_t layer = 0; layer < sources.size(); ++layer) {
-        if (sources[layer] && sources[layer]->ID)
-            glTextureLayers_.emplace_back(sources[layer]->ID, static_cast<int>(layer));
-    }
 
     if (static_cast<int>(sources.size()) > kMaxTextureLayers) {
         std::cerr << "Renderer: too many textures (" << sources.size()
@@ -247,15 +124,6 @@ void Renderer::refreshTextures(Map* map) {
         if (t && t->width > 0 && t->height > 0) { texW = t->width; texH = t->height; break; }
     }
 
-    arrayW_ = texW;
-    arrayH_ = texH;
-
-    const int layerCount = static_cast<int>(sources.size());
-    if (textureArray_ == 0) glGenTextures(1, &textureArray_);
-    glBindTexture(GL_TEXTURE_2D_ARRAY, textureArray_);
-    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA8, texW, texH, layerCount,
-                 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-
     // Synthetic layer built in CPU memory: the "missing texture" checker.
     std::vector<unsigned char> checker(static_cast<size_t>(texW) * texH * 4);
     const int cell = std::max(1, texW / 8);
@@ -268,44 +136,32 @@ void Renderer::refreshTextures(Map* map) {
         }
     }
 
-    uploadFontAtlas();
-
-    // One pass over the array: bind it on the sampled unit (texture creation may
-    // have left another unit active) and fill every layer.
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D_ARRAY, textureArray_);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-
-    // GL has no plain texture -> array copy, and reading a texture back (FBO or
-    // glGetTexImage) is slow and crashed inside the Mesa driver, so upload from
-    // the RGBA source pixels each Texture keeps.
-    int uploaded = 0;
-    for (int layer = 0; layer < layerCount; ++layer) {
+    // Upload from the RGBA source pixels each Texture keeps (reading a GPU
+    // texture back is slow and crashed inside the Mesa driver).
+    TextureArrayDesc desc;
+    desc.width = texW;
+    desc.height = texH;
+    desc.layers.assign(sources.size(), nullptr);
+    int expected = 0, uploaded = 0;
+    for (size_t layer = 0; layer < sources.size(); ++layer) {
         const Texture* src = sources[layer];
-        if (src && src->pixels && src->width == texW && src->height == texH) {
-            glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, layer, texW, texH, 1,
-                            GL_RGBA, GL_UNSIGNED_BYTE, src->pixels);
+        if (!src) continue;
+        ++expected;
+        if (src->pixels && src->width == texW && src->height == texH) {
+            desc.layers[layer] = src->pixels;
             ++uploaded;
         }
     }
-
     // The "missing texture" checker always lives on its own layer.
-    if (checkerLayer_ >= 0 && checkerLayer_ < layerCount) {
-        glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, checkerLayer_, texW, texH, 1,
-                        GL_RGBA, GL_UNSIGNED_BYTE, checker.data());
+    if (checkerLayer_ >= 0 && checkerLayer_ < static_cast<int>(desc.layers.size())) {
+        desc.layers[static_cast<size_t>(checkerLayer_)] = checker.data();
     }
-    if (uploaded != static_cast<int>(glTextureLayers_.size())) {
+    if (uploaded != expected) {
         std::cerr << "Renderer: uploaded " << uploaded << " of "
-                  << glTextureLayers_.size() << " map textures (size or pixel mismatch)"
+                  << expected << " map textures (size or pixel mismatch)"
                   << std::endl;
     }
-
-    // The game art is 64x64 pixel textures; nearest keeps it crisp.
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+    if (backend_) backend_->setTextureArray(desc);
 }
 
 int Renderer::textureLayer(int textureId) const {
@@ -354,9 +210,7 @@ void Renderer::buildWorld(Map* map) {
         }
     }
     worldInstanceCount_ = batch.instances.size();
-
-    batch.dirty = true;
-    batch.needsUpload = true;
+    ++staticRevision_;
 }
 
 // ---------------------------------------------------------------------------
@@ -365,19 +219,17 @@ void Renderer::buildWorld(Map* map) {
 
 void Renderer::beginFrame() {
     // The per-frame world batch and the UI list are rebuilt from scratch.
+    // The screen is cleared by the backend when the frame is drawn (endFrame).
     worldDrawsThisFrame_ = 0;
-    batches_[WORLD_ALPHA].needsUpload = true;
     uiItems_.clear();
-    glClearColor(0.1f, 0.2f, 0.3f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
     batches_[WORLD_ALPHA].instances.clear();
-    batches_[WORLD_ALPHA].dirty = true;
 
     // The held weapon is rebuilt every frame (bob/sway/recoil animate it).
     batches_[WORLD_VIEWMODEL].instances.clear();
-    batches_[WORLD_VIEWMODEL].needsUpload = true;
-    batches_[WORLD_VIEWMODEL].dirty = true;
+    // Boxes submitted while a UI projection is active land here. The UI pass
+    // only draws uiItems_ (the old GL path cleared this scratch batch before
+    // drawing, so they were never shown); clear it so it cannot grow.
+    batches_[UI_SCRATCH].instances.clear();
 
     worldModels_.clear();
     viewmodelModels_.clear();
@@ -411,10 +263,8 @@ void Renderer::setProjection(const glm::mat4& view, const glm::mat4& projection)
         const float dy = uy.y / uy.w - n0y;
         if (std::abs(dx) > 1e-6f && std::abs(dy) > 1e-6f) {
             // Canvas coordinate of the viewport's k-th pixel centre.
-            GLint vp[4] = {0, 0, 800, 600};
-            glGetIntegerv(GL_VIEWPORT, vp);
-            const int pixelsW = vp[2] > 0 ? vp[2] : 800;
-            const int pixelsH = vp[3] > 0 ? vp[3] : 600;
+            const int pixelsW = viewportW_ > 0 ? viewportW_ : 800;
+            const int pixelsH = viewportH_ > 0 ? viewportH_ : 600;
             const float ndcPerPixelX = 2.0f / static_cast<float>(pixelsW);
             const float ndcPerPixelY = 2.0f / static_cast<float>(pixelsH);
             uiPixelX_ = ndcPerPixelX / dx;
@@ -439,7 +289,10 @@ void Renderer::setProjection(const glm::mat4& view, const glm::mat4& projection)
 }
 
 void Renderer::setViewport(int x, int y, int width, int height) {
-    glViewport(x, y, width, height);
+    viewportX_ = x;
+    viewportY_ = y;
+    viewportW_ = width;
+    viewportH_ = height;
 }
 
 // ---------------------------------------------------------------------------
@@ -447,10 +300,9 @@ void Renderer::setViewport(int x, int y, int width, int height) {
 // ---------------------------------------------------------------------------
 
 void Renderer::pushInstance(BatchId id, const InstanceGPU& inst) {
-    Batch& batch = batches_[id];
-    InstanceGPU copy = inst;
-    batch.instances.push_back(copy);
-    batch.needsUpload = true;
+    batches_[id].instances.push_back(inst);
+    // The map batch is persistent: any change must reach the GPU copy.
+    if (id == WORLD_OPAQUE) ++staticRevision_;
 }
 
 // ---------------------------------------------------------------------------
@@ -599,29 +451,6 @@ void Renderer::submitViewModelModel(GltfModel* model, GltfInstance* instance,
     viewmodelModels_.push_back(ModelDraw{model, instance, transform, tint});
 }
 
-void Renderer::bindBoxPipeline() {
-    if (!shader_) return;
-    shader_->use();
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D_ARRAY, textureArray_);
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, fontTexture_);
-    glActiveTexture(GL_TEXTURE0);
-    shader_->setInt("uTextures", 0);
-    shader_->setInt("uFont", 1);
-}
-
-void Renderer::drawModels(const std::vector<ModelDraw>& draws,
-                          const glm::mat4& viewProjection) {
-    if (!gltfShader_ || !gltfShader_->valid()) return;
-    for (const ModelDraw& draw : draws) {
-        if (!draw.model || !draw.instance) continue;
-        draw.model->draw(*draw.instance, *gltfShader_, draw.transform,
-                         draw.tint, viewProjection);
-    }
-    glBindVertexArray(0);
-}
-
 void Renderer::submitQuad(const glm::vec2& center, const glm::vec2& size,
                           const glm::vec3& color, float alpha, BlendMode mode) {
     const BatchId id = UI_SCRATCH;
@@ -630,69 +459,15 @@ void Renderer::submitQuad(const glm::vec2& center, const glm::vec2& size,
                glm::vec3(0.0f, size.y * 0.5f, 0.0f), glm::vec4(color, alpha));
 }
 
-void Renderer::applyBlendState(BlendMode mode) {
-    switch (mode) {
-        case BlendMode::Opaque:
-            glEnable(GL_DEPTH_TEST);
-            glDepthMask(GL_TRUE);
-            glDisable(GL_BLEND);
-            break;
-        case BlendMode::Alpha:
-            glEnable(GL_DEPTH_TEST);
-            glDepthMask(GL_FALSE);
-            glEnable(GL_BLEND);
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-            break;
-        case BlendMode::Overlay:
-            glDisable(GL_DEPTH_TEST);
-            glDepthMask(GL_FALSE);
-            glEnable(GL_BLEND);
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-            break;
-    }
-}
-
-void Renderer::uploadBatch(BatchId id) {
-    Batch& batch = batches_[id];
-    if (batch.instances.empty()) return;
-
-    glBindBuffer(GL_ARRAY_BUFFER, batch.vbo);
-    const size_t bytes = batch.instances.size() * sizeof(InstanceGPU);
-    if (batch.instances.size() > batch.capacity) {
-        // Grow with slack so occasional spikes don't reallocate every frame.
-        batch.capacity = batch.instances.size() * 2;
-        glBufferData(GL_ARRAY_BUFFER, batch.capacity * sizeof(InstanceGPU),
-                     nullptr, GL_STREAM_DRAW);
-    }
-    if (id != WORLD_OPAQUE || batch.dirty || batch.needsUpload) {
-        glBufferSubData(GL_ARRAY_BUFFER, 0, bytes, batch.instances.data());
-    }
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-    batch.uploaded = batch.instances.size();
-    batch.needsUpload = false;
-    batch.dirty = false;
-}
-
-void Renderer::drawBatch(BatchId id) {
-    Batch& batch = batches_[id];
-    if (batch.instances.empty()) return;
-    if (id == WORLD_OPAQUE) {
-        ++worldDrawsThisFrame_;
-        mapInstancesLastFrame_ = batch.instances.size();
-    }
-    glBindVertexArray(batch.vao);
-    glDrawArraysInstanced(GL_TRIANGLES, 0, kQuadVertexCount,
-                          static_cast<GLsizei>(batch.instances.size()));
-    glBindVertexArray(0);
-}
-
-void Renderer::drawUi() {
+void Renderer::buildUiRanges() {
     // Draw order is the submission order, minus elements a later text line
     // covered. Consecutive elements are drawn in small slots: an instanced draw
     // call renders in buffer order, so a slot is exactly a run of consecutive
     // elements. Opaque elements are drawn first (they hide what is behind them),
     // then every blended element in submission order, which makes the
     // damage/flash overlays cover whatever was drawn before them.
+    uiDrawList_.clear();
+    uiRanges_.clear();
     std::vector<size_t> opaque, blended;
     opaque.reserve(uiItems_.size());
     blended.reserve(uiItems_.size());
@@ -700,139 +475,59 @@ void Renderer::drawUi() {
         if (uiItems_[i].covered) continue;
         (uiItems_[i].blended ? blended : opaque).push_back(i);
     }
-    if (opaque.empty() && blended.empty()) return;
 
-    auto drawRange = [&](const std::vector<size_t>& list, size_t first, size_t last, bool blend) {
-        if (last <= first) return;
-        Batch& batch = batches_[UI_SCRATCH];
-        batch.instances.clear();
-        batch.instances.reserve(last - first);
-        for (size_t k = first; k < last; ++k) batch.instances.push_back(uiItems_[list[k]].inst);
-        batch.needsUpload = true;
-        uploadBatch(UI_SCRATCH);
-
-        if (blend) {
-            glEnable(GL_BLEND);
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        } else {
-            glDisable(GL_BLEND);
+    auto addRanges = [&](const std::vector<size_t>& list, bool blend) {
+        // At most kMaxUiSlots draws per list (one instanced draw each).
+        const size_t perSlot = std::max<size_t>(
+            1, (list.size() + kMaxUiSlots - 1) / std::max(1, kMaxUiSlots));
+        for (size_t k = 0; k < list.size(); k += perSlot) {
+            const size_t last = std::min(k + perSlot, list.size());
+            UiRange range;
+            range.first = uiDrawList_.size();
+            range.count = last - k;
+            range.blended = blend;
+            for (size_t j = k; j < last; ++j) uiDrawList_.push_back(uiItems_[list[j]].inst);
+            uiRanges_.push_back(range);
         }
-        glBindVertexArray(batch.vao);
-        glDrawArraysInstanced(GL_TRIANGLES, 0, kQuadVertexCount,
-                              static_cast<GLsizei>(batch.instances.size()));
-        glBindVertexArray(0);
     };
-
-    // Screen space always paints on top of the world, and within the UI the
-    // draw order is the answer (there is no depth information in 2D), so the
-    // depth test stays off for the whole UI pass. With it on, the boxed menu
-    // panels (drawn on the same plane as the background) failed the depth test
-    // and only the glyph pixels survived.
-    glDisable(GL_DEPTH_TEST);
-    glDepthMask(GL_FALSE);
-
-    // Opaque elements, in order, in up to kMaxUiSlots draws.
-    const size_t perSlot = std::max<size_t>(
-        1, (opaque.size() + kMaxUiSlots - 1) / std::max(1, kMaxUiSlots));
-    for (size_t k = 0; k < opaque.size(); k += perSlot) {
-        drawRange(opaque, k, std::min(k + perSlot, opaque.size()), false);
-    }
-
-    // Then everything translucent (damage flash, low-health pulse, fade-outs).
-    const size_t perBlendSlot = std::max<size_t>(
-        1, (blended.size() + kMaxUiSlots - 1) / std::max(1, kMaxUiSlots));
-    for (size_t k = 0; k < blended.size(); k += perBlendSlot) {
-        drawRange(blended, k, std::min(k + perBlendSlot, blended.size()), true);
-    }
-
-    glDepthMask(GL_TRUE);
-    glDisable(GL_BLEND);
-    glEnable(GL_DEPTH_TEST);
+    addRanges(opaque, false);
+    addRanges(blended, true);
 }
 
 void Renderer::endFrame() {
-    if (!shader_) return;
+    if (!backend_) return;
 
-    // The frame UBO is updated between draw passes, so its contents must be
-    // written back from the buffer that was actually bound (see setFrameMatrix).
-    bindBoxPipeline();
+    const Batch& mapBatch = batches_[WORLD_OPAQUE];
+    if (!mapBatch.instances.empty()) {
+        ++worldDrawsThisFrame_;
+        mapInstancesLastFrame_ = mapBatch.instances.size();
+    }
+    worldModelsLastFrame_ = worldModels_.size();
+    const bool hasViewmodel = !batches_[WORLD_VIEWMODEL].instances.empty() || !viewmodelModels_.empty();
+    viewmodelInstancesLastFrame_ = hasViewmodel ? batches_[WORLD_VIEWMODEL].instances.size() : 0;
+    viewmodelModelsLastFrame_ = hasViewmodel ? viewmodelModels_.size() : 0;
+
+    buildUiRanges();
 
     // Each space has its own view-projection. UI states only call
     // setProjection(), which must not disturb the 3D camera, so keep them apart.
-    auto setFrameMatrix = [&](const glm::mat4& vp) {
-        glBindBuffer(GL_UNIFORM_BUFFER, frameUBO_);
-        glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(glm::mat4), glm::value_ptr(vp));
-        glBindBuffer(GL_UNIFORM_BUFFER, 0);
-    };
-
-    // ── 3D: opaque, then alpha ──
-    // Both world batches hold solid geometry (map, enemies, bomb, projectiles).
-    // They used to be drawn with blending on and depth writes off, which made
-    // every object see-through: its back faces painted over the ones in front.
-    // Solid objects are opaque and depth-writing; only true translucent
-    // overlays (the damage/flash screens) are blended afterwards on the UI pass.
-    uploadBatch(WORLD_OPAQUE);
-    uploadBatch(WORLD_ALPHA);
-    uploadBatch(WORLD_VIEWMODEL);
-    setFrameMatrix(worldProjection_ * worldView_);
-
-    applyBlendState(BlendMode::Opaque);
-    // Box faces are built with a consistent outward winding, so the back faces of
-    // every block, enemy and prop are culled instead of being shaded and
-    // depth-tested only to lose. (Screen-space UI quads are single-sided planes
-    // whose winding depends on their data, so culling stays off for the UI pass.)
-    glEnable(GL_CULL_FACE);
-    glCullFace(GL_BACK);
-    glFrontFace(GL_CCW);
-    drawBatch(WORLD_OPAQUE);
-    drawBatch(WORLD_ALPHA);
-
-    // glTF models: drawn after the box batches, with the same world
-    // view-projection and depth buffer so they occlude/interleave correctly.
-    worldModelsLastFrame_ = worldModels_.size();
-    drawModels(worldModels_, worldProjection_ * worldView_);
-    bindBoxPipeline();
-
-    // ── First-person weapon ──
-    // Its camera space is independent of where the player stands, and the depth
-    // buffer is cleared first so the gun is always visible instead of being
-    // swallowed by a wall the camera is close to (the near plane would also cut
-    // it in half). Nothing else is drawn after this point, so clearing depth is
-    // safe.
-    viewmodelInstancesLastFrame_ = 0;
-    viewmodelModelsLastFrame_ = 0;
-    if (!batches_[WORLD_VIEWMODEL].instances.empty() || !viewmodelModels_.empty()) {
-        viewmodelInstancesLastFrame_ = batches_[WORLD_VIEWMODEL].instances.size();
-        viewmodelModelsLastFrame_ = viewmodelModels_.size();
-        glClear(GL_DEPTH_BUFFER_BIT);
-        setFrameMatrix(viewmodelProjection_ * viewmodelView_);
-        drawBatch(WORLD_VIEWMODEL);
-        drawModels(viewmodelModels_, viewmodelProjection_ * viewmodelView_);
-        bindBoxPipeline();
-    }
-    glDisable(GL_CULL_FACE);
-
-    // ── 2D: composite the UI in submission order ──
-    // One instanced batch cannot express painter's order for opaque *and*
-    // blended quads (that would need per-quad sorting plus flush-on-blend), so
-    // the ordered list is cut into a few consecutive slots and drawn as a few
-    // instanced calls. Opaque slots first (they hide what is behind them),
-    // then every blended element, so damage/flash overlays cover the whole
-    // screen regardless of draw order.
-    setFrameMatrix(projection_ * view_);
-
-    // Screen-space quads are single-sided planes: their winding depends on the
-    // data, not on a consistent triangle order, so culling would drop them.
-    glDisable(GL_CULL_FACE);
-    if (!uiItems_.empty()) drawUi();
-
-    // Restore a sane default for code that still issues raw GL.
-    glDisable(GL_CULL_FACE);
-    glDepthMask(GL_TRUE);
-    glEnable(GL_DEPTH_TEST);
-    glDisable(GL_BLEND);
-    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
-    glUseProgram(0);
+    FramePacket frame;
+    frame.viewportX = viewportX_;
+    frame.viewportY = viewportY_;
+    frame.viewportW = viewportW_;
+    frame.viewportH = viewportH_;
+    frame.worldViewProjection = worldProjection_ * worldView_;
+    frame.worldStatic = &mapBatch.instances;
+    frame.staticRevision = staticRevision_;
+    frame.worldDynamic = &batches_[WORLD_ALPHA].instances;
+    frame.worldModels = &worldModels_;
+    frame.viewmodelViewProjection = viewmodelProjection_ * viewmodelView_;
+    frame.viewmodelBoxes = &batches_[WORLD_VIEWMODEL].instances;
+    frame.viewmodelModels = &viewmodelModels_;
+    frame.uiViewProjection = projection_ * view_;
+    frame.uiInstances = &uiDrawList_;
+    frame.uiRanges = &uiRanges_;
+    backend_->renderFrame(frame);
 }
 
 // ---------------------------------------------------------------------------
@@ -965,22 +660,6 @@ void Renderer::drawCube(const glm::mat4& model, const glm::vec3& color) {
                  glm::vec4(1.0f), glm::vec4(0.0f, 0.0f, 0.0f, 0.0f));
 }
 
-void Renderer::drawTexturedCube(const glm::mat4& model, Texture* texture) {
-    if (!texture) return;
-    int layer = -1;
-    for (const auto& entry : glTextureLayers_) {
-        if (entry.first == texture->ID) { layer = entry.second; break; }
-    }
-    if (layer < 0) return;  // not part of the shared array: cannot sample it
-
-    const glm::vec3 ax = glm::vec3(model[0]);
-    const glm::vec3 ay = glm::vec3(model[1]);
-    const glm::vec3 az = glm::vec3(model[2]);
-    pushBoxFaces(WORLD_OPAQUE, glm::vec3(model[3]), ax, ay, az,
-                 glm::vec4(1.0f), glm::vec4(0, 0, 1, 1),
-                 glm::vec4(1.0f), glm::vec4((float)layer, 1, 0, 0));
-}
-
 void Renderer::pushUiFlat(BatchId id, const glm::vec3& centre, const glm::vec3& right,
                           const glm::vec3& up, const glm::vec4& color, float depth) {
     // UI is composited in submission order by endFrame() (see UiItem): there is
@@ -1091,19 +770,7 @@ glm::mat4 Renderer::createQuadModel(float x, float y, float w, float h) {
 }
 
 void Renderer::shutdown() {
-    for (int b = 0; b < BATCH_COUNT; ++b) {
-        if (batches_[b].vao) glDeleteVertexArrays(1, &batches_[b].vao);
-        if (batches_[b].vbo) glDeleteBuffers(1, &batches_[b].vbo);
-    }
-    if (cubeVAO_) glDeleteVertexArrays(1, &cubeVAO_);
-    if (cubeVBO_) glDeleteBuffers(1, &cubeVBO_);
-    if (frameUBO_) glDeleteBuffers(1, &frameUBO_);
-    if (textureArray_) glDeleteTextures(1, &textureArray_);
-    if (fontTexture_) glDeleteTextures(1, &fontTexture_);
-    delete shader_;
-    shader_ = nullptr;
-    delete gltfShader_;
-    gltfShader_ = nullptr;
+    if (backend_) backend_->shutdown();
     worldModels_.clear();
     viewmodelModels_.clear();
 }

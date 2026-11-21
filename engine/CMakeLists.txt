@@ -12,6 +12,7 @@ add_library(cube_engine STATIC
     src/map_loader.cpp
     src/mesh.cpp
     src/renderer.cpp
+    src/backends/gl/gl_backend.cpp
     src/shader.cpp
     src/texture.cpp
     ${CMAKE_SOURCE_DIR}/glad.c
