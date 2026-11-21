@@ -182,7 +182,7 @@ void Game::update(float deltaTime) {
 }
 
 void Game::frameWait() {
-    // When vsync is on, glfwSwapBuffers already paces the frame; adding our own
+    // When vsync is on, presenting already paces the frame; adding our own
     // wait on top would only add latency. Otherwise sleep instead of spinning
     // so other threads (network, loaders) keep getting CPU time.
     if (maxFps <= 0 || vsyncEnabled) return;
@@ -359,7 +359,7 @@ void Game::render() {
     // Flush all queued geometry as a handful of instanced draw calls, then
     // present. This is the only swap/poll in the frame.
     renderer.endFrame();
-    glfwSwapBuffers(window);
+    renderer.present();
     glfwPollEvents();
 }
 

@@ -57,23 +57,6 @@ void waitForEnterOnFailure() {
 #endif
 }
 
-// Try to create the window. Hardware drivers want a 3.3 core context; some
-// older/virtual drivers only offer a compatibility profile, which still runs
-// the GLSL 330 shaders, so fall back to that once.
-GLFWwindow* createGameWindow(int width, int height) {
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    GLFWwindow* win = glfwCreateWindow(width, height, brand::kFullName, nullptr, nullptr);
-    if (!win) {
-        std::cerr << "Core profile window failed, retrying with a "
-                     "compatibility profile..." << std::endl;
-        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_ANY_PROFILE);
-        win = glfwCreateWindow(width, height, brand::kFullName, nullptr, nullptr);
-    }
-    return win;
-}
-
 #if defined(_WIN32)
 // Software-rendering fallback.
 //
@@ -442,18 +425,6 @@ Game::Game(int width, int height)
         waitForEnterOnFailure();
         exit(-1);
     }
-    // The shaders are GLSL 330, so ask for a real 3.3 core context. The old
-    // request was COMPAT_PROFILE: some drivers reject #version 330 core there,
-    // and on drivers without a compat profile the window failed to open at all.
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-#ifdef __APPLE__
-    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
-#endif
-    // Ask the driver to prefer the dedicated GPU on hybrid laptops.
-    glfwWindowHint(GLFW_COCOA_GRAPHICS_SWITCHING, GLFW_TRUE);
-
 #ifdef _WIN32
     // If Mesa is already the WGL implementation (opengl32.dll next to the
     // exe from a previous fallback), force it to llvmpipe now — before the
@@ -491,7 +462,9 @@ Game::Game(int width, int height)
     }
 #endif
 
-    window = createGameWindow(width, height);
+    // The engine sets the window hints for the graphics API and, for OpenGL,
+    // creates and loads the context (3.3 core, compatibility as a fallback).
+    window = createRenderWindow(RenderApi::OpenGL, width, height, brand::kFullName);
     if (!window) {
 #ifdef _WIN32
         // No OpenGL from the GPU driver at all (typical for a VM with a
@@ -508,7 +481,6 @@ Game::Game(int width, int height)
         waitForEnterOnFailure();
         exit(-1);
     }
-    glfwMakeContextCurrent(window);
     glfwSetWindowUserPointer(window, this);
     glfwSetCursorPosCallback(window, mouseCallback);
     glfwSetScrollCallback(window, scrollCallback);
@@ -521,11 +493,6 @@ Game::Game(int width, int height)
     glfwFocusWindow(window);
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
     handCursor = glfwCreateStandardCursor(GLFW_HAND_CURSOR);
-
-    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
-        std::cerr << "Failed to initialize GLAD" << std::endl;
-        exit(-1);
-    }
 
     // Sound engine: open the device and load assets/audio (never fatal).
     initAudio();
@@ -554,8 +521,8 @@ Game::~Game() {
     delete flashbang;
     if (currentMap) delete currentMap;
 
-    // glTF models own GL buffers/textures: release them while the context is
-    // still current, before glfwTerminate().
+    // glTF models own GPU buffers/textures (via the render backend): release
+    // them while the device/context still exists, before glfwTerminate().
     playerModel_.reset();
     bombModel_.reset();
     for (auto& weapon : weaponModels_) weapon.reset();
@@ -569,7 +536,7 @@ Game::~Game() {
 // ---------------------------------------------------------------------------
 void Game::init() {
     std::cout << "Initializing renderer..." << std::endl;
-    renderer.init();
+    renderer.init(window);
 
     // Report which implementation is actually in use: on a GPU-less Windows
     // install this must say "Mesa" (llvmpipe), otherwise the fallback did not

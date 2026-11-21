@@ -748,7 +748,7 @@ void Game::applySettings() {
     maxFps = gameSettings_.maxFps;
     vsyncEnabled = gameSettings_.vsync;
     setPerformanceLevel(gameSettings_.performance);
-    if (glfwGetCurrentContext()) glfwSwapInterval(vsyncEnabled ? 1 : 0);
+    renderer.setVsync(vsyncEnabled);
 
     // Infinite ammo is read from the game member by the gameplay code, and
     // mirrored into every weapon (their own canShoot()/shoot() check is what

@@ -24,6 +24,8 @@
 #include "engine/map.hpp"
 #include "engine/map_loader.hpp"
 #include "engine/mesh.hpp"
+#include "engine/render_backend.hpp"
+#include "engine/render_window.hpp"
 #include "engine/renderer.hpp"
 #include "engine/shader.hpp"
 #include "engine/texture.hpp"

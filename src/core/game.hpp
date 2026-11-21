@@ -8,9 +8,8 @@
 #ifndef GAME_HPP
 #define GAME_HPP
 
-// glad must come before GLFW (it owns the GL headers), and GLFW must not pull
-// in the system GL headers again.
-#include <glad/glad.h>
+// Game code uses GLFW for windowing and input only; all drawing goes through
+// the engine Renderer, so no graphics API headers are needed here.
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #include <vector>
@@ -21,6 +20,7 @@
 #include <cstring>
 #include "engine/camera.hpp"
 #include "engine/renderer.hpp"
+#include "engine/render_window.hpp"
 #include "engine/gltf_model.hpp"
 #include "humanoid.hpp"
 #include "engine/map.hpp"

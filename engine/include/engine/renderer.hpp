@@ -21,6 +21,7 @@
 
 class Map;
 class Texture;
+struct GLFWwindow;
 class GltfModel;
 class GltfInstance;
 
@@ -57,8 +58,9 @@ public:
     ~Renderer();
 
     /// Create the backend's pipelines, buffers and the texture array. Without
-    /// an explicit backend the OpenGL one is used (needs a current context).
-    void init();
+    /// an explicit backend (setBackend) the OpenGL one is used for `window`,
+    /// which must come from createRenderWindow(RenderApi::OpenGL, ...).
+    void init(GLFWwindow* window);
     /// Use `backend` instead of the default OpenGL backend. Call before init().
     void setBackend(std::unique_ptr<IRenderBackend> backend);
     /// The active backend (nullptr before init()).
@@ -136,6 +138,10 @@ public:
 
     /// Flush all queued instances to the GPU. Call once at the end of a frame.
     void endFrame();
+    /// Show the finished frame (after endFrame).
+    void present();
+    /// Vsync preference; kept until the backend exists, then applied.
+    void setVsync(bool enabled);
 
     // ── Convenience wrappers used by the game code ───────────────────────────
 
@@ -276,6 +282,7 @@ private:
     std::vector<UiRange> uiRanges_;
 
     int viewportX_ = 0, viewportY_ = 0, viewportW_ = 800, viewportH_ = 600;
+    bool vsync_ = true;
 
     bool inUi_ = false;
     glm::mat4 view_{1.0f};               ///< active (UI while drawing UI)

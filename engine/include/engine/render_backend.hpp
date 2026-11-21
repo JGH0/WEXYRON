@@ -23,6 +23,7 @@
 
 class GltfModel;
 class GltfInstance;
+struct GLFWwindow;
 
 /// One quad of a box face or a UI quad; the box shader expands it from a unit
 /// quad. The layout is the GPU vertex layout (instance stream), so backends
@@ -115,11 +116,16 @@ public:
     virtual void setTextureArray(const TextureArrayDesc& desc) = 0;
     /// Draw one frame into the current render target.
     virtual void renderFrame(const FramePacket& frame) = 0;
+    /// Show the finished frame (swap / queue present).
+    virtual void present() = 0;
+    /// Wait for vertical blank when presenting (true) or present immediately.
+    virtual void setVsync(bool enabled) = 0;
 
     virtual RenderBackendInfo describe() const = 0;
 };
 
-/// The OpenGL 3.3 core reference backend. Requires a current GL context.
-std::unique_ptr<IRenderBackend> createGlRenderBackend();
+/// The OpenGL 3.3 core reference backend for a window made by
+/// createRenderWindow(RenderApi::OpenGL, ...); its context must be current.
+std::unique_ptr<IRenderBackend> createGlRenderBackend(GLFWwindow* window);
 
 #endif // CUBE_ENGINE_RENDER_BACKEND_HPP

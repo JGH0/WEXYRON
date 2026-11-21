@@ -13,6 +13,8 @@
 #include "engine/shader.hpp"
 
 #include <glad/glad.h>
+#define GLFW_INCLUDE_NONE
+#include <GLFW/glfw3.h>
 #include <glm/gtc/type_ptr.hpp>
 
 #include <algorithm>
@@ -165,6 +167,7 @@ const GlGltfData& glGltfData(const GltfModel& model) {
 
 class GlRenderBackend final : public IRenderBackend {
 public:
+    explicit GlRenderBackend(GLFWwindow* window) : window_(window) {}
     ~GlRenderBackend() override {
         // GL objects are released explicitly in shutdown() (on the GL thread).
         delete shader_;
@@ -175,6 +178,11 @@ public:
     void shutdown() override;
     void setTextureArray(const TextureArrayDesc& desc) override;
     void renderFrame(const FramePacket& frame) override;
+    void present() override { if (window_) glfwSwapBuffers(window_); }
+    void setVsync(bool enabled) override {
+        // The swap interval belongs to the current context (this window's).
+        if (window_ && glfwGetCurrentContext() == window_) glfwSwapInterval(enabled ? 1 : 0);
+    }
     RenderBackendInfo describe() const override;
 
 private:
@@ -198,6 +206,7 @@ private:
     void bindBoxPipeline();
     void setFrameMatrix(const glm::mat4& vp);
 
+    GLFWwindow* window_ = nullptr;
     Shader* shader_ = nullptr;
     Shader* gltfShader_ = nullptr;
     unsigned int cubeVAO_ = 0;
@@ -616,6 +625,6 @@ void GlRenderBackend::shutdown() {
 
 } // namespace
 
-std::unique_ptr<IRenderBackend> createGlRenderBackend() {
-    return std::make_unique<GlRenderBackend>();
+std::unique_ptr<IRenderBackend> createGlRenderBackend(GLFWwindow* window) {
+    return std::make_unique<GlRenderBackend>(window);
 }

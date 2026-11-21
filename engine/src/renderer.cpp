@@ -78,12 +78,22 @@ void Renderer::setBackend(std::unique_ptr<IRenderBackend> backend) {
     backend_ = std::move(backend);
 }
 
-void Renderer::init() {
-    if (!backend_) backend_ = createGlRenderBackend();
+void Renderer::init(GLFWwindow* window) {
+    if (!backend_) backend_ = createGlRenderBackend(window);
     if (!backend_->init()) {
         std::cerr << "Renderer: backend failed to initialise; frames will be empty." << std::endl;
     }
+    backend_->setVsync(vsync_);
     refreshTextures(nullptr);
+}
+
+void Renderer::present() {
+    if (backend_) backend_->present();
+}
+
+void Renderer::setVsync(bool enabled) {
+    vsync_ = enabled;
+    if (backend_) backend_->setVsync(enabled);
 }
 
 // ---------------------------------------------------------------------------
