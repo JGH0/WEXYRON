@@ -148,6 +148,46 @@ bool Game::bodyBlockedAt(const glm::vec3& feet) const {
     return currentMap->boxOverlapsBlock(mn, mx);
 }
 
+bool Game::isWalkableSlope(const glm::vec3& normal) {
+    return normal.y >= kMaxWalkableSlopeCos;
+}
+
+bool Game::groundSurfaceUnderBox(const glm::vec3& min, const glm::vec3& max,
+                                 float maxDrop, float maxRise,
+                                 float& height, glm::vec3& normal) const {
+    if (!currentMap) return false;
+
+    const float rise = std::max(0.0f, maxRise);
+    const float drop = std::max(0.0f, maxDrop) + rise;
+    if (drop <= 0.0f) return false;
+
+    const float fromY = min.y + rise;
+    const glm::vec2 samples[5] = {
+        {(min.x + max.x) * 0.5f, (min.z + max.z) * 0.5f},
+        {min.x, min.z}, {min.x, max.z}, {max.x, min.z}, {max.x, max.z}
+    };
+
+    bool found = false;
+    float bestHeight = 0.0f;
+    glm::vec3 bestNormal(0.0f, 1.0f, 0.0f);
+
+    for (const glm::vec2& p : samples) {
+        const Map::GroundHit hit =
+            currentMap->groundSurfaceAt(p.x, p.y, fromY, drop);
+        if (!hit.hit) continue;
+        if (!found || hit.height > bestHeight) {
+            found = true;
+            bestHeight = hit.height;
+            bestNormal = hit.normal;
+        }
+    }
+
+    if (!found) return false;
+    height = bestHeight;
+    normal = bestNormal;
+    return true;
+}
+
 void Game::movePlayerBody(float dt, const glm::vec3& horizontalSpeed) {
     if (!currentMap) {
         playerPos += playerVelocity * dt;
@@ -215,29 +255,35 @@ void Game::horizontalSweep(glm::vec3& feet, glm::vec3& mn, glm::vec3& mx, float 
         if (!currentMap->boxOverlapsBlock(tmn, tmx, push)) {
             mn = tmn; mx = tmx;
         } else {
-            // Try the same horizontal move lifted by one walkable step. A
-            // stair top must be no more than kGroundSnap above the feet, and
-            // the destination must still be clear after the lift.
-            const bool canStep = !isJumping && playerVelocity.y <= 0.0f &&
-                                 !bodyBlockedAt(feet) && isSupportedAt(feet);
+            // Try the same horizontal move lifted onto the real surface there.
+            // This covers both stairs and pitched ramps: the surface height is
+            // measured from the actual (oriented) top face, not the AABB.
+            // Do not require the current footprint to be clear: the front of
+            // the body can already touch the low end of a ramp before the step
+            // has been taken.
+            const bool canStep = !isJumping && playerVelocity.y <= 0.0f;
             if (!canStep) return false;
 
-            const float lift = kGroundSnap + 0.02f;
-            glm::vec3 lmn = mn, lmx = mx;
-            lmn.y += lift; lmx.y += lift;
-            if (axis == 0) { lmn.x += delta; lmx.x += delta; }
-            else           { lmn.z += delta; lmx.z += delta; }
-
-            if (currentMap->boxOverlapsBlock(lmn, lmx, push)) return false;
-
             float support = 0.0f;
-            if (!currentMap->supportHeight(lmn, lmx, kGroundSnap + lift, support)) return false;
-            if (support <= mn.y + 0.02f) return false;          // not a step up
-            if (support > mn.y + lift + 0.02f) return false;    // too high
+            glm::vec3 normal(0.0f, 1.0f, 0.0f);
+            if (!groundSurfaceUnderBox(tmn, tmx, 0.02f, kStepHeight,
+                                       support, normal)) {
+                return false;
+            }
+            if (!isWalkableSlope(normal)) return false;
+            if (support > mn.y + kStepHeight + 0.02f) return false; // too high
 
-            mn = lmn; mx = lmx;
-            mn.y = support;
-            mx.y = support + currentBodyHeight();
+            // A ramp can start exactly at the feet height. Lifting by a small
+            // clearance lets the body step onto its low lip even though the
+            // sampled surface there is not yet above the current feet.
+            const float lift = std::max(0.0f, support - mn.y) + 0.01f;
+            glm::vec3 smn = tmn, smx = tmx;
+            smn.y += lift;
+            smx.y += lift;
+
+            if (currentMap->boxOverlapsBlock(smn, smx, push)) return false;
+
+            mn = smn; mx = smx;
         }
 
         feet = glm::vec3((mn.x + mx.x) * 0.5f, mn.y, (mn.z + mx.z) * 0.5f);
@@ -254,9 +300,12 @@ void Game::verticalSweep(glm::vec3& feet, glm::vec3& mn, glm::vec3& mx, float dy
     // never pass through a slab (and lands without dropping a frame's worth).
     if (falling) {
         float support = mn.y;
-        if (currentMap->supportHeight(mn, mx, -dy + 0.02f, support)) {
-            // The body reaches the surface this step: rest exactly on it.
-            const float lift = support - mn.y;
+        glm::vec3 normal(0.0f, 1.0f, 0.0f);
+        if (groundSurfaceUnderBox(mn, mx, -dy + 0.02f, 0.0f, support, normal)) {
+            // The body reaches the surface this step: rest exactly on it. This
+            // uses the real sloped surface for pitched blocks, so landing on a
+            // ramp does not stop at the AABB corner high above it.
+            const float lift = support - mn.y + 0.002f;
             mn.y += lift; mx.y += lift;
             playerVelocity.y = 0.0f;
             isJumping = false;
@@ -501,14 +550,78 @@ void Game::updatePlayerPhysics(float deltaTime) {
     // isOnGround() is decided from where the body is *before* the gravity step,
     // so the jump pressed this frame can still act (the input runs before the
     // physics). The state is refreshed below from where the body ends up.
+    const float feetBefore = playerPos.y;
+    const bool groundedBefore = isOnGround();
 
     // Apply gravity
     playerVelocity.y -= 9.8f * deltaTime;
 
     // Horizontal speed comes from the input (processGameInput set it); the
-    // vertical speed comes from gravity and jumps.
-    const glm::vec3 horizontal(playerVelocity.x, 0.0f, playerVelocity.z);
+    // vertical speed comes from gravity and jumps. Downhill momentum from a
+    // steep slope is added on top of the input.
+    const glm::vec3 horizontal(playerVelocity.x + slopeSlideVelocity_.x, 0.0f,
+                               playerVelocity.z + slopeSlideVelocity_.z);
     movePlayerBody(deltaTime, horizontal);
+
+    // ── Slopes / ramps ──────────────────────────────────────────────────────
+    // Follow the real surface under the body. Walkable ramps (up to 40 deg)
+    // snap the feet up/down so they can be climbed; steeper faces are not
+    // support, and accelerate the body downhill.
+    {
+        glm::vec3 gmn, gmx;
+        bodyBounds(playerPos, gmn, gmx);
+
+        float support = 0.0f;
+        glm::vec3 groundNormal(0.0f, 1.0f, 0.0f);
+        bool steepContact = false;
+        // Large step-follow is for walking. A fast fall must not snap down by
+        // half a metre just because the floor came within the step range; the
+        // vertical sweep already lands it continuously.
+        const bool walking = groundedBefore && playerVelocity.y > -1.5f;
+        const float rise = walking ? kStepHeight : 0.02f;
+        const float drop = walking ? kStepHeight : 0.02f;
+
+        if (!isJumping && playerVelocity.y <= 0.0f &&
+            groundSurfaceUnderBox(gmn, gmx, drop, rise, support, groundNormal)) {
+            const float gap = playerPos.y - support;
+            if (gap <= drop + 0.02f && gap >= -rise - 0.02f) {
+                if (isWalkableSlope(groundNormal)) {
+                    playerPos.y = support + 0.002f;
+                    playerVelocity.y = 0.0f;
+                    isJumping = false;
+                } else {
+                    // Too steep to stand on: stay on the surface and slide.
+                    steepContact = true;
+                    playerPos.y = support + 0.002f;
+                    playerVelocity.y = 0.0f;
+                    isJumping = false;
+
+                    glm::vec3 downhill(groundNormal.x, 0.0f, groundNormal.z);
+                    const float len = glm::length(downhill);
+                    if (len > 1.0e-4f) {
+                        downhill /= len;
+                        const float sinSlope = std::sqrt(std::max(
+                            0.0f, 1.0f - groundNormal.y * groundNormal.y));
+                        slopeSlideVelocity_ += downhill * (9.8f * sinSlope * deltaTime);
+                        const float speed = glm::length(slopeSlideVelocity_);
+                        const float maxSlideSpeed = 7.0f;
+                        if (speed > maxSlideSpeed) {
+                            slopeSlideVelocity_ *= maxSlideSpeed / speed;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Flat ground / air: drop the downhill momentum quickly instead of
+        // letting the player coast forever after a ramp.
+        if (!steepContact) {
+            slopeSlideVelocity_ *= std::exp(-6.0f * deltaTime);
+            if (glm::length(slopeSlideVelocity_) < 0.03f) {
+                slopeSlideVelocity_ = glm::vec3(0.0f);
+            }
+        }
+    }
 
     // Standing after this frame: the feet rest on a surface (at most a small
     // step below them) and the body is not falling.
@@ -532,10 +645,26 @@ void Game::updatePlayerPhysics(float deltaTime) {
         eyeHeightCurrent_ = targetEye;
     }
 
+    // Walking up stairs/kerbs snaps the body up by a whole step. Keep the
+    // camera a little behind that vertical snap (visual only) so continuous
+    // stairs do not jolt the view, then ease it back out.
+    const float feetDelta = playerPos.y - feetBefore;
+    if (groundedBefore && !isJumping &&
+        std::abs(feetDelta) > 0.08f &&
+        std::abs(feetDelta) <= kStepHeight + 0.05f) {
+        stepSmoothOffset_ -= feetDelta;
+        stepSmoothOffset_ = glm::clamp(stepSmoothOffset_, -kStepHeight, kStepHeight);
+    }
+    const float stepBlend = 1.0f - std::exp(-deltaTime * 22.0f);
+    stepSmoothOffset_ += (0.0f - stepSmoothOffset_) * stepBlend;
+    if (std::abs(stepSmoothOffset_) < 0.002f) stepSmoothOffset_ = 0.0f;
+
     // The camera follows the body exactly. (A smoothed X/Z lag made the map
     // look doubled: the world is drawn once mid-frame with this position and
     // once at the end, so any lag between the two shifted the two copies.)
-    camera.Position = glm::vec3(playerPos.x, playerPos.y + eyeHeightCurrent_, playerPos.z);
+    camera.Position = glm::vec3(playerPos.x,
+                                playerPos.y + eyeHeightCurrent_ + stepSmoothOffset_,
+                                playerPos.z);
     camera.updateCameraVectors();
 }
 
@@ -545,14 +674,19 @@ void Game::updatePlayerPhysics(float deltaTime) {
 
 bool Game::isSupportedAt(const glm::vec3& feet) const {
     if (!currentMap) return false;
-    // The body rests on the highest surface under its footprint, up to one
-    // small step below the feet (a few millimetres above them are float error
-    // after a snap).
+    // The body rests on the highest real surface under its footprint, up to
+    // one small step below the feet (a few millimetres above them are float
+    // error after a snap).
     glm::vec3 mn, mx;
     bodyBounds(feet, mn, mx);
     float support = feet.y;
-    if (!currentMap->supportHeight(mn, mx, kGroundSnap + 0.02f, support)) return false;
-    return support <= feet.y + 0.02f && feet.y - support <= kGroundSnap + 0.02f;
+    glm::vec3 normal(0.0f, 1.0f, 0.0f);
+    if (!groundSurfaceUnderBox(mn, mx, kGroundSnap + 0.02f, 0.02f,
+                               support, normal)) {
+        return false;
+    }
+    return isWalkableSlope(normal) &&
+           support <= feet.y + 0.02f && feet.y - support <= kGroundSnap + 0.02f;
 }
 
 bool Game::isOnGround() const {
@@ -884,70 +1018,23 @@ void Game::updateProjectiles(float deltaTime) {
                 
                 for (const MapBlock& block : blocks) {
                     if (!block.solid) continue;
-                    
-                    // Block bounds
-                    glm::vec3 blockMin = block.position - block.scale * 0.5f;
-                    glm::vec3 blockMax = block.position + block.scale * 0.5f;
-                    
-                    // Simple point check first (for slow grenades)
-                    if (projectiles[i].position.x >= blockMin.x && projectiles[i].position.x <= blockMax.x &&
-                        projectiles[i].position.y >= blockMin.y && projectiles[i].position.y <= blockMax.y &&
-                        projectiles[i].position.z >= blockMin.z && projectiles[i].position.z <= blockMax.z) {
-                        
+
+                    // Direct hit (slow grenades) respects the block rotation.
+                    if (block.containsPoint(projectiles[i].position)) {
                         // No bounce: detonate on impact.
                         detonateAndDeactivate(projectiles[i].position);
                         break;
                     }
-                    
-                    // Swept collision for fast-moving grenades - ray-box intersection
+
+                    // Swept collision for fast-moving grenades, against the
+                    // real oriented block box.
                     if (rayLength > 0.1f) {
-                        // Ray-box intersection using slab method
-                        float tmin = 0.0f;
-                        float tmax = rayLength;
-                        
-                        // Check X slab
-                        if (abs(rayDir.x) < 0.0001f) {
-                            if (prevPos.x < blockMin.x || prevPos.x > blockMax.x) continue;
-                        } else {
-                            float tx1 = (blockMin.x - prevPos.x) / rayDir.x;
-                            float tx2 = (blockMax.x - prevPos.x) / rayDir.x;
-                            float txmin = std::min(tx1, tx2);
-                            float txmax = std::max(tx1, tx2);
-                            tmin = std::max(tmin, txmin);
-                            tmax = std::min(tmax, txmax);
-                            if (tmin > tmax) continue;
-                        }
-                        
-                        // Check Y slab
-                        if (abs(rayDir.y) < 0.0001f) {
-                            if (prevPos.y < blockMin.y || prevPos.y > blockMax.y) continue;
-                        } else {
-                            float ty1 = (blockMin.y - prevPos.y) / rayDir.y;
-                            float ty2 = (blockMax.y - prevPos.y) / rayDir.y;
-                            float tymin = std::min(ty1, ty2);
-                            float tymax = std::max(ty1, ty2);
-                            tmin = std::max(tmin, tymin);
-                            tmax = std::min(tmax, tymax);
-                            if (tmin > tmax) continue;
-                        }
-                        
-                        // Check Z slab
-                        if (abs(rayDir.z) < 0.0001f) {
-                            if (prevPos.z < blockMin.z || prevPos.z > blockMax.z) continue;
-                        } else {
-                            float tz1 = (blockMin.z - prevPos.z) / rayDir.z;
-                            float tz2 = (blockMax.z - prevPos.z) / rayDir.z;
-                            float tzmin = std::min(tz1, tz2);
-                            float tzmax = std::max(tz1, tz2);
-                            tmin = std::max(tmin, tzmin);
-                            tmax = std::min(tmax, tzmax);
-                            if (tmin > tmax) continue;
-                        }
-                        
-                        // Collision detected along the ray
-                        if (tmin <= rayLength && tmin >= 0.0f) {
-                            // Position grenade at impact point
-                            projectiles[i].position = prevPos + rayDir * (tmin - 0.01f);
+                        const MapBlockRayHit hit =
+                            intersectMapBlockRay(block, prevPos, rayDir, rayLength);
+                        if (hit.hit) {
+                            // Position grenade just before the impact point.
+                            projectiles[i].position =
+                                prevPos + rayDir * std::max(0.0f, hit.distance - 0.01f);
 
                             // No bounce: detonate on impact.
                             detonateAndDeactivate(projectiles[i].position);
@@ -1209,27 +1296,16 @@ void Game::createFlashbangEffect(glm::vec3 position) {
         for (const MapBlock& block : blocks) {
             if (!block.solid) continue;
 
-            // Simple ray-box intersection check
-            glm::vec3 blockMin = block.position - block.scale * 0.5f;
-            glm::vec3 blockMax = block.position + block.scale * 0.5f;
+            // Oriented block ray cast: a rotated wall blocks the flash where it
+            // is drawn, not over the larger axis-aligned box around it.
+            const MapBlockRayHit hit =
+                intersectMapBlockRay(block, eye, rayDir, rayLength);
 
-            // Check if ray intersects block
-            float tMin = 0.0f, tMax = rayLength;
-            for (int axis = 0; axis < 3; axis++) {
-                if (rayDir[axis] != 0.0f) {
-                    float t1 = (blockMin[axis] - eye[axis]) / rayDir[axis];
-                    float t2 = (blockMax[axis] - eye[axis]) / rayDir[axis];
-                    tMin = std::max(tMin, std::min(t1, t2));
-                    tMax = std::min(tMax, std::max(t1, t2));
-                }
-            }
-
-            // Only block if the wall is NOT very close to the flashbang (flashbang is touching the wall)
-            // If tMax is very close to rayLength, the flashbang is right next to the wall
-            if (tMin < tMax && tMin < rayLength && tMax > 0.0f) {
-                float distanceFromFlashbang = rayLength - tMax;
+            // Only block if the wall is NOT very close to the flashbang
+            // (the flashbang may be touching the wall it explodes against).
+            if (hit.hit) {
+                const float distanceFromFlashbang = rayLength - hit.distance;
                 if (distanceFromFlashbang > 0.5f) {
-                    // Wall is significantly between player and flashbang
                     hasLineOfSight = false;
                     break;
                 }
@@ -1391,13 +1467,13 @@ bool Game::checkProjectileCollision(Projectile& projectile) {
         const glm::vec3 segment = currPos - prevPos;
         const float rayLength = glm::length(segment);
 
-        // Swept collision through the SpatialKit segment/AABB test. Only blocks
-        // the shot actually crosses are candidates; the nearest impact wins so
-        // the bullet stops on the surface instead of at its end-of-frame
-        // position (which can be inside or behind the wall).
+        // Swept collision against the blocks' oriented boxes. Only blocks the
+        // shot actually crosses are candidates; the nearest impact wins so the
+        // bullet stops on the surface instead of at its end-of-frame position
+        // (which can be inside or behind the wall). Rotated blocks are tested
+        // on their real faces, not their larger axis-aligned bounds.
         if (rayLength > 0.1f) {
-            const spatialkit::Vec3 from = toSpatial(prevPos);
-            const spatialkit::Vec3 to = toSpatial(currPos);
+            const glm::vec3 rayDir = segment / rayLength;
 
             float nearestT = std::numeric_limits<float>::infinity();
             glm::vec3 impactPoint = currPos;
@@ -1405,20 +1481,15 @@ bool Game::checkProjectileCollision(Projectile& projectile) {
             for (const MapBlock& block : blocks) {
                 if (!block.solid) continue;
 
-                const glm::vec3 blockMin = block.position - block.scale * 0.5f;
-                const glm::vec3 blockMax = block.position + block.scale * 0.5f;
-                const spatialkit::AABB box{toSpatial(blockMin),
-                                           toSpatial(blockMax)};
-
-                const spatialkit::RayHit hit =
-                    spatialkit::intersectSegmentAABB(from, to, box);
-                if (hit.hit && hit.t < nearestT) {
-                    nearestT = hit.t;
-                    impactPoint = toGlm(hit.point);
+                const MapBlockRayHit hit =
+                    intersectMapBlockRay(block, prevPos, rayDir, rayLength);
+                if (hit.hit && hit.distance < nearestT) {
+                    nearestT = hit.distance;
+                    impactPoint = hit.point;
                 }
             }
 
-            if (nearestT <= 1.0f) {
+            if (nearestT <= rayLength) {
                 projectile.position = impactPoint;
                 return true;
             }

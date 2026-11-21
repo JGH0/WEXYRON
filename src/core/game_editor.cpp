@@ -51,6 +51,16 @@ const glm::vec3 kPick(1.00f, 0.85f, 0.25f);
 
 constexpr float kGlyphHeight = 40.0f;  ///< 5 glyph rows * 8px
 
+/// Brush size limits. Thin walls / slabs go down to 0.1 units.
+constexpr float kMinBrushSize = 0.1f;
+constexpr float kMaxBrushSize = 32.0f;
+
+/// Finer steps while a dimension is below 1 unit, so thin geometry is easy to
+/// tune without clicking 20 times for every normal wall thickness.
+float brushResizeStep(float current) {
+    return current <= 1.0f ? 0.1f : 0.5f;
+}
+
 struct Rect {
     float x = 0.0f, y = 0.0f, w = 0.0f, h = 0.0f;
     bool contains(float px, float py) const {
@@ -140,7 +150,7 @@ const char* const kTextureNames[8] = {
 
 struct EditorLayout {
     Rect top, left, right, bottom;
-    Rect newBtn, openBtn, saveBtn, helpBtn, exitBtn;
+    Rect newBtn, openBtn, saveBtn, helpBtn, exitBtn, testBtn;
     Rect tool[5];
     Rect undoBtn, redoBtn;
     Rect sizeMinus[3], sizePlus[3];
@@ -182,6 +192,7 @@ EditorLayout computeLayout(GLFWwindow* window, bool spawnPanel) {
     l.saveBtn = rightButton(62.0f);
     l.openBtn = rightButton(62.0f);
     l.newBtn  = rightButton(56.0f);
+    l.testBtn = rightButton(74.0f);
 
     // Left rail: tools.
     float y = l.left.y + 34.0f;
@@ -209,6 +220,7 @@ EditorLayout computeLayout(GLFWwindow* window, bool spawnPanel) {
             l.spawn[i] = {rx, ry, rw, 30.0f};
             ry += 36.0f;
         }
+        l.spawnsBtn = {rx, ry + 10.0f, rw, 28.0f};
     } else {
         ry += 22.0f;  // "BRUSH" header
         for (int i = 0; i < 3; ++i) {
@@ -273,7 +285,7 @@ DialogLayout dialogLayout(const UIHelpers::UIBounds& b, int kind, int optionCoun
             break;
         }
         case DIALOG_CONFIRM: w = 480.0f; h = 226.0f; break;
-        case DIALOG_HELP:    w = 620.0f; h = 474.0f; break;
+        case DIALOG_HELP:    w = 620.0f; h = 512.0f; break;
         default:             w = 440.0f; h = 250.0f; break;
     }
     d.card = centred(b, w, h);
@@ -361,59 +373,57 @@ struct AimResult {
     glm::vec3 place{0.0f};
 };
 
-/// Ray cast against every block's cached AABB (a few thousand blocks at most).
+/// Ray cast against every block's oriented bounds. Axis-aligned blocks use the
+/// cheap slab test; rotated ones hit their real faces (so a pitched block's
+/// surface/tip can be aimed at instead of the box that contains it).
 AimResult castAim(Map* map, const glm::vec3& origin, const glm::vec3& dir,
                   float maxDistance, float grid, float freeDistance,
-                  const glm::vec3& brush, bool snap) {
+                  const glm::vec3& brush, float brushYaw, float brushPitch,
+                  bool snap) {
     AimResult best;
     float bestT = maxDistance;
+
+    // Support distance from the brush centre to its face along an arbitrary
+    // world normal. For an unrotated brush this is just half of the brush size
+    // on the matching world axis.
+    glm::vec3 brushAxisX, brushAxisY, brushAxisZ;
+    {
+        MapBlock brushBlock(glm::vec3(0.0f), brush, 0, 0, true, glm::vec3(1.0f),
+                            brushYaw, brushPitch);
+        mapBlockBasis(brushBlock, brushAxisX, brushAxisY, brushAxisZ);
+    }
 
     if (map) {
         const auto& blocks = map->getBlocks();
         for (int i = 0; i < static_cast<int>(blocks.size()); ++i) {
             const MapBlock& block = blocks[i];
-            glm::vec3 lo = block.boundsMin_;
-            glm::vec3 hi = block.boundsMax_;
-            // spawn markers are tiny; ignore degenerate boxes
-            if (hi.x < lo.x || hi.y < lo.y || hi.z < lo.z) continue;
+            const MapBlockRayHit hit =
+                intersectMapBlockRay(block, origin, dir, bestT);
+            if (!hit.hit || hit.distance <= 0.001f || hit.distance >= bestT)
+                continue;
 
-            float tMin = 0.0f;
-            float tMax = bestT;
-            int axis = -1;
-            float sign = 0.0f;
-            bool miss = false;
-
-            for (int a = 0; a < 3; ++a) {
-                if (std::abs(dir[a]) < 1.0e-6f) {
-                    if (origin[a] < lo[a] || origin[a] > hi[a]) { miss = true; break; }
-                    continue;
-                }
-                float t1 = (lo[a] - origin[a]) / dir[a];
-                float t2 = (hi[a] - origin[a]) / dir[a];
-                float s = -1.0f;
-                if (t1 > t2) { std::swap(t1, t2); s = 1.0f; }
-                if (t1 > tMin) { tMin = t1; axis = a; sign = s; }
-                if (t2 < tMax) tMax = t2;
-                if (tMin > tMax) { miss = true; break; }
-            }
-            if (miss || axis < 0 || tMin <= 0.001f || tMin >= bestT) continue;
-
-            bestT = tMin;
+            bestT = hit.distance;
             best.hit = true;
             best.index = i;
-            best.point = origin + dir * tMin;
-            best.normal = glm::vec3(0.0f);
-            best.normal[axis] = sign;
+            best.point = hit.point;
+            best.normal = hit.normal;
 
-            const glm::vec3 half = block.scale * 0.5f;
-            glm::vec3 place = best.point;
+            const float brushHalf =
+                0.5f * (std::abs(glm::dot(hit.normal, brushAxisX)) * brush.x +
+                        std::abs(glm::dot(hit.normal, brushAxisY)) * brush.y +
+                        std::abs(glm::dot(hit.normal, brushAxisZ)) * brush.z);
+
+            glm::vec3 place = hit.point;
             if (snap && grid > 0.001f) {
-                // Keep the brush on the world lattice tangentially, but place
-                // its face exactly against the surface that was hit.
-                place = glm::round(place / grid) * grid;
+                // Keep the brush on the world lattice tangentially, then put it
+                // back on the exact surface plane so a tilted face stays flush.
+                for (int a = 0; a < 3; ++a) {
+                    if (std::abs(hit.normal[a]) < 0.75f)
+                        place[a] = glm::round(place[a] / grid) * grid;
+                }
+                place -= hit.normal * glm::dot(place - hit.point, hit.normal);
             }
-            place[axis] = block.position[axis] +
-                          sign * (half[axis] + brush[axis] * 0.5f);
+            place += hit.normal * brushHalf;
             best.place = place;
         }
     }
@@ -508,6 +518,7 @@ void Game::enterEditor() {
     editorAimValid_ = false;
     editorAimHit_ = false;
     editorAimBlock_ = -1;
+    editorPlaytesting_ = false;
     editorUndo_.clear();
     editorRedo_.clear();
     editorShowGrid = true;
@@ -574,6 +585,80 @@ void Game::leaveEditor() {
     gameState = MENU;
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
 }
+
+// ---------------------------------------------------------------------------
+// Playtest: drop into the map as a player without saving / leaving the editor.
+// ---------------------------------------------------------------------------
+
+void Game::editorStartPlaytest() {
+    if (!currentMap || editorPlaytesting_) return;
+
+    // Remember the editor's view and match mode so returning is seamless.
+    editorPlaytestCamPos_ = camera.Position;
+    editorPlaytestYaw_ = camera.Yaw;
+    editorPlaytestPitch_ = camera.Pitch;
+    editorPlaytestMode_ = currentGameMode;
+    editorPlaytesting_ = true;
+    editorLookActive_ = false;
+    editorStrokeActive_ = false;
+    editorUiCapture_ = false;
+
+    // Deathmatch has no round/bomb state to get in the way of movement tests.
+    currentGameMode = DEATHMATCH;
+    bombDefusalMode = false;
+    roundActive = false;
+    matchOver_ = false;
+    roundEndTimer = 0.0f;
+    resetGame();   // clean health/ammo, PLAYING state, play cursor
+
+    // Spawn where the editor is aiming (a ledge, a jump, the map floor), or
+    // from the camera when nothing is under the cursor. placeAtSafePosition
+    // rests the body on the surface and never leaves it inside geometry.
+    glm::vec3 feet = editorPlaytestCamPos_ - glm::vec3(0.0f, eyeHeight, 0.0f);
+    if (editorAimValid_ && editorAimHit_) {
+        feet = editorAimPoint_ + editorAimNormal_ * 0.15f;
+    }
+    if (placeAtSafePosition(feet, 1.0f)) {
+        playerPos = feet;
+    }
+    playerVelocity = glm::vec3(0.0f);
+    camera.Position = playerPos + glm::vec3(0.0f, currentEyeHeight(), 0.0f);
+    camera.Yaw = editorPlaytestYaw_;
+    camera.Pitch = editorPlaytestPitch_;
+    camera.updateCameraVectors();
+}
+
+void Game::editorStopPlaytest() {
+    if (!editorPlaytesting_) return;
+
+    editorPlaytesting_ = false;
+    currentGameMode = editorPlaytestMode_;
+
+    // Leave no live shots from the test run behind.
+    for (int i = 0; i < MAX_PROJECTILES; ++i) projectiles[i].active = false;
+    activeProjectiles = 0;
+
+    isDead = false;
+    spectatorMode = false;
+    camera.Position = editorPlaytestCamPos_;
+    camera.Yaw = editorPlaytestYaw_;
+    camera.Pitch = editorPlaytestPitch_;
+    camera.updateCameraVectors();
+
+    editorAimValid_ = false;
+    editorStrokeActive_ = false;
+    editorUiCapture_ = false;
+    inp.resetNavKeys();
+    menuJustEntered = true;
+    gameState = MAP_EDITOR;
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+    if (glfwRawMouseMotionSupported()) {
+        glfwSetInputMode(window, GLFW_RAW_MOUSE_MOTION, GLFW_FALSE);
+    }
+    firstMouse = true;
+    editorShowToast("BACK IN EDITOR - F5 TO TEST AGAIN", 2.5);
+}
+
 
 // ===========================================================================
 // Undo / redo and map replacement
@@ -1157,6 +1242,10 @@ void Game::processEditorInput(float deltaTime) {
         editorAimValid_ = false;
         return;
     }
+    if (editorKeyPressed(GLFW_KEY_F5)) {
+        editorStartPlaytest();
+        return;
+    }
     if (ctrl && editorKeyPressed(GLFW_KEY_S)) {
         if (saveEditorMap(editorMapName)) editorShowToast("SAVED " + editorMapName);
         return;
@@ -1168,6 +1257,16 @@ void Game::processEditorInput(float deltaTime) {
         return;
     }
     if (ctrl && editorKeyPressed(GLFW_KEY_Y)) { editorRedo(); return; }
+
+    auto resizeBrushAxis = [&](int axis, float direction) {
+        const float current = editorBlockSize[axis];
+        const float step = brushResizeStep(current);
+        editorBlockSize[axis] = glm::clamp(current + direction * step,
+                                           kMinBrushSize, kMaxBrushSize);
+    };
+    auto resizeBrushAll = [&](float direction) {
+        for (int axis = 0; axis < 3; ++axis) resizeBrushAxis(axis, direction);
+    };
 
     if (editorKeyPressed(GLFW_KEY_B)) editorTool = EditorTool::Build;
     if (editorKeyPressed(GLFW_KEY_P)) editorTool = EditorTool::Paint;
@@ -1181,10 +1280,10 @@ void Game::processEditorInput(float deltaTime) {
         if (editorKeyPressed(GLFW_KEY_1 + i)) editorSelectedTexture = i;
     }
     if (editorKeyPressed(GLFW_KEY_LEFT_BRACKET)) {
-        editorBlockSize = glm::max(editorBlockSize - glm::vec3(0.5f), glm::vec3(0.5f));
+        resizeBrushAll(-1.0f);
     }
     if (editorKeyPressed(GLFW_KEY_RIGHT_BRACKET)) {
-        editorBlockSize = glm::min(editorBlockSize + glm::vec3(0.5f), glm::vec3(32.0f));
+        resizeBrushAll(1.0f);
     }
     if (editorKeyPressed(GLFW_KEY_R)) {
         editorBlockRotation = 0.0f;
@@ -1237,7 +1336,8 @@ void Game::processEditorInput(float deltaTime) {
         const glm::vec3 dir = rayThroughCursor(mx, my, b, view, projection);
         const AimResult aim = castAim(currentMap, camera.Position, dir, 120.0f,
                                       editorGridSize, editorBlockOffset,
-                                      editorBlockSize, editorSnapToGrid);
+                                      editorBlockSize, editorBlockRotation,
+                                      editorBlockPitch, editorSnapToGrid);
         editorAimValid_ = true;
         editorAimHit_ = aim.hit;
         editorAimBlock_ = aim.index;
@@ -1249,8 +1349,11 @@ void Game::processEditorInput(float deltaTime) {
     }
 
     // ── Panel buttons ─────────────────────────────────────────────────────
-    auto clickSize = [&](int axis, float delta) {
-        editorBlockSize[axis] = glm::clamp(editorBlockSize[axis] + delta, 0.5f, 32.0f);
+    auto clickSize = [&](int axis, float direction) {
+        const float current = editorBlockSize[axis];
+        const float step = brushResizeStep(current);
+        editorBlockSize[axis] = glm::clamp(current + direction * step,
+                                           kMinBrushSize, kMaxBrushSize);
     };
     auto adjustRotation = [&](float deltaYaw, float deltaPitch) {
         editorBlockRotation = std::fmod(editorBlockRotation + deltaYaw + 360.0f, 360.0f);
@@ -1263,7 +1366,8 @@ void Game::processEditorInput(float deltaTime) {
             bool handled = true;
 
             if (layout.top.contains(mx, my)) {
-                if (layout.newBtn.contains(mx, my)) editorRequestNew();
+                if (layout.testBtn.contains(mx, my)) editorStartPlaytest();
+                else if (layout.newBtn.contains(mx, my)) editorRequestNew();
                 else if (layout.openBtn.contains(mx, my)) editorRequestOpen();
                 else if (layout.saveBtn.contains(mx, my)) {
                     editorModal = EditorModal::Save;
@@ -1306,10 +1410,14 @@ void Game::processEditorInput(float deltaTime) {
                             hit = true;
                         }
                     }
+                    if (layout.spawnsBtn.contains(mx, my)) {
+                        editorShowSpawns = !editorShowSpawns;
+                        hit = true;
+                    }
                 } else {
                     for (int i = 0; i < 3; ++i) {
-                        if (layout.sizeMinus[i].contains(mx, my)) { clickSize(i, -0.5f); hit = true; }
-                        if (layout.sizePlus[i].contains(mx, my))  { clickSize(i,  0.5f); hit = true; }
+                        if (layout.sizeMinus[i].contains(mx, my)) { clickSize(i, -1.0f); hit = true; }
+                        if (layout.sizePlus[i].contains(mx, my))  { clickSize(i,  1.0f); hit = true; }
                     }
                     if (layout.yawMinus.contains(mx, my))   { adjustRotation(-15.0f, 0.0f); hit = true; }
                     if (layout.yawPlus.contains(mx, my))    { adjustRotation( 15.0f, 0.0f); hit = true; }
@@ -1342,7 +1450,7 @@ void Game::processEditorInput(float deltaTime) {
             editorUiCapture_ = false;
             editorStrokeActive_ = true;
             if (editorTool != EditorTool::Pick) editorPushUndo();
-            editorLastBrushTime_ = 0.0;
+            editorLastBrushTime_ = glfwGetTime();
             editorApplyTool();
         }
     }
@@ -1617,7 +1725,9 @@ void Game::renderEditor() {
     std::string mapLine = "MAP: " + editorMapName;
     if (editorDirty) mapLine += "  *UNSAVED";
     {
-        const float maxW = std::max(80.0f, layout.newBtn.x - layout.top.x - 22.0f);
+        const float maxW = std::max(80.0f,
+                                    std::min(layout.newBtn.x, layout.testBtn.x) -
+                                        layout.top.x - 22.0f);
         float s = 0.30f;
         const float need = renderer.getTextWidth(mapLine, s);
         if (need > maxW && need > 0.0f) s *= maxW / need;
@@ -1626,6 +1736,7 @@ void Game::renderEditor() {
                                  editorDirty ? kAccentSoft : kMuted);
     }
 
+    button(renderer, layout.testBtn, "TEST [F5]", false, hover(layout.testBtn));
     button(renderer, layout.newBtn, "NEW", false, hover(layout.newBtn));
     button(renderer, layout.openBtn, "OPEN", false, hover(layout.openBtn));
     button(renderer, layout.saveBtn, "SAVE", false, hover(layout.saveBtn));
@@ -1666,7 +1777,9 @@ void Game::renderEditor() {
             button(renderer, layout.spawn[i], kSpawnLabels[i],
                    editorSpawnMode == kModes[i], hover(layout.spawn[i]));
         }
-        const float hintY = layout.spawn[4].y + layout.spawn[4].h + 18.0f;
+        button(renderer, layout.spawnsBtn, "SHOW SPAWNS", editorShowSpawns,
+               hover(layout.spawnsBtn));
+        const float hintY = layout.spawnsBtn.y + layout.spawnsBtn.h + 14.0f;
         renderer.drawTextFit("CLICK IN THE WORLD TO PLACE", rx, hintY, rw, 0.32f);
         renderer.drawTextFit("ERASE TOOL REMOVES MARKERS", rx, hintY + 20.0f, rw, 0.32f);
     } else {
@@ -1762,7 +1875,7 @@ void Game::renderEditor() {
             "LMB TOOL   RMB LOOK   WASD MOVE   Q/E UP-DOWN   SHIFT FAST",
             layout.bottom.x + 12.0f, layout.bottom.y + 6.0f, textW, 0.29f);
         renderer.drawTextFit(
-            "1-8 TEX   B P X I M TOOLS   CTRL+Z/Y UNDO   CTRL+S SAVE   F1 HELP",
+            "1-8 TEX   B P X I M TOOLS   F5 TEST   CTRL+Z/Y UNDO   CTRL+S SAVE   F1 HELP",
             layout.bottom.x + 12.0f, layout.bottom.y + 25.0f, textW, 0.29f);
     }
 
@@ -1904,6 +2017,7 @@ void Game::renderEditor() {
             "CTRL + S      SAVE MAP",
             "CTRL + N / O  NEW / OPEN MAP",
             "F1            THIS HELP",
+            "F5            PLAYTEST (ESC / F5 RETURNS)",
             "ESC           LEAVE THE EDITOR"
         };
         float hy = d.card.y + 86.0f;

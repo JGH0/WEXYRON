@@ -87,6 +87,25 @@ void mapBlockBasis(const MapBlock& block, glm::vec3& axisX, glm::vec3& axisY, gl
 /// Inverse of mapBlockBasis: world direction -> block local direction.
 glm::vec3 mapBlockToLocalDir(const MapBlock& block, const glm::vec3& worldDir);
 
+/**
+ * @brief Intersection of a ray with a block, respecting the block's rotation.
+ *
+ * `direction` must be normalized. `distance` is in world units along the ray.
+ * Unlike the cached AABB, this hits the actual (possibly pitched / yawed)
+ * faces, so shots and editor placement line up with what is drawn.
+ */
+struct MapBlockRayHit {
+    bool hit = false;
+    float distance = 0.0f;
+    glm::vec3 point{0.0f};
+    glm::vec3 normal{0.0f, 1.0f, 0.0f};
+};
+
+MapBlockRayHit intersectMapBlockRay(const MapBlock& block,
+                                    const glm::vec3& origin,
+                                    const glm::vec3& direction,
+                                    float maxDistance);
+
 
 /**
  * @brief Structure representing a generic spawn point (for Deathmatch)
@@ -297,6 +316,21 @@ public:
     /// is left alone; callers must not treat a missing surface as support).
     bool supportHeight(const glm::vec3& min, const glm::vec3& max, float maxDrop,
                        float& height) const;
+
+    /**
+     * @brief Highest upward-facing surface below a vertical line.
+     *
+     * Used by walking physics for ramps: unlike an axis-aligned top it returns
+     * the real height of a pitched block's surface at (x, z), together with the
+     * surface normal (so the caller can tell a walkable ramp from a steep
+     * slide).
+     */
+    struct GroundHit {
+        bool hit = false;
+        float height = 0.0f;
+        glm::vec3 normal{0.0f, 1.0f, 0.0f};
+    };
+    GroundHit groundSurfaceAt(float x, float z, float fromY, float maxDrop) const;
 
     /// Lowest surface above the box that stops a rising body (its underside),
     /// or `max.y` when nothing is above within `maxRise`.

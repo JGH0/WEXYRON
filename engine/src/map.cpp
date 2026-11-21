@@ -518,6 +518,71 @@ glm::vec3 mapBlockToLocalDir(const MapBlock& block, const glm::vec3& worldDir) {
     return glm::vec3(glm::dot(worldDir, ax), glm::dot(worldDir, ay), glm::dot(worldDir, az));
 }
 
+MapBlockRayHit intersectMapBlockRay(const MapBlock& block,
+                                    const glm::vec3& origin,
+                                    const glm::vec3& direction,
+                                    float maxDistance) {
+    MapBlockRayHit result;
+
+    glm::vec3 axes[3] = {glm::vec3(1.0f, 0.0f, 0.0f),
+                         glm::vec3(0.0f, 1.0f, 0.0f),
+                         glm::vec3(0.0f, 0.0f, 1.0f)};
+    if (!block.isAxisAligned()) {
+        mapBlockBasis(block, axes[0], axes[1], axes[2]);
+    }
+
+    const glm::vec3 half = block.scale * 0.5f;
+    const glm::vec3 rel = origin - block.position;
+
+    float tEnter = -std::numeric_limits<float>::infinity();
+    float tExit = maxDistance;
+    int hitAxis = -1;
+    float hitSign = 0.0f;
+
+    for (int a = 0; a < 3; ++a) {
+        const float localOrigin = glm::dot(rel, axes[a]);
+        const float localDir = glm::dot(direction, axes[a]);
+        const float extent = half[a];
+
+        if (std::abs(localDir) < 1.0e-6f) {
+            // Parallel to this slab: outside it means the ray misses entirely.
+            if (localOrigin < -extent || localOrigin > extent) return result;
+            continue;
+        }
+
+        float t1 = (-extent - localOrigin) / localDir;
+        float t2 = ( extent - localOrigin) / localDir;
+        float sign = -1.0f;   // entering through the -axis face
+        if (t1 > t2) {
+            std::swap(t1, t2);
+            sign = 1.0f;      // entering through the +axis face
+        }
+
+        if (t1 > tEnter) {
+            tEnter = t1;
+            hitAxis = a;
+            hitSign = sign;
+        }
+        if (t2 < tExit) tExit = t2;
+        if (tEnter > tExit) return result;
+    }
+
+    if (tExit < 0.0f) return result;   // the whole intersection is behind the ray
+    if (hitAxis < 0 || tEnter > maxDistance) return result;
+    if (tEnter < 0.0f) {
+        // Origin is inside the block: the shot starts in geometry.
+        tEnter = 0.0f;
+        result.normal = -direction;
+    } else {
+        result.normal = axes[hitAxis] * hitSign;
+    }
+
+    result.hit = true;
+    result.distance = tEnter;
+    result.point = origin + direction * tEnter;
+    return result;
+}
+
 void MapBlock::updateBoundsCache() const {
     if (isAxisAligned()) {
         boundsMin_ = localMin();
@@ -843,6 +908,36 @@ float Map::ceilingHeight(const glm::vec3& mn, const glm::vec3& mx, float maxRise
         return true;
     });
     return lowest;
+}
+
+Map::GroundHit Map::groundSurfaceAt(float x, float z, float fromY,
+                                    float maxDrop) const {
+    GroundHit result;
+    if (maxDrop <= 0.0f) return result;
+
+    const glm::vec3 origin(x, fromY, z);
+    const glm::vec3 down(0.0f, -1.0f, 0.0f);
+    float best = maxDrop;
+
+    forEachBlockNear(glm::vec3(x - 0.02f, fromY - maxDrop, z - 0.02f),
+                     glm::vec3(x + 0.02f, fromY, z + 0.02f),
+                     [&](const MapBlock& b) {
+        if (!b.solid) return true;
+
+        const MapBlockRayHit hit =
+            intersectMapBlockRay(b, origin, down, best);
+        if (!hit.hit || hit.distance >= best) return true;
+        // Only upward-facing faces are ground. A vertical wall or an underside
+        // must not become a platform.
+        if (hit.normal.y <= 0.05f) return true;
+
+        best = hit.distance;
+        result.hit = true;
+        result.height = hit.point.y;
+        result.normal = glm::normalize(hit.normal);
+        return true;
+    });
+    return result;
 }
 
 float Map::highestPoint(const MapBlock& block) const {

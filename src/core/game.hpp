@@ -988,6 +988,10 @@ private:
     float fallTime = 0.0f;           ///< seconds spent falling (landing volume)
     float footstepPitch = 1.0f;      ///< slows down when wading in water
     bool  underwater = false;        ///< camera under the water surface
+    /// Downhill momentum on slopes steeper than the walkable limit.
+    glm::vec3 slopeSlideVelocity_{0.0f};
+    /// Visual-only vertical offset that softens stair/kerb step snaps.
+    float stepSmoothOffset_ = 0.0f;
     float gunshotPitch = 1.0f;       ///< random pitch per shot (not identical)
     std::string activeMusic_;        ///< music track requested last ("" none)
     
@@ -1092,12 +1096,24 @@ private:
     void horizontalSweep(glm::vec3& feet, glm::vec3& mn, glm::vec3& mx, float dx, float dz);
     /// One frame's vertical step, resting on / stopping at surfaces.
     void verticalSweep(glm::vec3& feet, glm::vec3& mn, glm::vec3& mx, float dy, bool falling);
+    /// Highest real (possibly sloped) surface under the body footprint at
+    /// `min.y`. `maxRise` looks above the feet, `maxDrop` below it.
+    bool groundSurfaceUnderBox(const glm::vec3& min, const glm::vec3& max,
+                               float maxDrop, float maxRise,
+                               float& height, glm::vec3& normal) const;
+    /// True for floors the player can walk up (normal within 40 deg of up).
+    static bool isWalkableSlope(const glm::vec3& normal);
     /// Floor support: a surface at most kGroundSnap below the feet.
     bool isSupportedAt(const glm::vec3& feet) const;
     /// Can the player start a jump right now? (standing, not already rising)
     bool isOnGround() const;
     /// Largest step up/down that still counts as standing on a surface.
     static constexpr float kGroundSnap = 0.35f;
+    /// Stairs/kerbs can be climbed up to this height, and followed down while
+    /// walking. Larger than kGroundSnap so continuous staircases stay smooth.
+    static constexpr float kStepHeight = 0.6f;
+    /// Walkable slope limit: 40 degrees from vertical (cos 40 deg).
+    static constexpr float kMaxWalkableSlopeCos = 0.7660444f;
     /// World position of the remote player `id` (feet), false when unknown.
     bool getRemotePlayerFeet(uint32_t id, glm::vec3& feet) const;
 
@@ -1227,6 +1243,12 @@ private:
     int editorAimBlock_ = -1;
     glm::vec3 editorAimPoint_{0.0f};
     glm::vec3 editorAimNormal_{0.0f, 1.0f, 0.0f};
+    /// True while the editor has dropped into the map for a quick playtest.
+    bool editorPlaytesting_ = false;
+    GameMode editorPlaytestMode_ = DEATHMATCH;
+    glm::vec3 editorPlaytestCamPos_{0.0f};
+    float editorPlaytestYaw_ = 0.0f;
+    float editorPlaytestPitch_ = 0.0f;
     /// Key-edge bookkeeping for the editor (one full keyboard scan per frame,
     /// so text input and shortcuts cannot leak pressed keys between screens).
     bool editorKeyCur_[GLFW_KEY_LAST + 1] = {};
@@ -1278,6 +1300,10 @@ private:
     void syncEditorKeyEdges();
     /// Apply the current tool to the aim result.
     void editorApplyTool();
+    /// Drop into the map as a player from the aimed spot / editor camera.
+    void editorStartPlaytest();
+    /// Return from a playtest to the editor (camera restored).
+    void editorStopPlaytest();
 
     /// Editor spawn point placement mode
     enum EditorSpawnMode {
@@ -1629,7 +1655,6 @@ private:
      * @brief Render damage screen effect when player takes damage
      */
     void renderDamageEffect();
-    void renderHealthEffect();
     
     /**
      * @brief Render death screen when player dies

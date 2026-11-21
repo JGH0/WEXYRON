@@ -154,29 +154,6 @@ void Game::renderDamageEffect() {
     }
 }
 
-void Game::renderHealthEffect() {
-    // Low health: a red pulse over the whole screen that gets stronger and
-    // faster the lower the player's health.
-    if (playerHealth < playerMaxHealth && playerHealth > 0.0f && window) {
-        UIHelpers::setProjection(renderer, window);
-
-        const float healthPercent = playerHealth / playerMaxHealth;
-        const float missing = 1.0f - healthPercent;   // 0 = full health, 1 = dead
-
-        // Peak opacity grows with the damage taken (up to ~0.35, so the screen
-        // stays readable at low health).
-        const float intensity = 0.35f * std::pow(missing, 1.3f);
-        // The pulse starts at ~2 Hz and speeds up towards ~7 Hz near death.
-        const float pulseHz = 2.0f + 5.0f * missing;
-        const float phase = static_cast<float>(glfwGetTime()) * pulseHz * 6.2831853f;
-        const float pulse = 0.5f + 0.5f * std::sin(phase);   // 0..1
-
-        // Start from a low baseline so the red never disappears completely.
-        const float alpha = intensity * (0.45f + 0.55f * pulse);
-        if (alpha > 0.0f) renderer.submitOverlay(glm::vec3(1.0f, 0.0f, 0.0f), alpha);
-    }
-}
-
 void Game::renderDeathScreen() {
     UIHelpers::setProjection(renderer, window);
     

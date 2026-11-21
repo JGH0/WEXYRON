@@ -1041,32 +1041,41 @@ void Renderer::renderSpawnPoints(Map* map, bool showSpawnPoints) {
     // projection is still active from the previous frame.
     if (inUi_) setCamera(worldView_, worldProjection_);
 
+    // Markers are per-frame geometry. They must go into the alpha batch (which
+    // beginFrame clears) rather than the persistent opaque world batch: opaque
+    // submissions survive until the map is rebuilt, so toggling SPAWNS off used
+    // to leave the markers visible and re-added them every frame.
+    auto marker = [&](const glm::vec3& centre, const glm::vec3& size,
+                      const glm::vec3& color) {
+        submitBox(centre, size, color, BlendMode::Alpha, 1.0f);
+    };
+
     for (const auto& spawn : map->getSpawnPoints()) {
-        submitBox(spawn.position, glm::vec3(0.5f), glm::vec3(1.0f, 1.0f, 0.0f));
+        marker(spawn.position, glm::vec3(0.5f), glm::vec3(1.0f, 1.0f, 0.0f));
         const float dirRad = glm::radians(spawn.yaw);
-        submitBox(spawn.position + glm::vec3(std::sin(dirRad) * 0.5f, 0.25f, std::cos(dirRad) * 0.5f),
-                  glm::vec3(0.15f), glm::vec3(1.0f, 0.8f, 0.0f));
+        marker(spawn.position + glm::vec3(std::sin(dirRad) * 0.5f, 0.25f, std::cos(dirRad) * 0.5f),
+               glm::vec3(0.15f), glm::vec3(1.0f, 0.8f, 0.0f));
     }
     for (const auto& spawn : map->getTeamSpawns()) {
         const glm::vec3 teamColor = (spawn.teamId == 0) ? glm::vec3(1, 0, 0) : glm::vec3(0, 0, 1);
-        submitBox(spawn.position, glm::vec3(0.5f), teamColor);
+        marker(spawn.position, glm::vec3(0.5f), teamColor);
         const float dirRad = glm::radians(spawn.yaw);
-        submitBox(spawn.position + glm::vec3(std::sin(dirRad) * 0.5f, 0.25f, std::cos(dirRad) * 0.5f),
-                  glm::vec3(0.15f), teamColor * 1.3f);
+        marker(spawn.position + glm::vec3(std::sin(dirRad) * 0.5f, 0.25f, std::cos(dirRad) * 0.5f),
+               glm::vec3(0.15f), teamColor * 1.3f);
     }
     for (const auto& site : map->getBombSites()) {
         if (!site.active) continue;
         const glm::vec3 color = (site.label == 'A') ? glm::vec3(1.0f, 0.85f, 0.0f)
                                                     : glm::vec3(1.0f, 0.5f, 0.0f);
-        submitBox(site.position + glm::vec3(0.0f, 0.1f, 0.0f), glm::vec3(1.5f, 0.2f, 1.5f), color);
+        marker(site.position + glm::vec3(0.0f, 0.1f, 0.0f), glm::vec3(1.5f, 0.2f, 1.5f), color);
         for (int h = 1; h <= 4; ++h) {
             const float fade = 1.0f - (h - 1) * 0.15f;
-            submitBox(site.position + glm::vec3(0.0f, h * 0.8f + 0.2f, 0.0f),
-                      glm::vec3(0.4f, 0.6f, 0.4f), color * fade);
+            marker(site.position + glm::vec3(0.0f, h * 0.8f + 0.2f, 0.0f),
+                   glm::vec3(0.4f, 0.6f, 0.4f), color * fade);
         }
-        submitBox(site.position + glm::vec3(0.0f, 4.6f, 0.0f), glm::vec3(0.8f, 0.2f, 0.8f), color);
-        submitBox(site.position + glm::vec3(0.0f, 5.2f, 0.0f), glm::vec3(0.5f, 0.2f, 0.5f), color * 0.9f);
-        submitBox(site.position + glm::vec3(0.0f, 5.6f, 0.0f), glm::vec3(0.25f, 0.2f, 0.25f), color * 0.8f);
+        marker(site.position + glm::vec3(0.0f, 4.6f, 0.0f), glm::vec3(0.8f, 0.2f, 0.8f), color);
+        marker(site.position + glm::vec3(0.0f, 5.2f, 0.0f), glm::vec3(0.5f, 0.2f, 0.5f), color * 0.9f);
+        marker(site.position + glm::vec3(0.0f, 5.6f, 0.0f), glm::vec3(0.25f, 0.2f, 0.25f), color * 0.8f);
     }
 }
 

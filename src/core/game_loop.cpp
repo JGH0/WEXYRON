@@ -300,9 +300,6 @@ void Game::render() {
         // Render damage effect
         renderDamageEffect();
 
-        // Render health-based red screen effect
-        renderHealthEffect();
-
         // Render flashbang effect
         renderFlashbangEffect();
 
@@ -311,6 +308,15 @@ void Game::render() {
 
         // Render bomb defusal HUD (team, bomb timer, progress)
         renderBombDefusalHUD();
+
+        // A playtest is a temporary visit to the editor map: say how to leave.
+        if (editorPlaytesting_) {
+            UIHelpers::setProjection(renderer, window);
+            const UIHelpers::UIBounds b = UIHelpers::getBounds(window);
+            renderer.drawTextFit("PLAYTEST  -  F5 / ESC  RETURN TO EDITOR",
+                                 b.left + 12.0f, b.bottom - 28.0f,
+                                 b.width() - 24.0f, 0.34f);
+        }
 
         // FPS counter (only when enabled)
         if (showFps) {

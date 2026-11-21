@@ -105,6 +105,16 @@ void Game::processInput(float deltaTime) {
     }
 
     if (gameState == PLAYING) {
+        // A playtest is still the editor: F5 or ESC drops back into it instead
+        // of opening the match menu.
+        if (editorPlaytesting_) {
+            syncEditorKeyEdges();
+            if (editorKeyPressed(GLFW_KEY_F5) ||
+                editorKeyPressed(GLFW_KEY_ESCAPE)) {
+                editorStopPlaytest();
+                return;
+            }
+        }
         // ESC opens the menu (unless the player bound another key to it).
         if (bindingDown(keyBindings.menu) && !inp.escapePressed) {
             inp.escapePressed = true;

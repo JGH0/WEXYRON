@@ -1068,6 +1068,8 @@ void Game::resetGame() {
               << std::endl;
 
     playerVelocity = glm::vec3(0.0f);
+    slopeSlideVelocity_ = glm::vec3(0.0f);
+    stepSmoothOffset_ = 0.0f;
     camera.Position = glm::vec3(playerPos.x, playerPos.y + eyeHeight, playerPos.z);
     camera.updateCameraVectors();
 

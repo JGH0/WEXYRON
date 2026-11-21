@@ -78,6 +78,33 @@ void testMap() {
     CHECK(std::fabs(glm::length(z) - 1.0f) < 1e-4f);
     CHECK(std::fabs(glm::dot(x, y)) < 1e-4f);
 
+    // Oriented ray cast: hits the real top face of a pitched block, not the
+    // axis-aligned box that contains it (the old collision missed this and
+    // shots stopped mid-air around rotated geometry).
+    MapBlock pitched(glm::vec3(0.0f), glm::vec3(2.0f, 0.2f, 2.0f), 0, 0, true,
+                     glm::vec3(1.0f), 0.0f, 45.0f);
+    const MapBlockRayHit topHit = intersectMapBlockRay(
+        pitched, glm::vec3(0.0f, 5.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), 10.0f);
+    CHECK(topHit.hit);
+    CHECK(topHit.distance > 4.8f && topHit.distance < 4.9f);
+    CHECK(topHit.normal.y > 0.7f);
+    CHECK(std::fabs(topHit.normal.z - 0.7071f) < 1.0e-3f);
+
+    // A block behind the ray must not report an intersection at the origin.
+    const MapBlockRayHit behindHit = intersectMapBlockRay(
+        pitched, glm::vec3(0.0f, 5.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f), 10.0f);
+    CHECK(!behindHit.hit);
+
+    // Ground queries use that same oriented face, so a ramp is walkable at its
+    // real surface height (not the enclosing AABB top).
+    Map probe;
+    probe.clear();
+    probe.addBlock(pitched);
+    const Map::GroundHit ground = probe.groundSurfaceAt(0.0f, 0.0f, 5.0f, 10.0f);
+    CHECK(ground.hit);
+    CHECK(std::fabs(ground.height - 0.1414f) < 1.0e-3f);
+    CHECK(std::fabs(ground.normal.z - 0.7071f) < 1.0e-3f);
+
     CHECK(map.deleteBlockAt(position));
     CHECK(map.findBlockAt(position) < 0);
 }

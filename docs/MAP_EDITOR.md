@@ -9,7 +9,7 @@ a save).
 
 ```
 +---------------------------------------------------------------+
-| MAP EDITOR   NEW  OPEN  SAVE  HELP  EXIT                      |
+| MAP EDITOR   TEST  NEW  OPEN  SAVE  HELP  EXIT                 |
 +----------+----------------------------------------+-----------+
 | TOOLS    |                                        | BRUSH     |
 | BUILD    |            3D view (mouse aims)        | size/rot  |
@@ -39,8 +39,9 @@ tool, so it only shows settings that matter.
 | `Ctrl` + wheel | Cycle textures |
 | `B`, `P`, `X`, `I`, `M` | Build / Paint / Erase / Pick / Spawn tool |
 | `1` - `8` | Choose texture |
-| `[` / `]` | Shrink / grow the brush uniformly |
+| `[` / `]` | Shrink / grow the brush uniformly (0.1 steps under 1 unit) |
 | `R` | Reset brush rotation |
+| `F5` | Playtest the map from the aimed spot (or the camera) |
 | `Up` / `Down` | Placement distance |
 | `Ctrl+Z` / `Ctrl+Y` | Undo / redo |
 | `Ctrl+S` | Save (current name) |
@@ -48,16 +49,24 @@ tool, so it only shows settings that matter.
 | `F1` | Controls reference |
 | `Esc` | Leave the editor (asks first if there are unsaved changes) |
 
+While playtesting, `F5` or `Esc` returns to the editor. The camera view is
+restored, so you can drop back into the same spot after testing jumps,
+movement or field of view.
+
 ## Tools
 
 - **Build** — places the current brush on the face under the cursor. The brush
-  size (`SIZE X/Y/Z`), yaw and pitch are shown in green while aiming.
+  size (`SIZE X/Y/Z`), yaw and pitch are shown in green while aiming. Pitched
+  and rotated blocks are hit on their real faces, so the brush sits on the
+  actual surface/tip instead of the larger box around it. Dimensions go down
+  to 0.1 units for thin walls and slabs.
 - **Paint** — replaces the texture of the aimed block.
 - **Erase** — removes the aimed block, or a spawn point / bomb site when no
-  block is under the cursor.
+  block is under the cursor. Each click removes exactly one thing.
 - **Pick** — copies the aimed block's size, rotation and texture into the brush.
 - **Spawn** — places deathmatch, team A/B spawns or bomb sites A/B.
-  Spawn markers are drawn in the world with their colours.
+  Spawn markers are drawn in the world with their colours; `SHOW SPAWNS` (or
+  the `SPAWNS` view toggle) hides them without changing the map.
 
 ## Building maps faster
 
