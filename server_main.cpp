@@ -218,17 +218,38 @@ int main(int argc, char* argv[]) {
 
     NetworkServer server;
     ServerBombManager bombManager;   // authoritative bomb state (per map)
+    ServerBotManager botManager;     // server-controlled players (pool)
     g_server = &server;
     server.setServerName(serverName);
     server.setMaxPlayers(maxPlayers);
     server.setMaxPlayersPerMachine(maxPlayersPerMachine);
     if (timeout > 0.0f) server.setTimeoutSeconds(timeout);
-    
+
+    // Lobby state (bot pool + current allocation) is useful to every client
+    // before a match starts. The server is authoritative for both the pool
+    // and the configured accuracy ceiling.
+    auto broadcastLobbyState = [&server, &botManager, botAccuracy]() {
+        LobbyStatePacket state{};
+        state.header.magic = PACKET_MAGIC;
+        state.header.type = PACKET_LOBBY_STATE;
+        state.header.sequence = 0;
+        state.header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        state.header.clientId = 0;
+        state.botPool = static_cast<uint8_t>(botManager.poolSize());
+        state.botsTeamA = static_cast<uint8_t>(botManager.assignedTeamA());
+        state.botsTeamB = static_cast<uint8_t>(botManager.assignedTeamB());
+        state.botAccuracy = static_cast<uint8_t>(std::lround(botManager.currentAccuracy() * 100.0f));
+        state.botMaxAccuracy = static_cast<uint8_t>(std::lround(botAccuracy * 100.0f));
+        state.matchFormat = 0;
+        server.broadcastPacket(&state, sizeof(state));
+    };
+
     // Set up callbacks
     // The server has no map geometry, so it never invents spawn positions:
     // the client (which knows the map) spawns, and its first input tells the
     // server where that is.
-    server.onPlayerConnect = [&server](uint32_t id) {
+    server.onPlayerConnect = [&server, &broadcastLobbyState](uint32_t id) {
         if (ServerPlayer* player = server.getPlayer(id)) {
             for (ServerPlayer* other : server.getPlayers()) {
                 if (other->id != id) {
@@ -237,6 +258,7 @@ int main(int argc, char* argv[]) {
                 }
             }
         }
+        broadcastLobbyState();
         std::cout << "[Server] Player " << id << " connected (" << server.getCurrentPlayerCount() << "/" << server.getMaxPlayers() << ")" << std::endl;
     };
 
@@ -252,9 +274,10 @@ int main(int argc, char* argv[]) {
         ServerPlayer* player = server.getPlayer(id);
         if (!player) return;
 
-        // Remember the mode the client is in: round-based games keep a dead
+        // Remember the mode the client is in: bomb defusal keeps a dead
         // player in spectator mode until that client starts the next round.
         player->gameMode = input.gameMode;
+        player->matchFormat = input.matchFormat;
 
         // A client that reports itself dead/spectating does not move its body.
         // If the server did not know yet (a lost damage packet, a fall, a
@@ -274,7 +297,7 @@ int main(int argc, char* argv[]) {
         }
 
         // The client came back to life: either the server respawned it, or a
-        // round-based client started a new round locally. Make the server
+        // bomb defusal client started a new round locally. Make the server
         // match, then let it move again from the next input.
         if (player->isDead) {
             player->isDead = false;
@@ -343,6 +366,24 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // Team deathmatch scoreboard (kill counters), per map. The server is the
+    // only place where all players' and bots' kills meet, so clients use this
+    // broadcast instead of their local view of the score.
+    std::map<std::string, std::pair<int, int>> teamKills;
+    auto broadcastMatchState = [&server](const std::string& mapName, int a, int b) {
+        MatchStatePacket state{};
+        state.header.magic = PACKET_MAGIC;
+        state.header.type = PACKET_MATCH_STATE;
+        state.header.sequence = 0;
+        state.header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        state.header.clientId = 0;
+        state.gameMode = 1;
+        state.teamAScore = static_cast<uint8_t>(std::max(0, std::min(255, a)));
+        state.teamBScore = static_cast<uint8_t>(std::max(0, std::min(255, b)));
+        server.broadcastToMap(mapName, &state, sizeof(state), 0);
+    };
+
     // ── Damage ───────────────────────────────────────────────────────────────
     // Hits from clients are resolved by the shooter against the victim's body
     // box, so they arrive already validated. Bot damage (bullets resolved by
@@ -351,7 +392,8 @@ int main(int argc, char* argv[]) {
     //
     // Damage is clamped so a bad packet cannot deal more than a hit is worth;
     // grenade / flashbang blasts stay lethal but are not stacked.
-    auto applyDamage = [&server](uint32_t shooterId, uint32_t victimId,
+    auto applyDamage = [&server, &teamKills, &broadcastMatchState](
+                                 uint32_t shooterId, uint32_t victimId,
                                  float damage, uint8_t weaponId) {
         ServerPlayer* victim = server.getPlayer(victimId);
         if (!victim || victim->isDead) return;
@@ -372,14 +414,26 @@ int main(int argc, char* argv[]) {
         if (victim->health < 0.0f) victim->health = 0.0f;
         if (victim->health <= 0.0f) victim->isDead = true;
 
+        ServerPlayer* shooter = server.getPlayer(shooterId);
+
         // Face the shooter: the victim's camera yaw follows `yaw` on its
         // client, so this is the "you were hit from there" turn.
-        if (const ServerPlayer* shooter = server.getPlayer(shooterId)) {
+        if (shooter) {
             const float dx = shooter->position.x - victim->position.x;
             const float dz = shooter->position.z - victim->position.z;
             if (dx * dx + dz * dz > 0.0001f) {
                 victim->yaw = glm::degrees(std::atan2(dz, dx));
             }
+        }
+
+        // Team deathmatch kill score. Only enemy teams score; friendly fire
+        // and self/blast deaths (shooterId 0) do not change the board.
+        if (victim->isDead && victim->gameMode == 1 && shooter &&
+            shooter->id != victim->id && shooter->team != victim->team) {
+            auto& score = teamKills[std::string(victim->mapName)];
+            if (shooter->team == 0) ++score.first;
+            else                    ++score.second;
+            broadcastMatchState(victim->mapName, score.first, score.second);
         }
 
         std::cout << "[Server] " << (victim->isBot ? "Bot " : "Player ")
@@ -414,7 +468,6 @@ int main(int argc, char* argv[]) {
     };
 
     // ── Server bots ──────────────────────────────────────────────────────────
-    ServerBotManager botManager;
     botManager.setBombInfoProvider([&bombManager](const std::string& mapName) {
         const ServerBombManager::Snapshot bomb = bombManager.snapshot(mapName);
         ServerBotManager::BombInfo info;
@@ -437,8 +490,11 @@ int main(int argc, char* argv[]) {
         botManager.onProjectileSpawned(ownerId, packet);
     };
     server.onRoundStarted = [&botManager, &bombManager](const std::string& mapName,
-                                                        int gameMode, int attackingTeam) {
-        bombManager.onRoundStart(mapName, gameMode, attackingTeam);
+                                                        int gameMode, int attackingTeam,
+                                                        int matchFormat,
+                                                        bool freshMatch) {
+        bombManager.onRoundStart(mapName, gameMode, attackingTeam, matchFormat,
+                                 freshMatch);
         botManager.startRound(mapName, gameMode);
     };
 
@@ -450,6 +506,27 @@ int main(int argc, char* argv[]) {
         botConfig.friendlyFire = friendlyFire;
         botManager.init(server, botConfig);
     }
+
+    // Pre-match setup: apply team / bot allocation and tell everyone the new
+    // limits. Accuracy is clamped to the server's configured maximum.
+    server.onLobbySetup = [&server, &botManager, &broadcastLobbyState,
+                           &teamKills, &broadcastMatchState, botAccuracy](
+                              uint32_t playerId, const LobbySetupPacket& setup) {
+        botManager.applyTeamSetup(server, setup.botsTeamA, setup.botsTeamB,
+                                  std::min(setup.botAccuracy / 100.0f, botAccuracy));
+        // Echo the new team back to the client (and the other players on the
+        // map): PlayerState is where the client learns its authoritative team.
+        if (ServerPlayer* player = server.getPlayer(playerId)) {
+            if (setup.freshMatch) {
+                teamKills[std::string(player->mapName)] = {0, 0};
+                broadcastMatchState(player->mapName, 0, 0);
+            }
+            server.broadcastPlayerStateToMap(
+                playerId, player->mapName, player->position, player->velocity,
+                player->yaw, player->pitch, player->health, player->isDead, true);
+        }
+        broadcastLobbyState();
+    };
 
     // Main server loop
     auto lastTime = std::chrono::steady_clock::now();
@@ -478,9 +555,9 @@ int main(int argc, char* argv[]) {
         // based modes dead bots stay dead until the next explicit round start.
         botManager.update(deltaTime, server);
 
-        // Respawn dead players after a short delay in deathmatch. Round-based
-        // games (team vs team / bomb defusal) keep the body dead and invisible
-        // until the client starts the next round and reports itself alive.
+        // Respawn dead players after a short delay in deathmatch and team
+        // deathmatch. Bomb defusal keeps the body dead and invisible until the
+        // client starts the next round and reports itself alive.
         // Bots are excluded: the bot manager owns their respawns.
         for (ServerPlayer* player : server.getPlayers()) {
             if (player->isBot) continue;
@@ -489,7 +566,7 @@ int main(int argc, char* argv[]) {
                 continue;
             }
 
-            const bool roundBased = player->gameMode == 1 || player->gameMode == 2;
+            const bool roundBased = player->gameMode == 2;
             if (roundBased) continue;
 
             const auto it = deadSince.find(player->id);
@@ -513,6 +590,20 @@ int main(int argc, char* argv[]) {
                 player->yaw, player->pitch, player->health, player->isDead, true);
         }
         
+        // A map with no humans is a finished/abandoned match: next time
+        // players arrive there, the team scoreboard starts from zero.
+        for (auto it = teamKills.begin(); it != teamKills.end();) {
+            bool anyHuman = false;
+            for (ServerPlayer* player : server.getPlayers()) {
+                if (player->active && !player->isBot && it->first == player->mapName) {
+                    anyHuman = true;
+                    break;
+                }
+            }
+            if (!anyHuman) it = teamKills.erase(it);
+            else ++it;
+        }
+
         // Small sleep to prevent 100% CPU usage
         // std::this_thread::sleep_for works on Linux and Windows (usleep /
         // <unistd.h> do not exist under MSVC); the server links Threads.

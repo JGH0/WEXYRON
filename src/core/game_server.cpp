@@ -41,6 +41,10 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
         disconnectFromServer();
     }
 
+    // A network match uses other players/bots, not an offline bot host.
+    localBotsPending_ = false;
+    stopLocalBots();
+
     networkClient = new NetworkClient();
 
     // Set up callbacks
@@ -191,6 +195,20 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
         }
     };
 
+    networkClient->onLobbyState = [this](const LobbyStatePacket& packet) {
+        applyLobbyState(static_cast<uint8_t>(playerTeam), packet.botPool,
+                        packet.botsTeamA, packet.botsTeamB, packet.botAccuracy,
+                        packet.botMaxAccuracy, packet.matchFormat);
+    };
+
+    networkClient->onMatchState = [this](const MatchStatePacket& packet) {
+        if (packet.gameMode == TEAM_VS_TEAM) {
+            teamAScore_ = packet.teamAScore;
+            teamBScore_ = packet.teamBScore;
+            checkMatchEnd();
+        }
+    };
+
     networkClient->onBombState = [this](const BombStatePacket& packet) {
         if (!bombDefusalMode) return;
 
@@ -317,6 +335,8 @@ uint16_t Game::getServerPort() const {
 }
 
 void Game::disconnectFromServer() {
+    localBotsPending_ = false;
+    stopLocalBots();
     if (networkClient) {
         networkClient->disconnect();
         delete networkClient;

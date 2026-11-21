@@ -119,7 +119,7 @@ struct BombSiteData {
 };
 
 /**
- * @brief Structure representing a team spawn point (for Team vs Team)
+ * @brief Structure representing a team spawn point (for team-based modes)
  */
 struct TeamSpawn {
     /// Position of the spawn point
@@ -354,7 +354,7 @@ public:
     void removeSpawnPoint(size_t index);
 
     /**
-     * @brief Add a team spawn point (for Team vs Team mode)
+     * @brief Add a team spawn point (for team-based modes)
      *
      * @param spawn TeamSpawn to add
      */
@@ -461,7 +461,7 @@ private:
     std::string mapName;
     /// Spawn points for Deathmatch mode
     std::vector<SpawnPoint> spawnPoints;
-    /// Team spawn points for Team vs Team mode
+    /// Team spawn points for team-based modes
     std::vector<TeamSpawn> teamSpawns;
     /// Bomb sites for Bomb Defusal mode
     std::vector<BombSiteData> bombSites;

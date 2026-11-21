@@ -27,6 +27,7 @@ struct ServerBotManager::Runtime {
     uint8_t team = 0;
     std::string mapName;
     int gameMode = 0;
+    bool assigned = true;   ///< in the active roster (not parked)
     std::unique_ptr<bots::Bot> ai;
 };
 
@@ -84,9 +85,80 @@ bool ServerBotManager::init(NetworkServer& server, const Config& config) {
         bots_.push_back(std::move(runtime));
     }
 
+    assignedTeamA_ = 0;
+    assignedTeamB_ = 0;
+    for (const auto& runtime : bots_) {
+        if (runtime->team == 0) ++assignedTeamA_;
+        else ++assignedTeamB_;
+    }
+    currentAccuracy_ = config_.accuracy;
+
     std::cout << "[Bots] " << bots_.size() << " bot(s) active, accuracy "
               << config_.accuracy << ", world " << config_.defaultMap << std::endl;
     return true;
+}
+
+void ServerBotManager::applyTeamSetup(NetworkServer& server, int teamA, int teamB,
+                                      float accuracy) {
+    if (bots_.empty()) return;
+
+    const int pool = static_cast<int>(bots_.size());
+    teamA = std::max(0, std::min(teamA, pool));
+    teamB = std::max(0, std::min(teamB, pool - teamA));
+    accuracy = clampf(accuracy, 0.0f, config_.accuracy);
+
+    assignedTeamA_ = teamA;
+    assignedTeamB_ = teamB;
+    currentAccuracy_ = accuracy;
+
+    for (size_t i = 0; i < bots_.size(); ++i) {
+        Runtime& runtime = *bots_[i];
+        ServerPlayer* player = server.getPlayer(runtime.id);
+        if (!player) continue;
+
+        const bool assigned = static_cast<int>(i) < teamA + teamB;
+        const uint8_t team = assigned
+            ? (static_cast<int>(i) < teamA ? 0 : 1)
+            : runtime.team;
+
+        runtime.assigned = assigned;
+        runtime.team = team;
+        runtime.ai->setTeam(team);
+        runtime.ai->setAccuracy(accuracy);
+        player->team = team;
+
+        if (assigned) {
+            const bots::BotMap* map = getMap(runtime.mapName);
+            // Team spawns are also valid DM spawns; using them here puts the
+            // pre-match roster on the correct side before the mode is known.
+            const bots::SpawnResult spawn =
+                map->findSpawn(true, spawnSideFor(*player, runtime.gameMode,
+                                                  runtime.mapName), rng_);
+            player->position = spawn.position;
+            player->velocity = glm::vec3(0.0f);
+            player->yaw = spawn.yaw;
+            player->pitch = 0.0f;
+            player->health = 100.0f;
+            player->isDead = false;
+            runtime.ai->respawn(spawn.position, spawn.yaw, *map);
+            server.broadcastPlayerStateToMap(
+                runtime.id, runtime.mapName, player->position, player->velocity,
+                player->yaw, player->pitch, player->health, player->isDead, true);
+        } else {
+            // Parked bot: away from the playable volume and marked dead so no
+            // client renders it. It comes back on the next assignment.
+            player->position = glm::vec3(0.0f, -100.0f, 0.0f);
+            player->velocity = glm::vec3(0.0f);
+            player->health = 0.0f;
+            player->isDead = true;
+            server.broadcastPlayerStateToMap(
+                runtime.id, runtime.mapName, player->position, player->velocity,
+                player->yaw, player->pitch, 0.0f, true, true);
+        }
+    }
+
+    std::cout << "[Bots] Lobby setup: " << assignedTeamA_ << " vs "
+              << assignedTeamB_ << " (accuracy " << accuracy << ")" << std::endl;
 }
 
 std::string ServerBotManager::resolveMapPath(const std::string& mapName) const {
@@ -179,6 +251,8 @@ void ServerBotManager::tick(float deltaTime, NetworkServer& server) {
         Runtime& runtime = *runtimePtr;
         ServerPlayer* player = server.getPlayer(runtime.id);
         if (!player) continue;
+        // Parked bots (not allocated to a team yet) take no part in the game.
+        if (!runtime.assigned) continue;
 
         // Follow the player world/game mode. Bots are spread over the human
         // list, so if players are on two maps both maps get bots.
@@ -204,15 +278,15 @@ void ServerBotManager::tick(float deltaTime, NetworkServer& server) {
         player->gameMode = static_cast<uint8_t>(targetMode);
         runtime.ai->setGameMode(targetMode);
 
-        // Dead bots stay dead in round-based modes (like human players in
+        // Dead bots stay dead in bomb defusal (like human players in
         // spectator); they are revived only when a new round starts. In
-        // deathmatch they respawn after the normal short delay.
+        // deathmatch and team deathmatch they respawn after the normal delay.
         if (player->isDead) {
             if (runtime.ai->alive()) {
                 runtime.ai->markDead(respawnDelayForMode(targetMode));
             }
 
-            if (targetMode < 1) {
+            if (targetMode != 2) {
                 static const bots::World kEmptyWorld;
                 std::vector<bots::Action> noActions;
                 runtime.ai->update(deltaTime, kEmptyWorld, noActions);
@@ -229,11 +303,11 @@ void ServerBotManager::tick(float deltaTime, NetworkServer& server) {
         }
 
         // The server may have revived the record from outside (map switch).
-        // In a round-based mode a dead AI must stay dead: the only revival is
-        // the explicit next-round path (reviveBotsForNewRound).
+        // In bomb defusal a dead AI must stay dead: the only revival is the
+        // explicit next-round path (reviveBotsForNewRound).
         const bots::BotMap* map = getMap(runtime.mapName);
         if (!runtime.ai->alive()) {
-            if (targetMode < 1) {
+            if (targetMode != 2) {
                 runtime.ai->respawn(player->position, player->yaw, *map);
             } else {
                 player->isDead = true;
@@ -250,7 +324,7 @@ void ServerBotManager::tick(float deltaTime, NetworkServer& server) {
                                   : BombInfo{};
         // Round ended / intermission: freeze the bot completely. No movement,
         // aiming, shooting or throwables until the next round starts.
-        if (targetMode >= 1 && bomb.valid && !bomb.roundActive) {
+        if (targetMode == 2 && bomb.valid && !bomb.roundActive) {
             runtime.ai->idle(deltaTime, map);
             player->position = runtime.ai->position();
             player->velocity = runtime.ai->velocity();
@@ -309,13 +383,24 @@ void ServerBotManager::tick(float deltaTime, NetworkServer& server) {
     updateProjectiles(deltaTime, server);
 }
 
+int ServerBotManager::spawnSideFor(const ServerPlayer& player, int gameMode,
+                                   const std::string& mapName) const {
+    int side = player.team & 1;
+    if (gameMode == 2 && bombInfoProvider_) {
+        const BombInfo info = bombInfoProvider_(mapName);
+        if (info.valid) side ^= info.attackingTeam & 1;
+    }
+    return side & 1;
+}
+
 void ServerBotManager::switchBotWorld(NetworkServer& server, Runtime& runtime,
                                       const std::string& mapName, int gameMode) {
     ServerPlayer* player = server.getPlayer(runtime.id);
     if (!player) return;
 
     const bots::BotMap* map = getMap(mapName);
-    const bots::SpawnResult spawn = map->findSpawn(gameMode >= 1, player->team, rng_);
+    const bots::SpawnResult spawn =
+        map->findSpawn(gameMode >= 1, spawnSideFor(*player, gameMode, mapName), rng_);
 
     server.movePlayerToMap(runtime.id, mapName, spawn.position);
     player = server.getPlayer(runtime.id);
@@ -345,7 +430,9 @@ void ServerBotManager::respawnBot(NetworkServer& server, Runtime& runtime) {
     if (!player) return;
 
     const bots::BotMap* map = getMap(runtime.mapName);
-    const bots::SpawnResult spawn = map->findSpawn(runtime.gameMode >= 1, player->team, rng_);
+    const bots::SpawnResult spawn =
+        map->findSpawn(runtime.gameMode >= 1,
+                       spawnSideFor(*player, runtime.gameMode, runtime.mapName), rng_);
 
     player->position = spawn.position;
     player->velocity = glm::vec3(0.0f);
@@ -375,7 +462,8 @@ void ServerBotManager::reviveBotsForNewRound(NetworkServer& server, const std::s
         // be skipped here, so a bot that survived the previous round stayed
         // frozen wherever it happened to be when the round ended.
         const bots::SpawnResult spawn =
-            map->findSpawn(gameMode >= 1, player->team, rng_);
+            map->findSpawn(gameMode >= 1,
+                           spawnSideFor(*player, gameMode, mapName), rng_);
 
         runtime.gameMode = gameMode;
         runtime.ai->setGameMode(gameMode);
@@ -398,7 +486,8 @@ void ServerBotManager::reviveBotsForNewRound(NetworkServer& server, const std::s
 }
 
 void ServerBotManager::startRound(const std::string& mapName, int gameMode) {
-    if (!server_ || bots_.empty() || gameMode < 1) return;
+    // Only bomb defusal has rounds now; team deathmatch respawns normally.
+    if (!server_ || bots_.empty() || gameMode != 2) return;
     reviveBotsForNewRound(*server_, mapName, gameMode);
 }
 
@@ -525,5 +614,5 @@ void ServerBotManager::detonate(const ServerProjectile& projectile, NetworkServe
 }
 
 float ServerBotManager::respawnDelayForMode(int gameMode) {
-    return gameMode >= 1 ? 5.0f : 2.5f;
+    return gameMode == 2 ? 5.0f : 2.5f;
 }

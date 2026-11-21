@@ -421,8 +421,7 @@ void Game::renderGameHUD() {
                              statsY + 22.0f, 0.75f, kRed);
 
     // ── Round details (top-centre) ──────────────────────────────────────────
-    const bool roundBased = (currentGameMode == TEAM_VS_TEAM ||
-                             currentGameMode == BOMB_DEFUSAL);
+    const bool roundBased = (currentGameMode == BOMB_DEFUSAL);
     const float roundW = 270.0f, roundH = 72.0f;
     const float roundX = (left + right) * 0.5f - roundW * 0.5f;
     const float roundY = top + 12.0f;
@@ -444,33 +443,52 @@ void Game::renderGameHUD() {
             timerText = "BOMB " + std::to_string(secs);
             timerColor = (secs <= 5) ? kRed : glm::vec3(1.0f, 0.85f, 0.20f);
         } else {
-            int totalSeconds;
-            if (networkClient && networkClient->isConnected()) {
-                totalSeconds = static_cast<int>(std::ceil(std::max(0.0f, roundTimeLeft)));
-            } else {
-                totalSeconds = static_cast<int>(roundTime);
-            }
+            // The round clock counts down in both local and server play.
+            const int totalSeconds =
+                static_cast<int>(std::ceil(std::max(0.0f, roundTimeLeft)));
             char clock[16];
             snprintf(clock, sizeof(clock), "%02d:%02d",
                      totalSeconds / 60, totalSeconds % 60);
             timerText = clock;
-            if (networkClient && networkClient->isConnected() && totalSeconds <= 10) {
+            if (totalSeconds <= 10) {
                 timerColor = kRed;
             }
         }
 
+        const int roundTarget = matchRoundTarget();
         char scoreBuf[64];
-        snprintf(scoreBuf, sizeof(scoreBuf), "A %d   :   %d B",
-                 teamAScore_, teamBScore_);
+        if (roundTarget > 0) {
+            snprintf(scoreBuf, sizeof(scoreBuf), "A %d : %d B   FIRST TO %d",
+                     teamAScore_, teamBScore_, roundTarget);
+        } else {
+            snprintf(scoreBuf, sizeof(scoreBuf), "A %d   :   %d B",
+                     teamAScore_, teamBScore_);
+        }
         detail = scoreBuf;
     } else {
         int totalSeconds = static_cast<int>(roundTime);
         char clock[16];
         snprintf(clock, sizeof(clock), "%02d:%02d",
                  totalSeconds / 60, totalSeconds % 60);
-        header = "DEATHMATCH";
+        const bool teamMode = (currentGameMode == TEAM_VS_TEAM);
+        header = teamMode ? "TEAM DEATHMATCH" : "DEATHMATCH";
         timerText = clock;
-        if (multiplayerMode) {
+
+        const int killTarget = matchKillTarget();
+        if (teamMode) {
+            char scoreBuf[64];
+            if (killTarget > 0) {
+                snprintf(scoreBuf, sizeof(scoreBuf), "A %d : %d B   FIRST TO %d",
+                         teamAScore_, teamBScore_, killTarget);
+            } else {
+                snprintf(scoreBuf, sizeof(scoreBuf), "A %d   :   %d B",
+                         teamAScore_, teamBScore_);
+            }
+            detail = scoreBuf;
+        } else if (killTarget > 0) {
+            detail = "YOUR KILLS " + std::to_string(kills_) + " / " +
+                     std::to_string(killTarget);
+        } else if (multiplayerMode) {
             detail = "PLAYERS " + std::to_string(std::max(1, playerCount));
         } else {
             detail = "SOLO PRACTICE";
@@ -484,6 +502,35 @@ void Game::renderGameHUD() {
     renderer.drawTextCenteredColored(detail, roundX + roundW * 0.5f,
                                      roundY + 50.0f, 0.34f, kLabel,
                                      roundW - 20.0f);
+
+    // ── Match result overlay ────────────────────────────────────────────────
+    if (matchOver_) {
+        const float w = 340.0f, h = 108.0f;
+        const float cx = (left + right) * 0.5f;
+        const float cy = (top + bottom) * 0.5f;
+        panel(cx, cy, w, h, glm::vec3(0.035f, 0.04f, 0.055f));
+        panel(cx, cy + h * 0.5f - 2.0f, w, 4.0f, kGold * 0.85f);
+
+        std::string result = "MATCH OVER";
+        if (matchWinner_ == 2) result = "YOU WIN";
+        else if (matchWinner_ == 0) result = "TEAM A WINS";
+        else if (matchWinner_ == 1) result = "TEAM B WINS";
+        renderer.drawTextCenteredColored(result, cx, cy - h * 0.5f + 14.0f,
+                                         0.78f, kGold, w - 24.0f);
+        char score[64];
+        if (currentGameMode == TEAM_VS_TEAM || currentGameMode == BOMB_DEFUSAL) {
+            snprintf(score, sizeof(score), "A %d   :   %d B", teamAScore_, teamBScore_);
+        } else {
+            snprintf(score, sizeof(score), "YOUR KILLS: %d", kills_);
+        }
+        renderer.drawTextCenteredColored(score, cx, cy - 4.0f, 0.40f,
+                                         glm::vec3(0.88f), w - 24.0f);
+        const char* hint = isConnectedToServer() ? "ESC: RETURN TO MENU"
+                                                 : "ENTER: NEW MATCH";
+        renderer.drawTextCenteredColored(hint, cx,
+                                         cy + h * 0.5f - 30.0f, 0.34f,
+                                         glm::vec3(0.72f, 0.76f, 0.82f), w - 24.0f);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -748,7 +795,11 @@ void Game::renderWeaponViewmodel() {
 }
 
 void Game::renderBombDefusalHUD() {
-    if (!bombDefusalMode) return;
+    // Bomb defusal draws the bomb-specific elements below. Team deathmatch
+    // only needs the team indicator from this HUD, so it returns right after.
+    const bool bombMode = bombDefusalMode;
+    const bool teamMode = (currentGameMode == TEAM_VS_TEAM);
+    if (!bombMode && !teamMode) return;
     
     UIHelpers::setProjection(renderer, window);
     auto _b = UIHelpers::getBounds(window);
@@ -778,9 +829,11 @@ void Game::renderBombDefusalHUD() {
             teamColor = glm::vec3(0.2f, 0.4f, 1.0f);
         }
 
-        // Role string
+        // Role string (bomb defusal) or the mode name (team deathmatch).
         std::string roleStr;
-        if (isDead || spectatorMode) {
+        if (!bombMode) {
+            roleStr = "TEAM DEATHMATCH";
+        } else if (isDead || spectatorMode) {
             roleStr = "SPECTATOR";
         } else if (playerTeam == attackingTeam) {
             roleStr = "ATTACKING";
@@ -806,6 +859,10 @@ void Game::renderBombDefusalHUD() {
         // Team text
         renderer.drawTextFit(teamName, teamX + 10.0f, teamY + 6.0f, teamWidth - 20.0f, 0.45f);
     }
+
+    // Everything below belongs to bomb defusal (round banner, plant/defuse
+    // progress, site prompts and bomb distance markers).
+    if (!bombMode) return;
 
     // ── Round end banner (top-centre) ──────────────────────────────────────
     if (roundEndTimer > 0.0f) {

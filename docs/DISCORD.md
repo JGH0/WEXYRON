@@ -5,7 +5,7 @@ WEXYRON reports the current screen to Discord:
 | Game state | Discord shows |
 | --- | --- |
 | Main menu / settings / map selection | In the main menu |
-| Match | Playing Deathmatch / Team vs Team / Bomb Defusal + map |
+| Match | Playing Deathmatch / Team Deathmatch / Bomb Defusal + map |
 | Dead | Eliminated - waiting to respawn + map |
 | Map editor | Building a map + map name |
 

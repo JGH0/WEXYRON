@@ -61,7 +61,10 @@ enum PacketType : uint8_t {
     PACKET_PLAYER_DAMAGE = 18,     // Client reporting a hit on another player
     PACKET_ROUND_START = 19,       // Round-based client starting the next round
     PACKET_BOMB_INTERACT = 20,     // Client asking the server to plant / defuse
-    PACKET_BOMB_STATE = 21         // Server-authoritative bomb state for one map
+    PACKET_BOMB_STATE = 21,        // Server-authoritative bomb state for one map
+    PACKET_LOBBY_SETUP = 22,       // Client -> server team / bot allocation
+    PACKET_LOBBY_STATE = 23,       // Server -> clients available bots / limits
+    PACKET_MATCH_STATE = 24        // Server -> clients team kill scores
 };
 
 /// Client action in BombInteractPacket.
@@ -135,9 +138,11 @@ struct PlayerInputPacket {
     /// client keeps sending input while it spectates, so the server can tell
     /// the difference between "dead" and "new round started".
     bool alive;
-    /// GameMode (0 = deathmatch, 1 = team vs team, 2 = bomb defusal). The
-    /// server needs it to stop auto-respawning players during a round.
+    /// GameMode (0 = deathmatch, 1 = team deathmatch, 2 = bomb defusal). The
+    /// server needs it to stop auto-respawning players during a bomb round.
     uint8_t gameMode;
+    /// MatchFormat (0 = free play, 1 = normal, 2 = swift).
+    uint8_t matchFormat;
 };
 
 // Player state from server
@@ -161,12 +166,46 @@ struct PlayerDamagePacket {
     uint8_t  weaponId;         ///< projectile type that hit (0 bullet, 1 grenade, ...)
 };
 
-/// A round-based client started the next round. The server uses this to bring
+/// A bomb defusal client started the next round. The server uses this to bring
 /// dead bots back at the same time as the human players and to reset the bomb.
 struct RoundStartPacket {
     PacketHeader header;
-    uint8_t gameMode;          ///< 1 = teams, 2 = bomb defusal
+    uint8_t gameMode;          ///< 2 = bomb defusal
     uint8_t attackingTeam;     ///< which team may plant this round
+    uint8_t matchFormat;       ///< 0 free play, 1 normal, 2 swift
+    uint8_t freshMatch;        ///< 1 = reset the side-switch history
+};
+
+/// Pre-match team / bot setup. The client sends its desired side, how many
+/// bots each team should get and the requested bot accuracy. The server clamps
+/// the counts to its bot pool and the accuracy to its configured maximum.
+struct LobbySetupPacket {
+    PacketHeader header;
+    uint8_t team;              ///< requested team (0/1)
+    uint8_t botsTeamA;         ///< bots requested on Team A
+    uint8_t botsTeamB;         ///< bots requested on Team B
+    uint8_t botAccuracy;       ///< percent (0..100)
+    uint8_t matchFormat;       ///< 0 free play, 1 normal, 2 swift
+    uint8_t freshMatch;        ///< 1 = start a fresh scoreboard on this map
+};
+
+/// Authoritative lobby limits / allocation, broadcast by the server.
+struct LobbyStatePacket {
+    PacketHeader header;
+    uint8_t botPool;           ///< total bots available on the server
+    uint8_t botsTeamA;         ///< currently assigned to Team A
+    uint8_t botsTeamB;         ///< currently assigned to Team B
+    uint8_t botAccuracy;       ///< current configured accuracy (percent)
+    uint8_t botMaxAccuracy;    ///< configured maximum accuracy (percent)
+    uint8_t matchFormat;       ///< last requested match format
+};
+
+/// Authoritative team scores for team deathmatch (kill counters).
+struct MatchStatePacket {
+    PacketHeader header;
+    uint8_t gameMode;          ///< 1 = team deathmatch
+    uint8_t teamAScore;
+    uint8_t teamBScore;
 };
 
 /// Client asks the server to start planting / defusing. The server validates
@@ -298,7 +337,7 @@ public:
     double secondsSinceLastReceive() const;
     
     // Send player input to server
-    void sendPlayerInput(float moveX, float moveZ, float yaw, float pitch, bool jump, bool shoot, uint8_t weaponId, float posX, float posY, float posZ, bool alive = true, uint8_t gameMode = 0);
+    void sendPlayerInput(float moveX, float moveZ, float yaw, float pitch, bool jump, bool shoot, uint8_t weaponId, float posX, float posY, float posZ, bool alive = true, uint8_t gameMode = 0, uint8_t matchFormat = 0);
     
     // Receive packets from server - call every frame
     void update();
@@ -316,13 +355,23 @@ public:
     std::function<void(const MapPlayerCountPacket&)> onMapPlayerCount;
     /// Authoritative bomb state for the map the client is on.
     std::function<void(const BombStatePacket&)> onBombState;
+    /// Server's bot pool / limits and current allocation.
+    std::function<void(const LobbyStatePacket&)> onLobbyState;
+    /// Authoritative team kill scores (team deathmatch).
+    std::function<void(const MatchStatePacket&)> onMatchState;
 
     // Send map change request to server
     void sendMapChange(const std::string& mapName);
 
-    /// Tell the server a new round started (round-based modes). Bots are
-    /// revived together with the human players and the bomb is reset.
-    void sendRoundStart(uint8_t gameMode, uint8_t attackingTeam);
+    /// Send the pre-match team / bot setup to the server.
+    void sendLobbySetup(uint8_t team, uint8_t botsTeamA, uint8_t botsTeamB,
+                        uint8_t botAccuracy, uint8_t matchFormat,
+                        bool freshMatch = false);
+
+    /// Tell the server a new bomb defusal round started. Bots are revived
+    /// together with the human players and the bomb is reset.
+    void sendRoundStart(uint8_t gameMode, uint8_t attackingTeam,
+                        uint8_t matchFormat = 0, bool freshMatch = false);
 
     /// Ask the server to start planting / defusing the bomb (BombInteractAction).
     void sendBombInteract(uint8_t action);
@@ -399,6 +448,7 @@ struct ServerPlayer {
     char machineId[MACHINE_ID_LENGTH] = {}; ///< stable id of the player's PC
     uint8_t team = 0;     ///< 0 = Team A, 1 = Team B (assigned on connect)
     uint8_t gameMode = 0; ///< last game mode the client reported
+    uint8_t matchFormat = 0; ///< last match format the client reported
     bool isBot = false;   ///< server-controlled player (no socket / timeout)
 };
 
@@ -434,6 +484,9 @@ public:
 
     // Send map player counts to all clients
     void broadcastMapPlayerCounts();
+
+    /// Send raw packet data to every connected human (not bots).
+    void broadcastPacket(const void* data, size_t size, uint32_t excludeId = 0);
 
     // Change player's map
     void setPlayerMap(uint32_t playerId, const std::string& mapName);
@@ -484,10 +537,13 @@ public:
     /// A validated projectile spawn from a client (owner id, packet). The bot
     /// host uses this to simulate flashbang detonations server-side.
     std::function<void(uint32_t, const ProjectileSpawnPacket&)> onProjectileSpawned;
-    /// A client started the next round: map name, game mode and attacking team.
-    std::function<void(const std::string&, int, int)> onRoundStarted;
+    /// A client started the next round: map name, game mode, attacking team
+    /// and match format.
+    std::function<void(const std::string&, int, int, int, bool)> onRoundStarted;
     /// A client asked to plant / defuse (validated sender id, action).
     std::function<void(uint32_t, uint8_t)> onBombInteract;
+    /// A client sent its pre-match team / bot setup.
+    std::function<void(uint32_t, const LobbySetupPacket&)> onLobbySetup;
     
 private:
     socket_t socketFd;
@@ -505,7 +561,6 @@ private:
     bool createSocket(uint16_t port);
     void processPacket(const void* data, size_t size, const sockaddr_in& from);
     void sendPacket(const void* data, size_t size, const sockaddr_in& to);
-    void broadcastPacket(const void* data, size_t size, uint32_t excludeId = 0);
     /// Tell a client why its CONNECT was refused (clientId == 0).
     void sendReject(const sockaddr_in& to, uint8_t reason, uint8_t limit);
     /// True when `addr` (with `machineId`) is on the same PC as `player`.

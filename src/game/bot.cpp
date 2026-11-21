@@ -790,7 +790,7 @@ const Target* Bot::selectTarget(const World& world) const {
 
 glm::vec3 Bot::chooseObjective(const World& world) {
     const BotMap* map = world.map;
-    const bool bombMode = world.gameMode >= 1;
+    const bool bombMode = world.gameMode == 2;
 
     if (bombMode) {
         // Bomb planted: both teams converge on it. Defenders defuse (the
@@ -833,23 +833,6 @@ glm::vec3 Bot::chooseObjective(const World& world) {
             const float angle = randomRange(0.0f, 6.28318f);
             glm::vec3 point = site + glm::vec3(std::cos(angle) * hold, 0.0f,
                                                std::sin(angle) * hold);
-            float top = 0.0f;
-            if (map->topUnder(point.x, point.z, map->dimensions.y + 5.0f, top)) {
-                point.y = top;
-            }
-            return point;
-        }
-
-        if (world.gameMode == 1 && map) {
-            // Team map without bomb sites: push the enemy side as before.
-            glm::vec3 enemySide(team_ == 0 ? map->dimensions.x * 0.30f
-                                           : -map->dimensions.x * 0.30f,
-                                0.0f, 0.0f);
-            for (const TeamSpawnPoint& spawn : map->teamSpawns) {
-                if (spawn.team != team_) { enemySide = spawn.position; break; }
-            }
-            glm::vec3 point = enemySide + glm::vec3(randomRange(-4.0f, 4.0f), 0.0f,
-                                                   randomRange(-4.0f, 4.0f));
             float top = 0.0f;
             if (map->topUnder(point.x, point.z, map->dimensions.y + 5.0f, top)) {
                 point.y = top;
@@ -1279,10 +1262,10 @@ void Bot::update(float dt, const World& world, std::vector<Action>& actions) {
             };
 
             float distance = objectiveDistance();
-            // In bomb modes an attacker standing on the site (or anyone
+            // In bomb defusal an attacker standing on the site (or anyone
             // standing at a planted bomb) must stop there long enough for the
             // server to finish planting / defusing, instead of pathing around.
-            const bool bombObjective = world.gameMode >= 1 &&
+            const bool bombObjective = world.gameMode == 2 &&
                 ((world.bombPlanted && !world.bombDefused) ||
                  team_ == world.attackingTeam);
             const bool holding = bombObjective && hasObjective_ && distance < 1.6f;
@@ -1295,7 +1278,7 @@ void Bot::update(float dt, const World& world, std::vector<Action>& actions) {
                 clearPath();
             }
 
-            const bool atObjective = world.gameMode >= 1 && hasObjective_ && distance < 1.6f;
+            const bool atObjective = world.gameMode == 2 && hasObjective_ && distance < 1.6f;
             if (atObjective) {
                 moveDir = glm::vec3(0.0f);
                 aimAt(objective_ + glm::vec3(0.0f, kBodyCentre, 0.0f), dt);

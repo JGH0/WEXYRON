@@ -1,4 +1,5 @@
 #include "game.hpp"
+#include "../game/local_bots.hpp"
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <spatialkit/geometry.hpp>
@@ -406,6 +407,20 @@ void Game::dieLocally() {
     if (isDead) return;
     isDead = true;
     deaths_++;
+    // Team kill counters only exist in Team Deathmatch. Bomb Defusal's team
+    // scores are ROUND wins and must never be overwritten with kill counts.
+    if (currentGameMode == TEAM_VS_TEAM) {
+        if (localBots_) {
+            localBots_->recordPlayerDeath(playerTeam & 1);
+            teamAScore_ = localBots_->teamAKills();
+            teamBScore_ = localBots_->teamBKills();
+        } else if (playerTeam == 0) {
+            ++teamBScore_;
+        } else {
+            ++teamAScore_;
+        }
+    }
+    checkMatchEnd();
     playerVelocity = glm::vec3(0.0f);
     // A dying player cannot finish planting/defusing.
     isPlanting = false;
@@ -430,7 +445,8 @@ void Game::dieLocally() {
         networkClient->sendPlayerInput(0.0f, 0.0f, camera.Yaw, camera.Pitch, false, false,
                                        static_cast<uint8_t>(currentWeapon),
                                        eye.x, eye.y, eye.z, false,
-                                       static_cast<uint8_t>(currentGameMode));
+                                       static_cast<uint8_t>(currentGameMode),
+                                       static_cast<uint8_t>(matchFormat_));
     }
     std::cout << "Player defeated!" << std::endl;
 }
@@ -675,8 +691,7 @@ void Game::updateScope(float deltaTime) {
     // The scope is a held binding while the sniper is the active weapon.
     // The round-freeze releases it like everything else.
     const bool roundIntermission =
-        roundEndTimer > 0.0f &&
-        (currentGameMode == TEAM_VS_TEAM || currentGameMode == BOMB_DEFUSAL);
+        matchOver_ || (roundEndTimer > 0.0f && currentGameMode == BOMB_DEFUSAL);
     const bool canScope =
         window && !spectatorMode && !isDead && !roundIntermission &&
         currentWeapon == SNIPER;
@@ -987,9 +1002,11 @@ void Game::updateProjectiles(float deltaTime) {
 
             // Check collision with enemies first
             bool hitTarget = checkProjectileEnemyCollision(projectiles[i]);
-            if (networkClient && networkClient->isConnected() && projectiles[i].owner == 0) {
-                // Our own shot: the server relays remote players' positions,
-                // the hit itself is resolved here (see checkProjectileRemoteCollision).
+            if (projectiles[i].owner == 0 &&
+                ((networkClient && networkClient->isConnected()) || localBots_)) {
+                // Our own shot: remote bodies are either network-relayed or
+                // single-player bots. The hit is resolved on this client
+                // (see checkProjectileRemoteCollision).
                 hitTarget = checkProjectileRemoteCollision(projectiles[i]) || hitTarget;
             }
             if (hitTarget && projectiles[i].active) {
@@ -1159,10 +1176,11 @@ void Game::createSimpleExplosion(glm::vec3 position, const Projectile* source) {
         damageEffectTime = std::max(damageEffectTime, 1.5f); // Longer screen effect
     }
 
-    // Our own grenade also has to hurt the remote players around the blast.
-    // Their clients only see the relayed projectile and deliberately do not
-    // apply blast damage themselves (the server is the single authority).
-    if (networkClient && networkClient->isConnected()) {
+    // Our own grenade also has to hurt the remote bodies around the blast.
+    // Networked clients only see the relayed projectile and deliberately do
+    // not apply blast damage themselves (the server is the single authority);
+    // offline bots are damaged by the local host.
+    if ((networkClient && networkClient->isConnected()) || localBots_) {
         checkExplosionRemoteCollision(position, explosionRadius, explosionDamage_);
     }
 }
@@ -1593,7 +1611,7 @@ void Game::checkEnemyPlayerCollision(float deltaTime) {
                 if (playerHealth <= 0.0f && !isDead) {
                     playerHealth = 0.0f;
                     // One shared death path: it plays the sound, enters
-                    // spectator mode in round modes, reports the death to the
+                    // spectator mode in bomb defusal, reports the death to the
                     // server and updates the HUD death counter.
                     dieLocally();
                 }
@@ -1742,7 +1760,7 @@ bool Game::checkProjectileRemoteCollision(Projectile& projectile) {
     for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
         RemotePlayer& remote = remotePlayers[i];
         if (!remote.active || remote.isDead) continue;
-        if (remote.id == networkClient->getClientId()) continue;   // never shoot ourselves
+        if (networkClient && remote.id == networkClient->getClientId()) continue; // never shoot ourselves
 
         // Remote positions travel as feet positions (eye = feet + eyeHeight).
         // Hit detection uses the very box the remote player is drawn with.
@@ -1781,9 +1799,14 @@ bool Game::checkProjectileRemoteCollision(Projectile& projectile) {
 
     // A shotgun blast hits one target with several pellets per frame: the
     // pellets are separate damage, not a duplicate hit.
-    networkClient->sendPlayerDamage(nearest->id,
-                                    static_cast<uint16_t>(damage),
-                                    static_cast<uint8_t>(projectile.type));
+    if (networkClient && networkClient->isConnected()) {
+        networkClient->sendPlayerDamage(nearest->id,
+                                        static_cast<uint16_t>(damage),
+                                        static_cast<uint8_t>(projectile.type));
+    } else {
+        // Offline bot: the local host owns the body health and respawn.
+        damageLocalBot(nearest->id, damage);
+    }
     PvpRemote& book = pvpRemotes_[nearestIndex];
     book.lastHitTime = static_cast<float>(glfwGetTime());
     book.health = std::max(0.0f, book.health - damage);
@@ -1808,6 +1831,10 @@ bool Game::checkProjectileRemoteCollision(Projectile& projectile) {
 }
 
 void Game::checkExplosionRemoteCollision(const glm::vec3& position, float radius, float damage) {
+    if (localBots_) {
+        localBots_->explode(position, radius, damage, playerTeam & 1);
+        return;
+    }
     if (!networkClient || !networkClient->isConnected()) return;
 
     for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
@@ -1863,9 +1890,15 @@ void Game::updateRemotePlayerDeath(float deltaTime) {
             const float sinceHit = static_cast<float>(glfwGetTime()) - book.lastHitTime;
             if (book.lastHitTime > 0.0f && sinceHit >= 0.0f && sinceHit < 3.0f) {
                 kills_++;
+                if (currentGameMode == TEAM_VS_TEAM &&
+                    remote.team != static_cast<uint8_t>(playerTeam & 1)) {
+                    if (playerTeam == 0) ++teamAScore_;
+                    else                 ++teamBScore_;
+                }
                 if (!book.killSoundPlayed) {
                     playUiSound("kill_bling");
                 }
+                checkMatchEnd();
                 std::cout << "Player " << remote.id << " eliminated - kill credited" << std::endl;
             }
             book = PvpRemote{};
@@ -2016,6 +2049,14 @@ void Game::updateBomb(float deltaTime) {
         }
         return;
     }
+
+    // Offline round clock: defenders win when it expires before a plant.
+    if (roundActive && !bomb.planted) {
+        roundTimeLeft = std::max(0.0f, roundTimeLeft - deltaTime);
+        if (roundTimeLeft <= 0.0f) {
+            endRound(1 - attackingTeam, ROUND_END_TIME_EXPIRED);
+        }
+    }
     
     // Update bomb timer if planted
     if (bomb.planted && !bomb.defused) {
@@ -2040,6 +2081,10 @@ void Game::updateBomb(float deltaTime) {
         }
     }
     
+    // A round that just ended (time-out or detonation) must not still accept
+    // a plant/defuse finish in the same frame.
+    if (!roundActive) return;
+
     // Update planting progress
     if (isPlanting) {
         plantProgress += deltaTime;
@@ -2078,6 +2123,44 @@ void Game::updateBomb(float deltaTime) {
                 endRound(1 - bomb.plantingTeam, ROUND_END_BOMB_DEFUSED); // Defenders win
             }
         }
+    }
+
+    if (roundActive) checkLocalBombRoundOutcome();
+}
+
+void Game::checkLocalBombRoundOutcome() {
+    if (!bombDefusalMode || !roundActive || bomb.defused) return;
+
+    // Count every participant on each team: the local player and the offline
+    // bots. A team with no participants at all must not instantly lose.
+    int present[2] = {0, 0};
+    int alive[2] = {0, 0};
+
+    const int localTeam = playerTeam & 1;
+    present[localTeam] = 1;
+    if (!isDead && !spectatorMode) alive[localTeam] = 1;
+
+    if (localBots_) {
+        for (const LocalBotHost::View& view : localBots_->views()) {
+            const int team = view.team & 1;
+            ++present[team];
+            if (!view.isDead) ++alive[team];
+        }
+    }
+
+    const int attackers = attackingTeam & 1;
+    const int defenders = 1 - attackers;
+
+    // Defenders eliminated: attackers win, with or without the bomb planted.
+    if (present[defenders] > 0 && alive[defenders] == 0) {
+        endRound(attackers, ROUND_END_DEFENDERS_ELIMINATED);
+        return;
+    }
+
+    // Attackers eliminated before a plant: defenders win. After a plant the
+    // defenders still have to defuse, exactly like the server rules.
+    if (!bomb.planted && present[attackers] > 0 && alive[attackers] == 0) {
+        endRound(defenders, ROUND_END_ATTACKERS_ELIMINATED);
     }
 }
 
@@ -2152,8 +2235,7 @@ void Game::endRound(int winner, RoundEndReason reason) {
     roundEndReason = reason;
     // CS-style post-round window: players can keep moving for a few seconds
     // while the result popup is up, then the next round starts. Bomb defusal
-    // uses the short 3 s window requested for the blast result; team modes
-    // keep the slightly longer pause.
+    // uses the short 3 s window requested for the blast result.
     roundEndTimer = (currentGameMode == BOMB_DEFUSAL) ? 3.0f : 5.0f;
     if (winner == 0)      teamAScore_++;
     else if (winner == 1) teamBScore_++;
@@ -2167,8 +2249,21 @@ void Game::endRound(int winner, RoundEndReason reason) {
         std::cout << "ROUND OVER: Draw!" << std::endl;
     }
     
-    // Swap attacking team for next round
-    attackingTeam = 1 - attackingTeam;
+    // Side switch schedule. Free play keeps the old round-by-round swap;
+    // normal games switch once after round 12, swift games after round 6.
+    bool swapSides = true;
+    if (currentGameMode == BOMB_DEFUSAL && matchFormat_ != MATCH_FREE_PLAY) {
+        const int played = roundNumber_;
+        if (matchFormat_ == MATCH_NORMAL) {
+            swapSides = (played == 12);
+        } else if (matchFormat_ == MATCH_SWIFT) {
+            swapSides = (played == 6);
+        }
+    }
+    if (swapSides) attackingTeam = 1 - attackingTeam;
+
+    // A round win can finish the match (13/7 round formats).
+    checkMatchEnd();
     
     // Create a big explosion only when the bomb actually detonated. A defuse
     // or an elimination round end while the bomb is planted must not look
@@ -2238,7 +2333,7 @@ void Game::updateRoundEndTimer(float deltaTime) {
     if (roundEndTimer > 0.0f) {
         roundEndTimer -= deltaTime;
         if (roundEndTimer <= 0.0f) {
-            startRound();
+            if (!matchOver_) startRound();
         }
     }
 }
@@ -2246,6 +2341,7 @@ void Game::updateRoundEndTimer(float deltaTime) {
 void Game::startRound() {
     roundActive = true;
     roundTime = 0.0f;
+    roundTimeLeft = kLocalBombRoundTime;
     roundNumber_++;
     teamADeaths = 0;
     teamBDeaths = 0;
@@ -2261,11 +2357,16 @@ void Game::startRound() {
     // Reset players
     resetGame();
 
+    // Single-player bomb defusal: bots that died in the previous round come
+    // back at the same time as the player.
+    if (localBots_) localBots_->startNewRound(attackingTeam);
+
     // Round-based multiplayer: tell the server so it revives the bots together
     // with the human players at the start of the next round.
     if (networkClient && networkClient->isConnected()) {
         networkClient->sendRoundStart(static_cast<uint8_t>(currentGameMode),
-                                      static_cast<uint8_t>(attackingTeam & 1));
+                                      static_cast<uint8_t>(attackingTeam & 1),
+                                      static_cast<uint8_t>(matchFormat_));
     }
 
     playUiSound("round_start");
@@ -2300,5 +2401,189 @@ void Game::updateSpectator(float deltaTime) {
     playerPos = camera.Position - glm::vec3(0.0f, currentEyeHeight(), 0.0f);
     playerVelocity = glm::vec3(0.0f);
     camera.updateCameraVectors();
+}
+
+// ---------------------------------------------------------------------------
+// Single-player bots
+// ---------------------------------------------------------------------------
+
+int Game::debugLocalBotCount() const {
+    return localBots_ ? localBots_->botCount() : 0;
+}
+
+void Game::startLocalBots() {
+    stopLocalBots();
+    if (multiplayerMode || activeMapFile_.empty()) return;
+    if (botSetupTeamA_ <= 0 && botSetupTeamB_ <= 0) return;
+
+    LocalBotHost::Config config;
+    config.mapPath = "assets/maps/" + activeMapFile_;
+    config.mapName = activeMapFile_;
+    config.gameMode = static_cast<int>(currentGameMode);
+    config.matchFormat = static_cast<int>(matchFormat_);
+    config.attackingTeam = attackingTeam & 1;
+    config.botsTeamA = botSetupTeamA_;
+    config.botsTeamB = botSetupTeamB_;
+    config.accuracy = static_cast<float>(botSetupAccuracy_) / 100.0f;
+    config.friendlyFire = false;
+
+    auto host = std::make_unique<LocalBotHost>();
+    if (!host->init(config)) {
+        std::cerr << "[LocalBots] Init failed" << std::endl;
+        return;
+    }
+    localBots_ = std::move(host);
+}
+
+void Game::stopLocalBots() {
+    if (!localBots_) return;
+    const uint32_t firstId = LocalBotHost::kFirstBotId;
+    for (int i = 0; i < MAX_REMOTE_PLAYERS; ++i) {
+        if (remotePlayers[i].active && remotePlayers[i].id >= firstId) {
+            remotePlayers[i].active = false;
+            remotePlayers[i].isDead = true;
+            pvpRemotes_[i] = PvpRemote{};
+        }
+    }
+    localBots_.reset();
+}
+
+void Game::updateLocalBots(float deltaTime) {
+    if (!localBots_) return;
+
+    const bool playerAlive = !isDead && !spectatorMode && gameState == PLAYING;
+    localBots_->update(
+        deltaTime, playerPos, playerTeam & 1, playerAlive,
+        [this](float damage) { damagePlayer(damage); },
+        [this](const glm::vec3& origin, const glm::vec3& velocity, uint8_t type) {
+            // Visual only: the host already applied the hit. A non-zero owner
+            // makes the normal player-shot collision path ignore it.
+            createProjectile(origin, velocity, 1.2f, 1u, static_cast<int>(type));
+        });
+
+    // Copy bodies into the existing remote-player slots so rendering,
+    // hit detection and animations work exactly like networked players.
+    const std::vector<LocalBotHost::View> views = localBots_->views();
+    for (int i = 0; i < MAX_REMOTE_PLAYERS; ++i) {
+        if (i >= static_cast<int>(views.size())) {
+            if (remotePlayers[i].active && remotePlayers[i].id >= LocalBotHost::kFirstBotId) {
+                remotePlayers[i].active = false;
+                remotePlayers[i].isDead = true;
+                pvpRemotes_[i] = PvpRemote{};
+            }
+            continue;
+        }
+
+        const LocalBotHost::View& view = views[static_cast<size_t>(i)];
+        const bool isNew = !remotePlayers[i].active || remotePlayers[i].id != view.id;
+        const bool respawned = !isNew && remotePlayers[i].isDead && !view.isDead;
+        if (isNew || respawned) {
+            remotePlayers[i].anim = humanoid::Anim{};
+            pvpRemotes_[i] = PvpRemote{};
+            remotePlayers[i].renderPosition = view.position;
+        }
+        remotePlayers[i].id       = view.id;
+        remotePlayers[i].position = view.position;
+        remotePlayers[i].velocity = view.velocity;
+        remotePlayers[i].yaw      = view.yaw;
+        remotePlayers[i].pitch    = view.pitch;
+        remotePlayers[i].health   = view.health;
+        remotePlayers[i].isDead   = view.isDead;
+        remotePlayers[i].active   = true;
+        remotePlayers[i].team     = view.team;
+        if (view.shooting) remotePlayers[i].anim.shoot = 1.0f;
+    }
+
+    // The host is the scoreboard in single player.
+    kills_ = localBots_->playerKills();
+    if (currentGameMode == TEAM_VS_TEAM) {
+        teamAScore_ = localBots_->teamAKills();
+        teamBScore_ = localBots_->teamBKills();
+    }
+    checkMatchEnd();
+}
+
+bool Game::damageLocalBot(uint32_t id, float damage) {
+    if (!localBots_) return false;
+    const bool hit = localBots_->damageBot(id, damage, playerTeam & 1);
+    if (hit) {
+        kills_ = localBots_->playerKills();
+        if (currentGameMode == TEAM_VS_TEAM) {
+            teamAScore_ = localBots_->teamAKills();
+            teamBScore_ = localBots_->teamBKills();
+        }
+        checkMatchEnd();
+    }
+    return hit;
+}
+
+// ---------------------------------------------------------------------------
+// Match length / win conditions
+// ---------------------------------------------------------------------------
+
+int Game::matchKillTarget() const {
+    if (matchFormat_ == MATCH_NORMAL) return 50;
+    if (matchFormat_ == MATCH_SWIFT) return 25;
+    return 0;
+}
+
+int Game::matchRoundTarget() const {
+    if (matchFormat_ == MATCH_NORMAL) return 13;
+    if (matchFormat_ == MATCH_SWIFT) return 7;
+    return 0;
+}
+
+bool Game::matchUsesTeamScore() const {
+    return currentGameMode == TEAM_VS_TEAM || currentGameMode == BOMB_DEFUSAL;
+}
+
+void Game::checkMatchEnd() {
+    if (matchOver_ || matchFormat_ == MATCH_FREE_PLAY) return;
+
+    if (currentGameMode == BOMB_DEFUSAL) {
+        // First to the format's round target wins (13 normal, 7 swift).
+        // There is no win-by-two overtime: 12-12 is decided by the next round.
+        const int target = matchRoundTarget();
+        const int best = std::max(teamAScore_, teamBScore_);
+        if (best < target) return;
+        matchOver_ = true;
+        matchWinner_ = teamAScore_ > teamBScore_ ? 0 : 1;
+        playUiSound("round_end");
+        std::cout << "MATCH OVER: Team " << (matchWinner_ == 0 ? "A" : "B")
+                  << " wins " << teamAScore_ << ":" << teamBScore_ << std::endl;
+        return;
+    }
+
+    const int target = matchKillTarget();
+    if (target <= 0) return;
+
+    if (currentGameMode == TEAM_VS_TEAM) {
+        if (teamAScore_ < target && teamBScore_ < target) return;
+        matchOver_ = true;
+        matchWinner_ = teamAScore_ >= target ? 0 : 1;
+    } else {
+        if (kills_ < target) return;
+        matchOver_ = true;
+        matchWinner_ = 2;   // the local player
+    }
+    playUiSound("round_end");
+    std::cout << "MATCH OVER: " << (matchWinner_ == 2
+                                        ? std::string("player")
+                                        : "Team " + std::string(matchWinner_ == 0 ? "A" : "B"))
+              << " reached " << target << " kills" << std::endl;
+}
+
+void Game::restartMatch() {
+    matchOver_ = false;
+    matchWinner_ = -1;
+    attackingTeam = 0;
+    roundNumber_ = 1;
+    teamAScore_ = 0;
+    teamBScore_ = 0;
+    refreshBombSitesForMode();
+    resetGame();
+    if (!multiplayerMode && (botSetupTeamA_ > 0 || botSetupTeamB_ > 0)) {
+        startLocalBots();
+    }
 }
 

@@ -17,7 +17,11 @@ A multiplayer-enabled 3D first-person shooter game built with OpenGL and C++.
 - Enemy AI
 - Map editor with mouse placement, undo/redo, new/open/save dialogs and spawn tools
 - Discord Rich Presence (optional): shows the current mode, map or editor state
-- Various game modes
+- Various game modes (Deathmatch, Team Deathmatch, Bomb Defusal)
+- Match formats: Free Play (endless), Normal (first to 13 rounds / 50 kills)
+  and Swift (first to 7 rounds / 25 kills)
+- Pre-match team and bot setup screen
+- Single-player bots with configurable count, teams and accuracy
 
 ### Local Multiplayer (NEW!)
 - **LAN Discovery**: Automatic server discovery on local network

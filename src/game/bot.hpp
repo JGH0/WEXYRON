@@ -15,8 +15,8 @@
  *   - they throw grenades and flashbangs,
  *   - a flashbang blinds them; while blind they wander randomly and cannot aim.
  *
- * Game modes: deathmatch (hunt everyone), team vs team (hunt the other team and
- * push the enemy side), bomb defusal (move to the bomb sites / hold them).
+ * Game modes: deathmatch (hunt everyone), team deathmatch (hunt the other team
+ * with normal respawns), bomb defusal (move to the bomb sites / hold them).
  */
 
 #ifndef GAME_BOT_HPP
@@ -157,10 +157,10 @@ struct Target {
 struct World {
     const BotMap* map = nullptr;
     std::vector<Target> targets;
-    int gameMode = 0;          ///< 0 = deathmatch, 1 = team vs team, 2 = bomb
+    int gameMode = 0;          ///< 0 = deathmatch, 1 = team deathmatch, 2 = bomb
     bool friendlyFire = false; ///< team modes: allow damaging teammates
 
-    // Server-authoritative bomb state (round-based modes). A bot that walks
+    // Server-authoritative bomb state (bomb defusal only). A bot that walks
     // onto a site plants it, and a defending bot that reaches a planted bomb
     // defuses it; the server advances the actual timers.
     bool roundActive = true;
@@ -196,7 +196,11 @@ public:
 
     uint32_t id() const { return id_; }
     uint8_t team() const { return team_; }
+    /// Move the bot to the other team (pre-match lobby allocation).
+    void setTeam(uint8_t team) { team_ = team & 1u; lastTargetId_ = 0; }
     float accuracy() const { return accuracy_; }
+    /// Change aim accuracy at runtime (lobby setup / bot strength).
+    void setAccuracy(float accuracy) { accuracy_ = accuracy; }
 
     const glm::vec3& position() const { return position_; }
     const glm::vec3& velocity() const { return velocity_; }

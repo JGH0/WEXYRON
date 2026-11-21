@@ -94,11 +94,13 @@ void Game::processInput(float deltaTime) {
     // build the menu for it now. (Only then: openMainMenu() also resets the
     // key edges and must not run on every frame.)
     const bool inMenuState = (gameState == MENU || gameState == SETTINGS ||
-                              gameState == MAP_SELECTION || gameState == SERVER_CONNECT);
+                              gameState == MAP_SELECTION || gameState == SERVER_CONNECT ||
+                              gameState == TEAM_SETUP);
     if (inMenuState && !activeMenuView().stack.current()) {
         if (gameState == MENU) openMainMenu();
         else if (gameState == SETTINGS) openSettings();
         else if (gameState == MAP_SELECTION) openMapSelection();
+        else if (gameState == TEAM_SETUP) openTeamSetup();
         else openServerConnect();
     }
 
@@ -115,7 +117,8 @@ void Game::processInput(float deltaTime) {
         }
         processGameInput(deltaTime);
     } else if (gameState == MENU || gameState == SETTINGS ||
-               gameState == MAP_SELECTION || gameState == SERVER_CONNECT) {
+               gameState == MAP_SELECTION || gameState == SERVER_CONNECT ||
+               gameState == TEAM_SETUP) {
         processMenuInput();
     } else if (gameState == MAP_EDITOR) {
         // The editor handles ESC itself so it can warn about unsaved changes.
@@ -192,6 +195,7 @@ void Game::processMenuInput() {
         inp.resetNavKeys();   // clears the edges and re-arms the key re-sync
         menuJustEntered = false;
         if (gameState == SERVER_CONNECT) refreshServerRows();
+        if (gameState == TEAM_SETUP) sendLobbySetup();
         return;
     }
 
@@ -228,6 +232,11 @@ void Game::processMenuInput() {
     }
     lastMenuRow = selected;
     lastHoverRow = hoverRow;
+
+    if (gameState == TEAM_SETUP && lobbyDirty_) {
+        lobbyDirty_ = false;
+        refreshTeamSetupRows();
+    }
 
     if (gameState == SERVER_CONNECT) {
         processServerConnectTextInput();
@@ -290,12 +299,24 @@ void Game::processGameInput(float deltaTime) {
         return;
     }
 
+    // Match over: ENTER starts a fresh match; other gameplay input is frozen.
+    if (matchOver_) {
+        if (!isConnectedToServer()) {
+            const bool enter = glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS ||
+                               glfwGetKey(window, GLFW_KEY_KP_ENTER) == GLFW_PRESS;
+            if (enter && !matchEnterHeld_) restartMatch();
+            matchEnterHeld_ = enter;
+        }
+        pendingWeaponScroll_ = 0;
+        return;
+    }
+    matchEnterHeld_ = false;
+
     // Counter-Strike style round end: players may still walk around for a
     // few seconds, but shooting and bomb interactions are disabled and any
     // plant/defuse in progress is cancelled.
     const bool roundIntermission =
-        roundEndTimer > 0.0f &&
-        (currentGameMode == TEAM_VS_TEAM || currentGameMode == BOMB_DEFUSAL);
+        matchOver_ || (roundEndTimer > 0.0f && currentGameMode == BOMB_DEFUSAL);
     if (roundIntermission) {
         isPlanting = false;
         isDefusing = false;

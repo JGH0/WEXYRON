@@ -166,16 +166,30 @@ The dedicated server can fill a match with bots. They are configured in
 - `accuracy` – hit chance from `0.0` (almost never hits) to `1.0` (very
   accurate). It also affects how much a bot misses grenade/flashbang throws.
 
+Before a match starts, the client shows a **MATCH SETUP** screen. Choose your
+team and allocate the server's bot pool between Team A and Team B. You cannot
+allocate more bots than the server has, and the bot accuracy requested by a
+client is capped by the server's `BOTS_ACCURACY` setting. In single player the
+same screen controls the offline bot count per team and accuracy (up to 100%).
+The selected match format decides the win condition:
+
+- **Free Play** – endless (the old behaviour).
+- **Normal** – Bomb Defusal is first to 13 round wins (teams switch roles and
+  spawn sides once after round 12); Deathmatch/Team Deathmatch is first to 50
+  kills.
+- **Swift** – Bomb Defusal is first to 7 round wins (teams switch roles and
+  spawn sides once after round 6); Deathmatch/Team Deathmatch is first to 25
+  kills.
+
 Bots are full server-controlled players: they walk and collide with the map,
 fight with pistols and shotguns, throw grenades and flashbangs, and respawn in
-deathmatch. In round-based modes (team vs team / bomb defusal) a dead bot stays
-dead until the next round starts, exactly like a human player. They always
-follow the world and game mode of the players (bots are spread over the
-connected players, so two occupied maps both get bots). A flashbang blinds
-nearby bots; while blind they wander randomly and cannot aim or shoot. Bots
-fight in deathmatch, team vs team, and bomb defusal; in the round modes they
-push a bomb site, plant the bomb when they get there, and defenders go to a
-planted bomb and defuse it.
+deathmatch and team deathmatch. In bomb defusal a dead bot stays dead until the
+next round starts, exactly like a human player. They always follow the world and
+game mode of the players (bots are spread over the connected players, so two
+occupied maps both get bots). A flashbang blinds nearby bots; while blind they
+wander randomly and cannot aim or shoot. Bots fight in deathmatch, team
+deathmatch, and bomb defusal; in bomb defusal they push a bomb site, plant the
+bomb when they get there, and defenders go to a planted bomb and defuse it.
 
 Bomb planting, defusing and the fuse are authoritative on the dedicated server
 (`ServerBombManager`), not just in the client. Clients send an intent when E is

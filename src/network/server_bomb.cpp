@@ -100,8 +100,10 @@ void ServerBombManager::resetBomb(MapState& state) {
     state.dirty = true;
 }
 
-void ServerBombManager::resetRound(MapState& state, int gameMode, int attackingTeam) {
+void ServerBombManager::resetRound(MapState& state, int gameMode, int attackingTeam,
+                                   int matchFormat) {
     state.gameMode = gameMode;
+    state.matchFormat = matchFormat;
     state.roundActive = true;
     state.attackingTeam = static_cast<uint8_t>(attackingTeam & 1);
     state.roundTimeLeft = config_.roundTime;
@@ -130,15 +132,17 @@ void ServerBombManager::observePlayers(NetworkServer& server) {
         if (!anyHuman && state.hasHumans) {
             state.hasHumans = false;
             state.gameMode = 0;
+            state.matchFormat = 0;
+            state.roundsPlayed = 0;
             state.roundActive = false;
             resetBomb(state);
             state.broadcastTimer = 0.0f;
         }
     }
 
-    // The first client entering a team/bomb map does not send a round-start
+    // The first client entering a bomb defusal map does not send a round-start
     // packet (that only happens after the first round ends). Treat the first
-    // report of a round-based mode as the start of the initial round.
+    // report of bomb defusal as the start of the initial round.
     for (ServerPlayer* player : server.getPlayers()) {
         if (!player->active || player->isBot) continue;
         if (player->inputIdle > 2.0f) continue; // still in a menu
@@ -147,33 +151,40 @@ void ServerBombManager::observePlayers(NetworkServer& server) {
         MapState& state = stateFor(player->mapName);
         state.hasHumans = true;
 
-        // Switching to deathmatch abandons any running round immediately.
-        // A round-based client reporting a different round mode for a frame
-        // must not restart a live round, though.
-        if (state.gameMode != mode && (mode < 1 || !state.roundActive)) {
-            if (mode < 1) {
-                state.gameMode = 0;
-                state.roundActive = false;
-                state.roundEnded = false;
-                state.roundWinner = 255;
-                state.roundEndReason = ROUND_END_NONE;
-                state.roundTimeLeft = 0.0f;
-                resetBomb(state);
-                interact_.clear();
-                interactAge_.clear();
-            } else {
-                resetRound(state, mode, state.attackingTeam);
+        if (mode == 2) {
+            // Start the initial bomb round. A bomb client reporting another
+            // mode for a frame must not restart a live round, though.
+            if (state.gameMode != 2 && !state.roundActive) {
+                state.roundsPlayed = 0;
+                resetRound(state, mode, state.attackingTeam, player->matchFormat);
+                state.broadcastTimer = 0.0f;
             }
+        } else if (state.gameMode != 0) {
+            // Leaving bomb defusal (for deathmatch or team deathmatch)
+            // abandons any running round immediately.
+            state.gameMode = 0;
+            state.matchFormat = 0;
+            state.roundsPlayed = 0;
+            state.roundActive = false;
+            state.roundEnded = false;
+            state.roundWinner = 255;
+            state.roundEndReason = ROUND_END_NONE;
+            state.roundTimeLeft = 0.0f;
+            resetBomb(state);
+            interact_.clear();
+            interactAge_.clear();
             state.broadcastTimer = 0.0f;
         }
     }
 }
 
 void ServerBombManager::onRoundStart(const std::string& mapName, int gameMode,
-                                     int attackingTeam) {
-    if (!server_ || gameMode < 1) return;
+                                     int attackingTeam, int matchFormat,
+                                     bool freshMatch) {
+    if (!server_ || gameMode != 2) return;
     MapState& state = stateFor(mapName);
-    resetRound(state, gameMode, attackingTeam);
+    if (freshMatch) state.roundsPlayed = 0;
+    resetRound(state, gameMode, attackingTeam, matchFormat);
     broadcastState(mapName, state, *server_);
 }
 
@@ -183,11 +194,13 @@ void ServerBombManager::onBombInteract(uint32_t playerId, uint8_t action) {
     if (!player || !player->active || player->isDead) return;
     // Only humans send requests; bots are handled automatically by chooseActor.
     if (player->isBot) return;
-    if (player->gameMode < 1) return;
+    if (player->gameMode != 2) return;
     if (action != BOMB_INTERACT_PLANT && action != BOMB_INTERACT_DEFUSE) return;
 
     MapState& state = stateFor(player->mapName);
-    if (state.gameMode < 1) resetRound(state, player->gameMode, state.attackingTeam);
+    if (state.gameMode != 2) {
+        resetRound(state, player->gameMode, state.attackingTeam, player->matchFormat);
+    }
     if (!state.roundActive) return;
 
     interact_[playerId] = action;
@@ -227,7 +240,7 @@ ServerPlayer* ServerBombManager::chooseActor(const MapState& state, NetworkServe
     auto consider = [&](ServerPlayer* candidate, bool requested) {
         if (!candidate || !candidate->active || candidate->isDead) return;
         if (!sameMap(*candidate, mapName)) return;
-        if (candidate->gameMode < 1) return;
+        if (candidate->gameMode != 2) return;
 
         if (defusing) {
             if (!state.planted || state.defused || state.exploded) return;
@@ -291,8 +304,20 @@ void ServerBombManager::finishRound(MapState& state, int winner, RoundEndReason 
     state.defuseActor = 0;
     state.dirty = true;
 
-    // The next round swaps sides, just like Game::endRound() on the clients.
-    state.attackingTeam = static_cast<uint8_t>((state.attackingTeam + 1) & 1);
+    // Side switching follows the match format. Free play keeps the old
+    // round-by-round swap; normal switches once after round 12, swift once
+    // after round 6. The first team to 13 / 7 round wins takes the match.
+    ++state.roundsPlayed;
+    const int played = state.roundsPlayed;
+    bool swapSides = true;
+    if (state.matchFormat == 1) {
+        swapSides = (played == 12);
+    } else if (state.matchFormat == 2) {
+        swapSides = (played == 6);
+    }
+    if (swapSides) {
+        state.attackingTeam = static_cast<uint8_t>((state.attackingTeam + 1) & 1);
+    }
 
     const char* reasonText = "round over";
     switch (reason) {
@@ -406,11 +431,11 @@ void ServerBombManager::update(float deltaTime, NetworkServer& server) {
     for (auto& entry : states_) {
         const std::string& mapName = entry.first;
         MapState& state = entry.second;
-        if (state.gameMode < 1) continue;
+        if (state.gameMode != 2) continue;
 
         state.broadcastTimer -= deltaTime;
 
-        if (humansOnline && state.gameMode >= 1) {
+        if (humansOnline) {
             // Round clock runs only until the bomb is planted; after that the
             // fuse is the only timer that matters.
             if (state.roundActive && !state.planted) {

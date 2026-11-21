@@ -343,7 +343,7 @@ void NetworkClient::disconnect() {
 
 void NetworkClient::sendPlayerInput(float moveX, float moveZ, float yaw, float pitch,
                                      bool jump, bool shoot, uint8_t weaponId, float posX, float posY, float posZ,
-                                     bool alive, uint8_t gameMode) {
+                                     bool alive, uint8_t gameMode, uint8_t matchFormat) {
     if (!connected) return;
 
     PlayerInputPacket packet;
@@ -366,6 +366,7 @@ void NetworkClient::sendPlayerInput(float moveX, float moveZ, float yaw, float p
     packet.posZ = posZ;
     packet.alive = alive;
     packet.gameMode = gameMode;
+    packet.matchFormat = matchFormat;
 
     sendPacket(&packet, sizeof(packet));
 }
@@ -445,7 +446,8 @@ void NetworkClient::sendMapChange(const std::string& mapName) {
     std::cout << "Sent map change request: " << mapName << std::endl;
 }
 
-void NetworkClient::sendRoundStart(uint8_t gameMode, uint8_t attackingTeam) {
+void NetworkClient::sendRoundStart(uint8_t gameMode, uint8_t attackingTeam,
+                                   uint8_t matchFormat, bool freshMatch) {
     if (!connected) return;
 
     RoundStartPacket packet{};
@@ -457,6 +459,29 @@ void NetworkClient::sendRoundStart(uint8_t gameMode, uint8_t attackingTeam) {
     packet.header.clientId = clientId;
     packet.gameMode = gameMode;
     packet.attackingTeam = attackingTeam & 1u;
+    packet.matchFormat = matchFormat;
+    packet.freshMatch = freshMatch ? 1 : 0;
+    sendPacket(&packet, sizeof(packet));
+}
+
+void NetworkClient::sendLobbySetup(uint8_t team, uint8_t botsTeamA, uint8_t botsTeamB,
+                                   uint8_t botAccuracy, uint8_t matchFormat,
+                                   bool freshMatch) {
+    if (!connected) return;
+
+    LobbySetupPacket packet{};
+    packet.header.magic = PACKET_MAGIC;
+    packet.header.type = PACKET_LOBBY_SETUP;
+    packet.header.sequence = sequence++;
+    packet.header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    packet.header.clientId = clientId;
+    packet.team = team & 1u;
+    packet.botsTeamA = botsTeamA;
+    packet.botsTeamB = botsTeamB;
+    packet.botAccuracy = botAccuracy;
+    packet.matchFormat = matchFormat;
+    packet.freshMatch = freshMatch ? 1 : 0;
     sendPacket(&packet, sizeof(packet));
 }
 
@@ -560,8 +585,13 @@ void NetworkClient::update() {
             }
                 
             case PACKET_PLAYER_STATE:
-                if (connected && received >= sizeof(PlayerStatePacket) && onPlayerState) {
-                    onPlayerState(*(PlayerStatePacket*)buffer);
+                if (connected && received >= sizeof(PlayerStatePacket)) {
+                    const PlayerStatePacket& state = *(PlayerStatePacket*)buffer;
+                    // The server may change our team in the pre-match setup.
+                    if (state.playerId == clientId && state.team <= 1) {
+                        assignedTeam = static_cast<uint8_t>(state.team & 1u);
+                    }
+                    if (onPlayerState) onPlayerState(state);
                 }
                 break;
                 
@@ -592,6 +622,18 @@ void NetworkClient::update() {
             case PACKET_BOMB_STATE:
                 if (connected && received >= sizeof(BombStatePacket) && onBombState) {
                     onBombState(*(BombStatePacket*)buffer);
+                }
+                break;
+
+            case PACKET_LOBBY_STATE:
+                if (connected && received >= sizeof(LobbyStatePacket) && onLobbyState) {
+                    onLobbyState(*(LobbyStatePacket*)buffer);
+                }
+                break;
+
+            case PACKET_MATCH_STATE:
+                if (connected && received >= sizeof(MatchStatePacket) && onMatchState) {
+                    onMatchState(*(MatchStatePacket*)buffer);
                 }
                 break;
 
@@ -1046,10 +1088,24 @@ void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_
             if (!player || !player->active) break;
 
             player->gameMode = start->gameMode;
-            if (start->gameMode >= 1 && onRoundStarted) {
+            player->matchFormat = start->matchFormat;
+            if (start->gameMode == 2 && onRoundStarted) {
                 onRoundStarted(player->mapName, static_cast<int>(start->gameMode),
-                               static_cast<int>(start->attackingTeam & 1u));
+                               static_cast<int>(start->attackingTeam & 1u),
+                               static_cast<int>(start->matchFormat),
+                               start->freshMatch != 0);
             }
+            break;
+        }
+
+        case PACKET_LOBBY_SETUP: {
+            if (size < sizeof(LobbySetupPacket)) return;
+            const LobbySetupPacket* setup = (const LobbySetupPacket*)data;
+            ServerPlayer* player = findPlayerByAddress(from);
+            if (!player || !player->active || player->isBot) break;
+            player->team = static_cast<uint8_t>(setup->team & 1u);
+            player->matchFormat = setup->matchFormat;
+            if (onLobbySetup) onLobbySetup(player->id, *setup);
             break;
         }
 

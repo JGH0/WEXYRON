@@ -48,7 +48,7 @@ public:
     /// server-side; bot projectiles are added directly by applyActions().
     void onProjectileSpawned(uint32_t ownerId, const ProjectileSpawnPacket& packet);
 
-    /// A round-based client started a new round on `mapName`. Dead bots on
+    /// A bomb defusal client started a new round on `mapName`. Dead bots on
     /// that map are revived, matching the human clients.
     void startRound(const std::string& mapName, int gameMode);
 
@@ -82,6 +82,18 @@ public:
     /// Highest number of bots the client can display (MAX_REMOTE_PLAYERS).
     static constexpr int kMaxBots = 8;
 
+    /// Pool / current allocation used by the pre-match setup screen.
+    int poolSize() const { return static_cast<int>(bots_.size()); }
+    int assignedTeamA() const { return assignedTeamA_; }
+    int assignedTeamB() const { return assignedTeamB_; }
+    float configuredAccuracy() const { return config_.accuracy; }
+    float currentAccuracy() const { return currentAccuracy_; }
+
+    /// Apply a client's lobby request. Counts are clamped to the bot pool;
+    /// `accuracy` is clamped to the server-configured maximum. Unassigned
+    /// bots are parked out of play and re-enter when a slot is assigned.
+    void applyTeamSetup(NetworkServer& server, int teamA, int teamB, float accuracy);
+
 private:
     struct Runtime;
     struct ServerProjectile {
@@ -102,6 +114,9 @@ private:
     std::mt19937 rng_{0xC0FFEEu};
     float accumulator_ = 0.0f;
     bool idle_ = false;  ///< no human connected: freeze all bot activity
+    int assignedTeamA_ = 0;
+    int assignedTeamB_ = 0;
+    float currentAccuracy_ = 0.0f;
 
     /// Load (and cache) a map. Falls back to an empty floor map when missing.
     const bots::BotMap* getMap(const std::string& mapName);
@@ -110,6 +125,11 @@ private:
 
     /// Run one fixed AI tick.
     void tick(float deltaTime, NetworkServer& server);
+
+    /// Map side a bot should spawn on. Bomb Defusal follows the current
+    /// attacker/defender role so both teams swap sides at half time.
+    int spawnSideFor(const ServerPlayer& player, int gameMode,
+                     const std::string& mapName) const;
 
     /// Move a bot to the world / game mode its followed player is in.
     void switchBotWorld(NetworkServer& server, Runtime& runtime,

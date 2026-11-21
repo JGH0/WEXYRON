@@ -37,6 +37,8 @@
 #include "../network/network.hpp"
 #include "engine/audio_manager.hpp"
 
+class LocalBotHost;
+
 /**
  * @brief Main game class managing the application lifecycle
  * 
@@ -157,10 +159,19 @@ public:
     menu::MenuView* debugMenuView() { return &activeMenuView(); }
     menu::Page* debugMenuPage();
     GLFWwindow* windowHandle() const { return window; }
+    int debugGameState() const { return static_cast<int>(gameState); }
     int debugGameMode() const { return static_cast<int>(currentGameMode); }
     void debugSetGameModeForTest(int mode) {
         currentGameMode = static_cast<GameMode>(mode);
     }
+    int debugMatchFormat() const { return static_cast<int>(matchFormat_); }
+    void debugSetMatchFormatForTest(int format) {
+        matchFormat_ = static_cast<MatchFormat>(format);
+    }
+    int debugTeamAScore() const { return teamAScore_; }
+    int debugTeamBScore() const { return teamBScore_; }
+    bool debugMatchOver() const { return matchOver_; }
+    int debugLocalBotCount() const;
     /// Force the round-end sequence (tests: movement window / popup timer).
     void debugEndRoundForTest(int winner, int reason) {
         endRound(winner, static_cast<RoundEndReason>(reason));
@@ -414,9 +425,17 @@ public:
 
     /// Game mode type
     enum GameMode {
-        DEATHMATCH,
-        TEAM_VS_TEAM,
-        BOMB_DEFUSAL
+        DEATHMATCH,      ///< free-for-all deathmatch
+        TEAM_VS_TEAM,    ///< team deathmatch: deathmatch rules with two teams
+        BOMB_DEFUSAL     ///< the only round-based mode
+    };
+
+    /// Match length / win-condition preset. Free play keeps the old endless
+    /// session; normal and swift add score limits and half-time side switches.
+    enum MatchFormat {
+        MATCH_FREE_PLAY = 0, ///< endless (old behaviour)
+        MATCH_NORMAL    = 1, ///< first to 13 rounds / 50 kills
+        MATCH_SWIFT     = 2  ///< first to 7 rounds / 25 kills
     };
 
 private:
@@ -516,6 +535,7 @@ private:
         SETTINGS,
         MAP_SELECTION,
         SERVER_CONNECT,
+        TEAM_SETUP,
         MAP_EDITOR,
         DEAD
     } gameState;
@@ -542,7 +562,7 @@ private:
     int mapSelection = 0;
 
     /// Game mode selection
-    int gameModeSelection = 0; // 0 = Deathmatch, 1 = Team vs Team
+    int gameModeSelection = 0; // 0 = Deathmatch, 1 = Team Deathmatch
 
     /// Map player counts (received from server)
     std::vector<int> mapPlayerCounts; // Player count for each map
@@ -701,6 +721,7 @@ private:
     menu::MenuView settingsMenu_; ///< settings page, controls pushed on top
     menu::MenuView mapMenu_;      ///< map selection
     menu::MenuView serverMenu_;   ///< connect to server
+    menu::MenuView teamMenu_;     ///< pre-match team / bot setup
     /// Set while the current state shows one of the menu views.
     bool menuActive_ = false;
 
@@ -723,6 +744,46 @@ private:
     void openMapSelection();
     /// Draw the connect-to-server screen (framework view + text fields).
     void renderServerConnect();
+
+    // ── Pre-match team / bot setup ──────────────────────────────────────────
+    /// Open the setup screen for the map selected in the map menu.
+    void openTeamSetup();
+    /// Rebuild the setup rows (bot pool / values may have changed).
+    void refreshTeamSetupRows();
+    /// Push the local setup choices (team, bots, accuracy, format) to a
+    /// connected server. No-op in single player.
+    void sendLobbySetup(bool freshMatch = false);
+    /// Start the pending map with the current setup.
+    void beginMatch();
+    /// The old startSelectedMap() body: install the map and enter PLAYING.
+    void startMatchNow(const std::string& mapFile);
+    /// Apply a lobby state received from the server.
+    void applyLobbyState(uint8_t team, uint8_t pool, uint8_t botsA,
+                         uint8_t botsB, uint8_t accuracy, uint8_t maxAccuracy,
+                         uint8_t matchFormat);
+    /// True when a local (single-player) bot host is running.
+    bool localBotsActive() const { return localBots_ != nullptr; }
+    /// Create the single-player bot host on the freshly installed map.
+    void startLocalBots();
+    void stopLocalBots();
+    /// Advance the local bot AI, copy bodies to remotePlayers and update the
+    /// mode's team kill counters.
+    void updateLocalBots(float deltaTime);
+    /// Resolve damage from the player's shot/blast against a local bot.
+    bool damageLocalBot(uint32_t id, float damage);
+
+    // ── Match length / win conditions ───────────────────────────────────────
+    int matchKillTarget() const;
+    int matchRoundTarget() const;
+    /// True when the current mode/format combination is a team score mode.
+    bool matchUsesTeamScore() const;
+    /// Evaluate the win condition after a kill or a round result. Sets
+    /// matchOver_/matchWinner_ once and freezes the final state.
+    void checkMatchEnd();
+    /// Restart the current map with a reset scoreboard.
+    void restartMatch();
+    /// True while the round/gameplay timers must stay frozen.
+    bool matchFrozen() const { return matchOver_; }
     
     /// Projectile structure for bullets
     struct Projectile {
@@ -833,9 +894,27 @@ private:
     /// Deaths of the local player in the current match.
     int deaths_ = 0;
     /// Round currently being played (1-based) and round wins per team.
+    /// In deathmatch modes the team scores are kill counters.
     int roundNumber_ = 1;
     int teamAScore_ = 0;
     int teamBScore_ = 0;
+
+    // ── Match format / pre-match setup ─────────────────────────────────────
+    MatchFormat matchFormat_ = MATCH_FREE_PLAY;
+    bool matchOver_ = false;
+    int matchWinner_ = -1;        ///< 0/1 team, or the local player (DM) when 2
+    bool matchEnterHeld_ = false; ///< edge guard for ENTER on the result screen
+    std::string pendingMapFile_;  ///< map chosen in the map menu
+    /// Team / bot setup (also the last values sent to a server).
+    int botSetupTeamA_ = 2;
+    int botSetupTeamB_ = 2;
+    int botSetupAccuracy_ = 70;   ///< percent
+    int serverBotPool_ = 0;       ///< bots the server has available
+    int serverBotMaxAccuracy_ = 100;
+    bool lobbyDirty_ = false;     ///< rows need a refresh after a server state
+    /// Single-player bot host (null in multiplayer / when bots are off).
+    std::unique_ptr<LocalBotHost> localBots_;
+    bool localBotsPending_ = false; ///< start after the requested map loads
 
     // ── First-person weapon viewmodel ──────────────────────────────────────
     float weaponBobTime_ = 0.0f;     ///< walk-cycle phase
@@ -891,6 +970,10 @@ private:
     /// visible fireball.
     float explosionRadius_ = 4.0f;
     float explosionDamage_ = 65.0f;
+
+    /// Bomb defusal round clock in offline play. Multiplayer uses the
+    /// server's authoritative ROUND_TIME instead.
+    static constexpr float kLocalBombRoundTime = 115.0f;
 
     /// Upward speed of a jump (m/s). With gravity 9.8 that is a 0.8 m peak.
     static constexpr float kJumpSpeed = 4.0f;
@@ -1259,7 +1342,7 @@ private:
     float fpsTimer;
     int  fpsDisplayValue;
     GameMode currentGameMode;
-    int playerTeam; // 0 = Team A/Red, 1 = Team B/Blue (for Team vs Team mode)
+    int playerTeam; // 0 = Team A/Red, 1 = Team B/Blue (team-based modes)
     
     /**
      * @brief Update player physics including gravity and collisions
@@ -1495,6 +1578,8 @@ private:
      * @param deltaTime Time since last frame
      */
     void updateBomb(float deltaTime);
+    /// Offline bomb round: elimination and (no-plant) time-out outcome.
+    void checkLocalBombRoundOutcome();
     
     /**
      * @brief Start planting bomb at current location

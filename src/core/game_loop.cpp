@@ -35,15 +35,14 @@ void Game::update(float deltaTime) {
     updateSniperBolt(deltaTime);
 
     if (gameState == PLAYING) {
-        // Deathmatch has no round cycle; the HUD shows elapsed match time.
-        // Round modes advance their own clock in updateBomb().
-        if (currentGameMode == DEATHMATCH) roundTime += deltaTime;
+        // Deathmatch and team deathmatch have no round cycle; the HUD shows
+        // elapsed match time. Bomb defusal advances its own clock in updateBomb().
+        if (currentGameMode != BOMB_DEFUSAL) roundTime += deltaTime;
 
         const bool spectating = spectatorMode && isDead;
         // Round-end screen: the body is frozen (no movement, jump or shot).
         const bool roundIntermission =
-            roundEndTimer > 0.0f &&
-            (currentGameMode == TEAM_VS_TEAM || currentGameMode == BOMB_DEFUSAL);
+            matchOver_ || (roundEndTimer > 0.0f && currentGameMode == BOMB_DEFUSAL);
 
         if (spectating) {
             // Dead players fly freely (map-editor style) instead of running
@@ -69,6 +68,10 @@ void Game::update(float deltaTime) {
         if (currentWeaponInstance) {
             currentWeaponInstance->updateCooldown(deltaTime);
         }
+
+        // Single-player bot AI runs before projectiles so a shot fired this
+        // frame can already collide with the body's new position.
+        if (localBots_ && !matchOver_) updateLocalBots(deltaTime);
 
         // Update projectiles
         updateProjectiles(deltaTime);
@@ -125,8 +128,7 @@ void Game::update(float deltaTime) {
         (gameState == PLAYING || gameState == DEAD)) {
         const bool alive = (gameState == PLAYING) && !isDead && !spectatorMode;
         const bool roundFrozen =
-            roundEndTimer > 0.0f &&
-            (currentGameMode == TEAM_VS_TEAM || currentGameMode == BOMB_DEFUSAL);
+            matchOver_ || (roundEndTimer > 0.0f && currentGameMode == BOMB_DEFUSAL);
         const bool interacting = isPlanting || isDefusing;
         float moveX = 0.0f, moveZ = 0.0f;
         if (alive && !interacting) {
@@ -159,7 +161,8 @@ void Game::update(float deltaTime) {
                                        static_cast<uint8_t>(currentWeapon),
                                        eyePos.x, eyePos.y, eyePos.z,
                                        alive,
-                                       static_cast<uint8_t>(currentGameMode));
+                                       static_cast<uint8_t>(currentGameMode),
+                                       static_cast<uint8_t>(matchFormat_));
     }
 
     // Update round end timer (delay before next round)
@@ -168,8 +171,9 @@ void Game::update(float deltaTime) {
     // Update explosions (always run)
     updateExplosions(deltaTime);
 
-    // PVP collision checks (only in multiplayer)
-    if (isConnectedToServer()) {
+    // Remote-body bookkeeping: networked players or offline bots, whichever
+    // currently owns the remote-player slots.
+    if (isConnectedToServer() || localBots_) {
         checkPlayerPlayerCollision();
         updateRemotePlayerDeath(deltaTime);
         updateRemoteAnimations(deltaTime);
@@ -275,8 +279,8 @@ void Game::render() {
             }
         }
 
-        // Render remote players (multiplayer)
-        if (multiplayerMode) {
+        // Render remote players (multiplayer) or single-player bots.
+        if (multiplayerMode || localBots_) {
             renderRemotePlayers();
         }
 
@@ -325,7 +329,8 @@ void Game::render() {
         }
 
     } else if (gameState == MENU || gameState == SETTINGS ||
-               gameState == MAP_SELECTION || gameState == SERVER_CONNECT) {
+               gameState == MAP_SELECTION || gameState == SERVER_CONNECT ||
+               gameState == TEAM_SETUP) {
         // All menu screens are drawn by the menu framework (ui/menu.hpp);
         // the view decides title, rows and footer.
         UIHelpers::setProjection(renderer, window);
@@ -370,7 +375,7 @@ void Game::updateDiscordPresence() {
     std::string modeKey = "deathmatch";
     switch (currentGameMode) {
         case TEAM_VS_TEAM:
-            modeText = "Team vs Team";
+            modeText = "Team Deathmatch";
             modeKey = "team";
             break;
         case BOMB_DEFUSAL:

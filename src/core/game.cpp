@@ -16,6 +16,7 @@
 #include "game.hpp"
 #include "brand.hpp"
 #include "discord_presence.hpp"
+#include "../game/local_bots.hpp"
 #include "network/network.hpp"
 #include <iostream>
 #include <cstdlib>
@@ -774,12 +775,21 @@ void Game::installMap(std::unique_ptr<Map> loaded) {
     currentMap = loaded.release();
     if (!currentMap) return;
 
+    stopLocalBots();
+
     // Setup (or clear) bomb defusal state for the current mode. This is also
     // re-run when the menu changes the mode so stale sites disappear at once,
     // and it re-arms the server-round guards for a fresh match.
     refreshBombSitesForMode();
 
     resetGame();
+
+    // A single-player match requested bots: the map is now available, so the
+    // AI can load its collision/navigation copy of the same file.
+    if (localBotsPending_) {
+        localBotsPending_ = false;
+        startLocalBots();
+    }
 
     // Rebuild GPU-side state for the new map: the texture array (one bind for
     // every block texture) and the instanced world geometry.
@@ -821,9 +831,14 @@ void Game::refreshBombSitesForMode() {
     roundEndReason = ROUND_END_NONE;
     roundTimeLeft = 0.0f;
     roundEndTimer = 0.0f;
+    attackingTeam = 0;
+    matchOver_ = false;
+    matchWinner_ = -1;
+    matchEnterHeld_ = false;
 
-    const bool roundBased = currentGameMode == TEAM_VS_TEAM ||
-                            currentGameMode == BOMB_DEFUSAL;
+    // Only bomb defusal is round-based. Team vs team is a team deathmatch:
+    // it uses the normal respawn flow and never owns bomb sites.
+    const bool roundBased = currentGameMode == BOMB_DEFUSAL;
     bombDefusalMode = currentMap != nullptr && roundBased;
     if (!bombDefusalMode) {
         roundActive = false;
@@ -831,11 +846,12 @@ void Game::refreshBombSitesForMode() {
         return;
     }
 
-    // Local round modes have no server sending the round clock. Start the
-    // round here so the HUD timer runs and round end -> next round works. On a
+    // Local bomb defusal has no server sending the round clock. Start the
+    // round here so the countdown runs and round end -> next round works. On a
     // live server the authoritative BombStatePacket decides instead.
     if (!(networkClient && networkClient->isConnected())) {
         roundActive = true;
+        roundTimeLeft = kLocalBombRoundTime;
     }
 
     // Load the current map's authored bomb sites.
@@ -993,7 +1009,12 @@ void Game::resetGame() {
 
         bool placed = false;
         if (currentGameMode == TEAM_VS_TEAM || currentGameMode == BOMB_DEFUSAL) {
-            TeamSpawn spawn = currentMap->getRandomTeamSpawn(playerTeam);
+            // Bomb Defusal spawns follow the attacker/defender role. XOR with
+            // attackingTeam makes every team spawn on the opposite side of
+            // the map after the half-time role switch.
+            int spawnSide = playerTeam & 1;
+            if (currentGameMode == BOMB_DEFUSAL) spawnSide ^= attackingTeam & 1;
+            TeamSpawn spawn = currentMap->getRandomTeamSpawn(spawnSide);
             yaw = spawn.yaw; pitch = spawn.pitch;
             placed = trySpawn(spawn.position);
         } else {

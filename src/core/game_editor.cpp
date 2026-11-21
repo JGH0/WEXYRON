@@ -491,6 +491,8 @@ void Game::enterEditor() {
     inp.resetNavKeys();
     menuJustEntered = true;
     gameState = MAP_EDITOR;
+    stopLocalBots();
+    localBotsPending_ = false;
 
     // A map load queued from the menu must not replace the map under the editor.
     mapLoader_.cancel();

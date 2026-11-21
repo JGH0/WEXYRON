@@ -75,8 +75,9 @@ public:
     /// A client pressed E on a site / near a planted bomb.
     void onBombInteract(uint32_t playerId, uint8_t action);
 
-    /// A round-based client started the next round on `mapName`.
-    void onRoundStart(const std::string& mapName, int gameMode, int attackingTeam);
+    /// A bomb defusal client started the next round on `mapName`.
+    void onRoundStart(const std::string& mapName, int gameMode, int attackingTeam,
+                      int matchFormat = 0, bool freshMatch = false);
 
     /// Drop interaction requests owned by a player who left.
     void onPlayerDisconnected(uint32_t playerId);
@@ -95,6 +96,8 @@ public:
 private:
     struct MapState {
         int gameMode = 0;
+        int matchFormat = 0;           ///< 0 free play, 1 normal, 2 swift
+        int roundsPlayed = 0;          ///< completed rounds (side switching)
         bool roundActive = false;
         bool hasHumans = false;        ///< a human is currently on this map
         uint8_t attackingTeam = 0;
@@ -134,7 +137,8 @@ private:
     std::string resolveMapPath(const std::string& mapName) const;
 
     MapState& stateFor(const std::string& mapName);
-    void resetRound(MapState& state, int gameMode, int attackingTeam);
+    void resetRound(MapState& state, int gameMode, int attackingTeam,
+                    int matchFormat = 0);
     void resetBomb(MapState& state);
 
     /// Create/refresh map states from the players' last reported game mode.

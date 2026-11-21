@@ -29,6 +29,28 @@
 #include <cstdlib>
 #include <set>
 
+namespace {
+/// "0", "1", ... "max" for bot-count cycle rows.
+std::vector<std::string> buildCountOptions(int max) {
+    if (max < 0) max = 0;
+    std::vector<std::string> options;
+    options.reserve(static_cast<size_t>(max + 1));
+    for (int i = 0; i <= max; ++i) options.push_back(std::to_string(i));
+    return options;
+}
+
+/// "10%" ... "max%" in 10% steps (used by the bot-strength rows).
+std::vector<std::string> buildAccuracyOptions(int max) {
+    if (max < 10) max = 10;
+    std::vector<std::string> options;
+    for (int value = 10; value <= max; value += 10) {
+        options.push_back(std::to_string(value) + "%");
+    }
+    if (options.empty()) options.push_back("10%");
+    return options;
+}
+} // namespace
+
 // ---------------------------------------------------------------------------
 // View management
 // ---------------------------------------------------------------------------
@@ -50,6 +72,7 @@ menu::MenuView& Game::activeMenuView() {
         case SETTINGS:        return settingsMenu_;
         case MAP_SELECTION:   return mapMenu_;
         case SERVER_CONNECT:  return serverMenu_;
+        case TEAM_SETUP:      return teamMenu_;
         case MENU:
         default:              return mainMenu_;
     }
@@ -60,6 +83,7 @@ const menu::MenuView& Game::activeMenuViewConst() const {
         case SETTINGS:        return settingsMenu_;
         case MAP_SELECTION:   return mapMenu_;
         case SERVER_CONNECT:  return serverMenu_;
+        case TEAM_SETUP:      return teamMenu_;
         case MENU:
         default:              return mainMenu_;
     }
@@ -221,7 +245,8 @@ void Game::openMapSelection() {
         }, "Play this map"));
     }
 
-    static const char* const kModeNames[] = {"DEATHMATCH", "TEAM VS TEAM", "BOMB DEFUSAL"};
+    static const char* const kModeNames[] = {"DEATHMATCH", "TEAM DEATHMATCH", "BOMB DEFUSAL"};
+    static const char* const kFormatNames[] = {"FREE PLAY", "NORMAL", "SWIFT"};
     page.add(menu::separator("GAME MODE"));
     page.add(menu::cycle("MODE", {kModeNames[0], kModeNames[1], kModeNames[2]},
                          static_cast<int>(currentGameMode),
@@ -233,9 +258,15 @@ void Game::openMapSelection() {
                              refreshBombSitesForMode();
                          },
                          "LEFT/RIGHT change the mode"));
+    page.add(menu::cycle("MATCH", {kFormatNames[0], kFormatNames[1], kFormatNames[2]},
+                         static_cast<int>(matchFormat_),
+                         [this](int index) {
+                             matchFormat_ = static_cast<MatchFormat>(index);
+                         },
+                         "FREE PLAY, NORMAL or SWIFT match length"));
 
     openMenuView(mapMenu_, std::move(page));
-    mapMenu_.legend = {{"UP/DOWN", "MAP"}, {"LEFT/RIGHT", "MODE"},
+    mapMenu_.legend = {{"UP/DOWN", "MAP"}, {"LEFT/RIGHT", "CHANGE"},
                        {"ENTER", "PLAY"}, {"ESC", "LEAVE"}};
     mapMenu_.onClose = [this]() { closeMenuToGame(); };
 }
@@ -245,7 +276,15 @@ void Game::openMapSelection() {
 // ---------------------------------------------------------------------------
 
 void Game::startSelectedMap(const std::string& mapFile) {
-    static const char* const kModeNames[] = {"Deathmatch", "Team vs Team", "Bomb Defusal"};
+    // Choosing a map opens the pre-match team / bot setup. The map is only
+    // loaded and the match started from that screen (see beginMatch()).
+    pendingMapFile_ = mapFile;
+    openTeamSetup();
+    gameState = TEAM_SETUP;
+}
+
+void Game::startMatchNow(const std::string& mapFile) {
+    static const char* const kModeNames[] = {"Deathmatch", "Team Deathmatch", "Bomb Defusal"};
     const int modeIndex = static_cast<int>(currentGameMode);
     std::cout << "Loading " << mapFile << " with game mode "
               << kModeNames[(modeIndex >= 0 && modeIndex < 3) ? modeIndex : 0] << "..." << std::endl;
@@ -253,6 +292,16 @@ void Game::startSelectedMap(const std::string& mapFile) {
     // Tell the server (if any) and drop remote players from the old map.
     if (networkClient && networkClient->isConnected()) {
         networkClient->sendMapChange(mapFile);
+        // After the map change the server sees the new map name, so a fresh
+        // lobby request resets that map's scoreboard (not the previous one).
+        sendLobbySetup(true);
+        // A fresh bomb match needs an explicit first round on the server; an
+        // ongoing match would otherwise still be waiting for a round start.
+        if (currentGameMode == BOMB_DEFUSAL) {
+            networkClient->sendRoundStart(static_cast<uint8_t>(currentGameMode),
+                                          static_cast<uint8_t>(attackingTeam & 1),
+                                          static_cast<uint8_t>(matchFormat_), true);
+        }
         for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
             remotePlayers[i].active         = false;
             remotePlayers[i].id             = 0;
@@ -276,6 +325,137 @@ void Game::startSelectedMap(const std::string& mapFile) {
     gameState = PLAYING;
     playUiSound("round_start");
     capturePlayCursor(true);
+}
+
+// ---------------------------------------------------------------------------
+// Pre-match team / bot setup
+// ---------------------------------------------------------------------------
+
+void Game::openTeamSetup() {
+    menuJustEntered = true;   // ignore the ENTER that selected the map
+    sendLobbySetup();         // ask the server for its current pool / limits
+    refreshTeamSetupRows();
+    teamMenu_.legend = {{"UP/DOWN", "SELECT"}, {"LEFT/RIGHT", "CHANGE"},
+                        {"ENTER", "START"}, {"ESC", "BACK"}};
+    teamMenu_.onClose = [this]() {
+        openMapSelection();
+        gameState = MAP_SELECTION;
+    };
+}
+
+void Game::refreshTeamSetupRows() {
+    static const char* const kModeNames[] = {"DEATHMATCH", "TEAM DEATHMATCH", "BOMB DEFUSAL"};
+    static const char* const kFormatNames[] = {"FREE PLAY", "NORMAL", "SWIFT"};
+
+    const std::string mapLabel = pendingMapFile_.empty()
+        ? std::string("SELECT A MAP")
+        : formatMapDisplayName(pendingMapFile_);
+    menu::Page page("MATCH SETUP", mapLabel);
+    const int previousSelection = teamMenu_.stack.selection();
+
+    page.add(menu::info("MAP", mapLabel));
+    page.add(menu::info("MODE", kModeNames[static_cast<int>(currentGameMode) % 3]));
+    page.add(menu::info("MATCH", kFormatNames[static_cast<int>(matchFormat_) % 3]));
+
+    page.add(menu::separator("YOUR TEAM"));
+    page.add(menu::cycle("TEAM", {"TEAM A", "TEAM B"}, playerTeam & 1,
+                         [this](int index) {
+                             playerTeam = index & 1;
+                             sendLobbySetup();
+                         },
+                         "Switch sides before the match starts"));
+
+    page.add(menu::separator("BOTS"));
+    if (isConnectedToServer()) {
+        const int pool = serverBotPool_;
+        botSetupTeamA_ = std::max(0, std::min(botSetupTeamA_, pool));
+        botSetupTeamB_ = std::max(0, std::min(botSetupTeamB_, pool - botSetupTeamA_));
+        page.add(menu::info("SERVER BOT POOL", std::to_string(pool)));
+        page.add(menu::cycle("TEAM A BOTS", buildCountOptions(pool), botSetupTeamA_,
+                             [this, pool](int index) {
+                                 botSetupTeamA_ = index;
+                                 // Never allocate more than the server owns.
+                                 botSetupTeamB_ = std::min(botSetupTeamB_, pool - index);
+                                 sendLobbySetup();
+                                 refreshTeamSetupRows();
+                             },
+                             "Bots assigned to Team A"));
+        page.add(menu::cycle("TEAM B BOTS", buildCountOptions(pool), botSetupTeamB_,
+                             [this, pool](int index) {
+                                 botSetupTeamB_ = index;
+                                 botSetupTeamA_ = std::min(botSetupTeamA_, pool - index);
+                                 sendLobbySetup();
+                                 refreshTeamSetupRows();
+                             },
+                             "Bots assigned to Team B"));
+        int maxAccuracy = serverBotMaxAccuracy_ > 0 ? serverBotMaxAccuracy_ : 100;
+        maxAccuracy = (maxAccuracy / 10) * 10;
+        if (maxAccuracy < 10) maxAccuracy = 10;
+        if (botSetupAccuracy_ > maxAccuracy) botSetupAccuracy_ = maxAccuracy;
+        page.add(menu::cycle("BOT STRENGTH", buildAccuracyOptions(maxAccuracy),
+                             std::max(0, botSetupAccuracy_ / 10 - 1),
+                             [this, maxAccuracy](int index) {
+                                 botSetupAccuracy_ = (index + 1) * 10;
+                                 (void)maxAccuracy;
+                                 sendLobbySetup();
+                             },
+                             "Bots cannot exceed the server's accuracy setting"));
+    } else {
+        constexpr int kMaxPerTeam = 8;
+        botSetupTeamA_ = std::max(0, std::min(botSetupTeamA_, kMaxPerTeam));
+        botSetupTeamB_ = std::max(0, std::min(botSetupTeamB_, kMaxPerTeam));
+        page.add(menu::cycle("TEAM A BOTS", buildCountOptions(kMaxPerTeam), botSetupTeamA_,
+                             [this](int index) { botSetupTeamA_ = index; },
+                             "Single-player bots on Team A"));
+        page.add(menu::cycle("TEAM B BOTS", buildCountOptions(kMaxPerTeam), botSetupTeamB_,
+                             [this](int index) { botSetupTeamB_ = index; },
+                             "Single-player bots on Team B"));
+        page.add(menu::cycle("BOT STRENGTH", buildAccuracyOptions(100),
+                             std::max(0, botSetupAccuracy_ / 10 - 1),
+                             [this](int index) { botSetupAccuracy_ = (index + 1) * 10; },
+                             "Per-bot aim accuracy (single player has no server cap)"));
+    }
+
+    page.add(menu::separator("ACTIONS"));
+    page.add(menu::action("START MATCH", [this]() { beginMatch(); },
+                          "Load the map and start playing"));
+    page.add(menu::action("BACK", [this]() {
+        openMapSelection();
+        gameState = MAP_SELECTION;
+    }, "Return to map selection"));
+
+    menu::replaceCurrent(teamMenu_, std::move(page));
+    if (previousSelection >= 0) teamMenu_.stack.setSelection(previousSelection);
+}
+
+void Game::sendLobbySetup(bool freshMatch) {
+    if (!networkClient || !networkClient->isConnected()) return;
+    networkClient->sendLobbySetup(
+        static_cast<uint8_t>(playerTeam & 1),
+        static_cast<uint8_t>(std::max(0, botSetupTeamA_)),
+        static_cast<uint8_t>(std::max(0, botSetupTeamB_)),
+        static_cast<uint8_t>(std::max(0, std::min(100, botSetupAccuracy_))),
+        static_cast<uint8_t>(matchFormat_), freshMatch);
+}
+
+void Game::beginMatch() {
+    sendLobbySetup();
+    const bool offline = !isConnectedToServer();
+    localBotsPending_ = offline && (botSetupTeamA_ > 0 || botSetupTeamB_ > 0);
+    if (!localBotsPending_) stopLocalBots();
+    startMatchNow(pendingMapFile_);
+}
+
+void Game::applyLobbyState(uint8_t /*team*/, uint8_t pool, uint8_t botsA,
+                           uint8_t botsB, uint8_t accuracy, uint8_t maxAccuracy,
+                           uint8_t matchFormat) {
+    serverBotPool_ = pool;
+    serverBotMaxAccuracy_ = maxAccuracy > 0 ? maxAccuracy : 100;
+    botSetupTeamA_ = std::min<int>(botsA, pool);
+    botSetupTeamB_ = std::min<int>(botsB, std::max(0, pool - botSetupTeamA_));
+    if (accuracy > 0) botSetupAccuracy_ = std::min<int>(accuracy, serverBotMaxAccuracy_);
+    (void)matchFormat;   // the local map-menu choice drives this client's match
+    lobbyDirty_ = true;
 }
 
 // ---------------------------------------------------------------------------

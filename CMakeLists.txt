@@ -146,6 +146,9 @@ set(NETWORK_SOURCES
 set(BOT_AI_SOURCES
     src/game/bot.cpp
 )
+set(LOCAL_BOT_SOURCES
+    src/game/local_bots.cpp
+)
 set(SERVER_BOT_SOURCES
     src/network/server_bots.cpp
     src/network/server_bomb.cpp
@@ -193,6 +196,7 @@ add_executable(game
     ${SYSTEMS_SOURCES}
     ${NETWORK_SOURCES}
     ${BOT_AI_SOURCES}
+    ${LOCAL_BOT_SOURCES}
     ${UI_SOURCES}
     ${DISCORD_SOURCES}
 )

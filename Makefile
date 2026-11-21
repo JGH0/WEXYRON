@@ -67,6 +67,7 @@ CORE_SOURCES = $(CORE_DIR)/game.cpp $(CORE_DIR)/game_input.cpp $(CORE_DIR)/game_
 SYSTEMS_SOURCES = $(SYSTEMS_DIR)/input.cpp $(SYSTEMS_DIR)/weapon.cpp $(SYSTEMS_DIR)/physics.cpp $(SYSTEMS_DIR)/enemy.cpp $(SYSTEMS_DIR)/projectile.cpp $(SYSTEMS_DIR)/player.cpp $(SYSTEMS_DIR)/game_state.cpp
 NETWORK_SOURCES = $(NETWORK_DIR)/network.cpp $(NETWORK_DIR)/server_config.cpp
 GAME_BOT_SOURCES = $(GAME_DIR)/bot.cpp
+LOCAL_BOT_SOURCES = $(GAME_DIR)/local_bots.cpp
 SERVER_BOT_SOURCES = $(NETWORK_DIR)/server_bots.cpp $(NETWORK_DIR)/server_bomb.cpp
 UI_SOURCES = $(UI_DIR)/menu_core.cpp $(UI_DIR)/menu_draw.cpp $(UI_DIR)/menu_input.cpp $(UI_DIR)/menu_pages.cpp
 ENGINE_LIB_SOURCES = $(ENGINE_SRC_DIR)/audio_manager.cpp $(ENGINE_SRC_DIR)/camera.cpp $(ENGINE_SRC_DIR)/gltf_model.cpp $(ENGINE_SRC_DIR)/map.cpp $(ENGINE_SRC_DIR)/map_loader.cpp $(ENGINE_SRC_DIR)/mesh.cpp $(ENGINE_SRC_DIR)/renderer.cpp $(ENGINE_SRC_DIR)/shader.cpp $(ENGINE_SRC_DIR)/texture.cpp
@@ -83,13 +84,14 @@ CORE_OBJECTS = $(addprefix $(BUILD_DIR)/core/, $(notdir $(CORE_SOURCES:.cpp=.o))
 SYSTEMS_OBJECTS = $(addprefix $(BUILD_DIR)/systems/, $(notdir $(SYSTEMS_SOURCES:.cpp=.o)))
 NETWORK_OBJECTS = $(addprefix $(BUILD_DIR)/network/, $(notdir $(NETWORK_SOURCES:.cpp=.o)))
 GAME_BOT_OBJECTS = $(addprefix $(BUILD_DIR)/game/, $(notdir $(GAME_BOT_SOURCES:.cpp=.o)))
+LOCAL_BOT_OBJECTS = $(addprefix $(BUILD_DIR)/game/, $(notdir $(LOCAL_BOT_SOURCES:.cpp=.o)))
 SERVER_BOT_OBJECTS = $(addprefix $(BUILD_DIR)/network/, $(notdir $(SERVER_BOT_SOURCES:.cpp=.o)))
 UI_OBJECTS = $(addprefix $(BUILD_DIR)/ui/, $(notdir $(UI_SOURCES:.cpp=.o)))
 ENGINE_LIB_OBJECTS = $(addprefix $(BUILD_DIR)/engine_lib/, $(notdir $(ENGINE_LIB_SOURCES:.cpp=.o))) $(BUILD_DIR)/engine_lib/glad.o $(BUILD_DIR)/engine_lib/miniaudio.o
 DISCORD_OBJECTS = $(addprefix $(BUILD_DIR)/discord/, $(notdir $(DISCORD_SOURCES:.cpp=.o)))
 MAIN_OBJECT = $(BUILD_DIR)/main.o
 SERVER_MAIN_OBJECT = $(BUILD_DIR)/server_main.o
-ALL_OBJECTS = $(CORE_OBJECTS) $(SYSTEMS_OBJECTS) $(NETWORK_OBJECTS) $(GAME_BOT_OBJECTS) $(UI_OBJECTS) $(DISCORD_OBJECTS) $(MAIN_OBJECT)
+ALL_OBJECTS = $(CORE_OBJECTS) $(SYSTEMS_OBJECTS) $(NETWORK_OBJECTS) $(GAME_BOT_OBJECTS) $(LOCAL_BOT_OBJECTS) $(UI_OBJECTS) $(DISCORD_OBJECTS) $(MAIN_OBJECT)
 SERVER_OBJECTS = $(SERVER_MAIN_OBJECT) $(NETWORK_OBJECTS) $(GAME_BOT_OBJECTS) $(SERVER_BOT_OBJECTS)
 
 all: $(TARGET) $(SERVER_TARGET)
