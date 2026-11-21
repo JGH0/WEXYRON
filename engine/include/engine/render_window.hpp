@@ -15,6 +15,7 @@ struct GLFWwindow;
 /// Graphics API a window (and its render backend) is created for.
 enum class RenderApi {
     OpenGL,  ///< 3.3 core; compatibility profile as a fallback
+    Vulkan,  ///< no context; the Vulkan backend creates its own surface
 };
 
 /**
@@ -23,6 +24,9 @@ enum class RenderApi {
  * OpenGL: requests a 3.3 core context (retries once with any profile for
  * drivers that only offer a compatibility context), makes it current on the
  * calling thread and loads the GL functions.
+ *
+ * Vulkan: a window without a client API. Fails when GLFW finds no Vulkan
+ * loader (glfwVulkanSupported), e.g. a Mac without MoltenVK.
  *
  * @return the window, or nullptr if no usable window/context could be created
  *         (the caller may then try a fallback driver)

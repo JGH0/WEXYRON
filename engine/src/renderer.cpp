@@ -74,15 +74,20 @@ Renderer::Renderer() = default;
 // thread that owns the device.
 Renderer::~Renderer() = default;
 
-void Renderer::setBackend(std::unique_ptr<IRenderBackend> backend) {
+void Renderer::setBackend(std::unique_ptr<IRenderBackend> backend, bool initialized) {
     backend_ = std::move(backend);
+    backendInitialized_ = backend_ && initialized;
 }
 
 void Renderer::init(GLFWwindow* window) {
-    if (!backend_) backend_ = createGlRenderBackend(window);
-    if (!backend_->init()) {
+    if (!backend_) {
+        backend_ = createGlRenderBackend(window);
+        backendInitialized_ = false;
+    }
+    if (!backendInitialized_ && !backend_->init()) {
         std::cerr << "Renderer: backend failed to initialise; frames will be empty." << std::endl;
     }
+    backendInitialized_ = true;
     backend_->setVsync(vsync_);
     refreshTextures(nullptr);
 }
@@ -781,6 +786,7 @@ glm::mat4 Renderer::createQuadModel(float x, float y, float w, float h) {
 
 void Renderer::shutdown() {
     if (backend_) backend_->shutdown();
+    backendInitialized_ = false;
     worldModels_.clear();
     viewmodelModels_.clear();
 }

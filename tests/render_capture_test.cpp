@@ -2,7 +2,8 @@
 //
 // Renders a fixed set of views (every map from two fixed camera poses, plus
 // menu screens) and writes each frame as a binary PPM. Used to prove that a
-// renderer refactor or a new backend draws the same image:
+// renderer refactor or a new backend draws the same image. The backend follows
+// the game (CUBE_RENDER_API=opengl|vulkan selects it):
 //
 //   render_capture_test capture <outdir>
 //   render_capture_test compare <refdir> <outdir> [maxMeanDiff]
@@ -11,11 +12,11 @@
 // channel difference exceeds maxMeanDiff (default 0.5 of 255), and prints the
 // share of pixels that differ by more than 8/255 for every image.
 //
-// Needs a GL context and must run from a directory with assets/.
+// Needs a window and must run from a directory with assets/.
 
-#include <glad/glad.h>
 #include "core/game.hpp"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -34,24 +35,17 @@ struct Image {
     std::vector<unsigned char> rgb;
 };
 
-// The frame is complete in the front buffer once render() has swapped.
-Image grabFrontBuffer() {
-    GLint vp[4] = {0, 0, 0, 0};
-    glGetIntegerv(GL_VIEWPORT, vp);
+// Render one frame and read it back through the backend (before present).
+Image renderAndCapture(Game& game) {
     Image img;
-    img.w = vp[2];
-    img.h = vp[3];
-    img.rgb.resize(size_t(img.w) * size_t(img.h) * 3);
-    glFinish();
-    glReadBuffer(GL_FRONT);
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glReadPixels(0, 0, img.w, img.h, GL_RGB, GL_UNSIGNED_BYTE, img.rgb.data());
-    glReadBuffer(GL_BACK);
-    // GL rows are bottom-up; PPM is top-down.
-    const size_t row = size_t(img.w) * 3;
-    for (int y = 0; y < img.h / 2; ++y)
-        std::swap_ranges(img.rgb.begin() + y * row, img.rgb.begin() + (y + 1) * row,
-                         img.rgb.begin() + (img.h - 1 - y) * row);
+    game.debugRenderer().requestCapture();
+    game.render();
+    CapturedImage frame;
+    if (game.debugRenderer().takeCapture(frame)) {
+        img.w = frame.width;
+        img.h = frame.height;
+        img.rgb = std::move(frame.rgb);
+    }
     return img;
 }
 
@@ -74,6 +68,18 @@ bool readPpm(const fs::path& path, Image& img) {
     return bool(f);
 }
 
+// Run on a fresh settings file with the defaults: the HUD and menus show
+// setting values, and other runs/tests write assets/settings.cfg. The
+// player's file is never touched.
+void useFreshSettingsFile() {
+    const fs::path settingsFile = fs::temp_directory_path() / "wexyron_render_capture_settings.cfg";
+    fs::remove(settingsFile);
+    const std::string settingsEnv = "CUBE_SETTINGS_PATH=" + settingsFile.string();
+    static std::string keepAlive;  // putenv keeps a pointer to the string
+    keepAlive = settingsEnv;
+    putenv(keepAlive.data());
+}
+
 // `setup` runs before every frame: render() ends with glfwPollEvents(), and the
 // game window captures the mouse, so a moving mouse would turn the camera
 // between the two frames.
@@ -81,12 +87,12 @@ void renderAndSave(Game& game, const fs::path& out, const std::string& name, int
                    const std::function<void()>& setup) {
     // Two frames: the first may still upload/rebuild state lazily. Some
     // visuals read the wall clock (idle animation, bomb-site pulse), so pin it.
-    for (int frame = 0; frame < 2; ++frame) {
-        setup();
-        glfwSetTime(1.0);
-        game.render();
-    }
-    const Image img = grabFrontBuffer();
+    setup();
+    glfwSetTime(1.0);
+    game.render();
+    setup();
+    glfwSetTime(1.0);
+    const Image img = renderAndCapture(game);
     if (std::getenv("CAPTURE_VERBOSE")) {
         const Camera& c = game.debugCamera();
         std::printf("  camera %-24s pos=(%.3f %.3f %.3f) yaw=%.2f pitch=%.2f fov=%.2f\n", name.c_str(),
@@ -106,18 +112,14 @@ int capture(const fs::path& out) {
     fs::create_directories(out);
     int failures = 0;
 
-    // Run on a fresh settings file with the defaults: the HUD and menus show
-    // setting values, and other runs/tests write assets/settings.cfg. The
-    // player's file is never touched.
-    const fs::path settingsFile = fs::temp_directory_path() / "wexyron_render_capture_settings.cfg";
-    fs::remove(settingsFile);
-    const std::string settingsEnv = "CUBE_SETTINGS_PATH=" + settingsFile.string();
-    static std::string keepAlive;  // putenv keeps a pointer to the string
-    keepAlive = settingsEnv;
-    putenv(keepAlive.data());
+    useFreshSettingsFile();
 
     Game game(800, 600);
     game.init();
+    if (const IRenderBackend* backend = game.debugRenderer().backend()) {
+        const RenderBackendInfo info = backend->describe();
+        std::printf("backend: %s %s on %s\n", info.api.c_str(), info.version.c_str(), info.renderer.c_str());
+    }
 
     const char* maps[] = {"simple.map", "arena.map", "large.map", "sniper.map",
                           "complex.map", "team_arena.map", "custom.map"};
@@ -158,14 +160,25 @@ int capture(const fs::path& out) {
     }
     int fbW = 0, fbH = 0;
     glfwGetFramebufferSize(game.windowHandle(), &fbW, &fbH);
-    GLint vp[4] = {0, 0, 0, 0};
-    glGetIntegerv(GL_VIEWPORT, vp);
-    if (vp[2] != fbW || vp[3] != fbH || fbW != 1024) {
-        std::printf("FAIL resize: viewport %dx%d, framebuffer %dx%d\n", vp[2], vp[3], fbW, fbH);
+    const Image resized = renderAndCapture(game);
+    if (resized.w != fbW || resized.h != fbH || fbW != 1024) {
+        std::printf("FAIL resize: frame %dx%d, framebuffer %dx%d\n", resized.w, resized.h, fbW, fbH);
         ++failures;
     } else {
-        std::printf("resize ok: viewport follows framebuffer %dx%d\n", fbW, fbH);
+        std::printf("resize ok: frame follows framebuffer %dx%d\n", fbW, fbH);
     }
+
+    // Vsync off and on again: Vulkan recreates its swapchain for this.
+    for (bool vsync : {false, true}) {
+        game.debugRenderer().setVsync(vsync);
+        for (int i = 0; i < 3; ++i) game.render();
+        const Image img = renderAndCapture(game);
+        if (img.w != fbW || img.h != fbH) {
+            std::printf("FAIL vsync %s: no frame after the change\n", vsync ? "on" : "off");
+            ++failures;
+        }
+    }
+    std::printf("vsync switch ok\n");
 
     game.cleanup();
     std::printf(failures ? "CAPTURE: %d FAILURES\n" : "CAPTURE: ALL OK\n", failures);
@@ -217,11 +230,40 @@ int compare(const fs::path& ref, const fs::path& out, double maxMean) {
 
 } // namespace
 
+// Average frame time with vsync off: arena overview with bots, 600 frames.
+int bench() {
+    useFreshSettingsFile();
+    Game game(800, 600);
+    game.init();
+    const RenderBackendInfo info = game.debugRenderer().backend()->describe();
+    if (!game.debugStartMapForTest("arena.map")) return 1;
+    game.debugStartLocalBotsForTest("arena.map");
+    game.debugStepForTest(30, 1.0f / 60.0f);
+    const glm::vec3 dims = game.debugCurrentMap()->getDimensions();
+    const glm::vec3 eye(-dims.x * 0.45f, std::max(4.0f, dims.y * 0.8f), -dims.z * 0.45f);
+    game.debugRenderer().setVsync(false);
+    auto frame = [&] {
+        game.debugSetViewForTest(eye, 45.0f, -25.0f);
+        game.render();
+    };
+    for (int i = 0; i < 60; ++i) frame();   // warm-up
+    const int frames = 600;
+    const auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < frames; ++i) frame();
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    std::printf("bench %s on %s: %.3f ms/frame (%.0f fps) over %d frames\n", info.api.c_str(),
+                info.renderer.c_str(), ms / frames, 1000.0 * frames / ms, frames);
+    game.cleanup();
+    return 0;
+}
+
 int main(int argc, char** argv) {
     const std::string mode = argc > 1 ? argv[1] : "";
     if (mode == "capture" && argc > 2) return capture(argv[2]);
+    if (mode == "bench") return bench();
     if (mode == "compare" && argc > 3) return compare(argv[2], argv[3], argc > 4 ? std::atof(argv[4]) : 0.5);
     std::printf("usage: render_capture_test capture <outdir>\n"
-                "       render_capture_test compare <refdir> <outdir> [maxMeanDiff]\n");
+                "       render_capture_test compare <refdir> <outdir> [maxMeanDiff]\n"
+                "       render_capture_test bench\n");
     return 2;
 }

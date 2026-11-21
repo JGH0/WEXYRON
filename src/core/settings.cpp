@@ -344,6 +344,9 @@ std::vector<SettingDef> makeGameSettingDefs(GameSettings& s) {
     addChoice("performance", "PERFORMANCE", "VIDEO",
               "How much processing power the game may use", &GameSettings::performance,
               {"LOW", "BALANCED", "HIGH"}, {"low", "balanced|medium", "high"});
+    addChoice("render_api", "RENDERER", "VIDEO",
+              "Graphics API - applies after restarting the game", &GameSettings::renderApi,
+              {"OPENGL", "VULKAN"}, {"opengl|gl", "vulkan|vk"});
 
     // Own settings page (a link in the VIDEO section opens it).
     addChoice("frame_gen", "MODE", kFrameGenGroup,

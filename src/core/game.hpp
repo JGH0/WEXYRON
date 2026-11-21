@@ -247,6 +247,8 @@ public:
     void debugSetViewForTest(const glm::vec3& eye, float yawDeg, float pitchDeg);
     /// The live camera (read-only, for tests).
     const Camera& debugCamera() const { return camera; }
+    /// The renderer (tests: frame capture, active backend).
+    Renderer& debugRenderer() { return renderer; }
     /// Start the single-player bots (default setup) on the map started with
     /// debugStartMapForTest, so tests also draw skinned glTF bodies.
     void debugStartLocalBotsForTest(const std::string& mapFile) {

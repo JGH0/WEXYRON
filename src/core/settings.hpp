@@ -72,6 +72,9 @@ struct Value {
 /// Possible values for the choice settings (kept next to the defaults so the
 /// file loader can parse and validate names).
 enum PerformanceLevel { PERF_LOW = 0, PERF_BALANCED = 1, PERF_HIGH = 2 };
+/// Graphics API (RENDERER setting). Applied at start-up; Vulkan falls back to
+/// OpenGL when no usable Vulkan driver exists.
+enum RenderApiSetting { RENDER_API_OPENGL = 0, RENDER_API_VULKAN = 1 };
 /// Settings group shown on its own page (linked from the VIDEO section).
 inline constexpr const char* kFrameGenGroup = "FRAME GENERATION";
 /// Frame generation technology (FRAME GENERATION settings page). AUTO picks
@@ -105,6 +108,7 @@ struct GameSettings {
     int  maxFps = 144;             ///< 0 = unlimited
     bool vsync = true;
     int  performance = PERF_BALANCED;
+    int  renderApi = RENDER_API_OPENGL;
 
     // Frame generation -------------------------------------------------------
     // Stored now; applied once the Vulkan / Direct3D 12 renderer exists (the

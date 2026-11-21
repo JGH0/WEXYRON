@@ -31,6 +31,26 @@ CPPFLAGS = -I./include -I./include/stb -I./engine/include -I./src -I$(SPATIALKIT
            -I./third_party/discord-rpc/include -I./third_party/rapidjson
 CXXFLAGS = -std=c++17 -Wall $(CPPFLAGS)
 
+# ── Vulkan backend (NVRHI) ───────────────────────────────────────────────────
+# Needs the third_party/nvrhi and third_party/vulkan-headers submodules
+# (git submodule update --init). Without them the game builds OpenGL-only.
+# Nothing links against the Vulkan loader: GLFW loads it at runtime, so the
+# game still starts on machines without Vulkan (it then uses OpenGL).
+NVRHI_DIR = third_party/nvrhi
+VULKAN_HEADERS_DIR = third_party/vulkan-headers
+ifeq ($(and $(wildcard $(NVRHI_DIR)/include/nvrhi/nvrhi.h),$(wildcard $(VULKAN_HEADERS_DIR)/include/vulkan/vulkan.hpp)),)
+$(info Vulkan backend disabled: run 'git submodule update --init' to build it)
+NVRHI_SOURCES =
+else
+CXXFLAGS += -DCUBE_WITH_VULKAN -I$(NVRHI_DIR)/include -I$(VULKAN_HEADERS_DIR)/include
+NVRHI_SOURCES = $(filter-out %/dxgi-format.cpp,$(wildcard $(NVRHI_DIR)/src/common/*.cpp \
+                $(NVRHI_DIR)/src/vulkan/*.cpp $(NVRHI_DIR)/src/validation/*.cpp))
+endif
+NVRHI_OBJECTS = $(patsubst $(NVRHI_DIR)/src/%.cpp,$(BUILD_DIR)/nvrhi/%.o,$(NVRHI_SOURCES))
+# Third-party code: optimised, warnings off (not ours to fix).
+NVRHI_CXXFLAGS = -std=c++17 -O2 -w -I$(NVRHI_DIR)/include -I$(VULKAN_HEADERS_DIR)/include \
+                 -DNVRHI_WITH_AFTERMATH=0
+
 # Platform-specific libraries.
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
@@ -70,7 +90,7 @@ GAME_BOT_SOURCES = $(GAME_DIR)/bot.cpp
 LOCAL_BOT_SOURCES = $(GAME_DIR)/local_bots.cpp
 SERVER_BOT_SOURCES = $(NETWORK_DIR)/server_bots.cpp $(NETWORK_DIR)/server_bomb.cpp
 UI_SOURCES = $(UI_DIR)/menu_core.cpp $(UI_DIR)/menu_draw.cpp $(UI_DIR)/menu_input.cpp $(UI_DIR)/menu_pages.cpp
-ENGINE_LIB_SOURCES = $(ENGINE_SRC_DIR)/audio_manager.cpp $(ENGINE_SRC_DIR)/camera.cpp $(ENGINE_SRC_DIR)/gltf_model.cpp $(ENGINE_SRC_DIR)/map.cpp $(ENGINE_SRC_DIR)/map_loader.cpp $(ENGINE_SRC_DIR)/renderer.cpp $(ENGINE_SRC_DIR)/render_window.cpp $(ENGINE_SRC_DIR)/backends/gl/gl_backend.cpp $(ENGINE_SRC_DIR)/shader.cpp $(ENGINE_SRC_DIR)/texture.cpp
+ENGINE_LIB_SOURCES = $(ENGINE_SRC_DIR)/audio_manager.cpp $(ENGINE_SRC_DIR)/camera.cpp $(ENGINE_SRC_DIR)/gltf_model.cpp $(ENGINE_SRC_DIR)/map.cpp $(ENGINE_SRC_DIR)/map_loader.cpp $(ENGINE_SRC_DIR)/renderer.cpp $(ENGINE_SRC_DIR)/render_window.cpp $(ENGINE_SRC_DIR)/backends/gl/gl_backend.cpp $(ENGINE_SRC_DIR)/backends/nvrhi/nvrhi_backend.cpp $(ENGINE_SRC_DIR)/backends/nvrhi/vulkan_device.cpp $(ENGINE_SRC_DIR)/shader.cpp $(ENGINE_SRC_DIR)/texture.cpp
 MINIAUDIO_SOURCES = third_party/miniaudio/miniaudio.c
 MAIN_SOURCES = $(SRC_DIR)/main.cpp
 SERVER_SOURCES = server_main.cpp $(NETWORK_SOURCES) $(GAME_BOT_SOURCES) $(SERVER_BOT_SOURCES)
@@ -87,7 +107,8 @@ GAME_BOT_OBJECTS = $(addprefix $(BUILD_DIR)/game/, $(notdir $(GAME_BOT_SOURCES:.
 LOCAL_BOT_OBJECTS = $(addprefix $(BUILD_DIR)/game/, $(notdir $(LOCAL_BOT_SOURCES:.cpp=.o)))
 SERVER_BOT_OBJECTS = $(addprefix $(BUILD_DIR)/network/, $(notdir $(SERVER_BOT_SOURCES:.cpp=.o)))
 UI_OBJECTS = $(addprefix $(BUILD_DIR)/ui/, $(notdir $(UI_SOURCES:.cpp=.o)))
-ENGINE_LIB_OBJECTS = $(addprefix $(BUILD_DIR)/engine_lib/, $(notdir $(ENGINE_LIB_SOURCES:.cpp=.o))) $(BUILD_DIR)/engine_lib/glad.o $(BUILD_DIR)/engine_lib/miniaudio.o
+ENGINE_LIB_OBJECTS = $(addprefix $(BUILD_DIR)/engine_lib/, $(notdir $(ENGINE_LIB_SOURCES:.cpp=.o))) $(BUILD_DIR)/engine_lib/glad.o $(BUILD_DIR)/engine_lib/miniaudio.o \
+                     $(NVRHI_OBJECTS)
 DISCORD_OBJECTS = $(addprefix $(BUILD_DIR)/discord/, $(notdir $(DISCORD_SOURCES:.cpp=.o)))
 MAIN_OBJECT = $(BUILD_DIR)/main.o
 SERVER_MAIN_OBJECT = $(BUILD_DIR)/server_main.o
@@ -119,6 +140,16 @@ $(BIN_DIR)/engine_smoke_test: $(ENGINE_TEST_SOURCES) $(ENGINE_LIB) | $(BIN_DIR)
 $(BIN_DIR)/swept_hit_test: tests/swept_hit_test.cpp | $(BIN_DIR)
 	$(CXX) $(CXXFLAGS) $< -o $@
 
+# Tests that drive the real Game (need a window; run from the project root so
+# assets/ resolves). render_capture_test captures/compares frames for renderer
+# parity (CUBE_RENDER_API=opengl|vulkan picks the backend).
+GAME_TESTS = render_test render_capture_test hud_test menu_smoke_test map_loader_test
+GAME_TEST_OBJECTS = $(filter-out $(MAIN_OBJECT),$(ALL_OBJECTS))
+render-tests: $(addprefix $(BIN_DIR)/,$(GAME_TESTS))
+
+$(BIN_DIR)/%_test: tests/%_test.cpp $(GAME_TEST_OBJECTS) $(ENGINE_LIB) | $(BIN_DIR)
+	$(CXX) $(CXXFLAGS) $< $(GAME_TEST_OBJECTS) $(ENGINE_LIB) -o $@ $(LDFLAGS)
+
 # Reusable engine library
 $(ENGINE_LIB): $(ENGINE_LIB_OBJECTS) | $(LIB_DIR)
 	ar rcs $@ $(ENGINE_LIB_OBJECTS)
@@ -129,6 +160,15 @@ $(BUILD_DIR)/engine_lib/%.o: $(ENGINE_SRC_DIR)/%.cpp | $(BUILD_DIR)/engine_lib
 # Render backends (object names are flattened like the other engine sources)
 $(BUILD_DIR)/engine_lib/%.o: $(ENGINE_SRC_DIR)/backends/gl/%.cpp | $(BUILD_DIR)/engine_lib
 	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
+
+# Vulkan backend sources (compiled empty when the submodules are missing)
+$(BUILD_DIR)/engine_lib/%.o: $(ENGINE_SRC_DIR)/backends/nvrhi/%.cpp | $(BUILD_DIR)/engine_lib
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
+
+# NVRHI (third_party/nvrhi), Vulkan backend only
+$(BUILD_DIR)/nvrhi/%.o: $(NVRHI_DIR)/src/%.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(NVRHI_CXXFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/engine_lib/glad.o: $(GLAD_SOURCES) | $(BUILD_DIR)/engine_lib
 	$(CXX) $(CXXFLAGS) -c $< -o $@
@@ -250,6 +290,6 @@ help:
 
 .DELETE_ON_ERROR:
 
-.PHONY: all clean run run-server debug client server engine-test swept-test deps deps-check help
+.PHONY: all clean run run-server debug client server engine-test swept-test render-tests deps deps-check help
 
 endif # !Windows

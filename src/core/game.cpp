@@ -464,7 +464,32 @@ Game::Game(int width, int height)
 
     // The engine sets the window hints for the graphics API and, for OpenGL,
     // creates and loads the context (3.3 core, compatibility as a fallback).
-    window = createRenderWindow(RenderApi::OpenGL, width, height, brand::kFullName);
+    // RENDERER setting, overridable with CUBE_RENDER_API=opengl|vulkan. Vulkan
+    // needs its own window (no GL context) and a working driver; anything
+    // missing falls back to OpenGL below, so the game always starts.
+    window = nullptr;
+    bool wantVulkan = gameSettings_.renderApi == settings::RENDER_API_VULKAN;
+    if (const char* forced = std::getenv("CUBE_RENDER_API")) {
+        const std::string api = forced;
+        if (api == "vulkan" || api == "vk") wantVulkan = true;
+        else if (api == "opengl" || api == "gl") wantVulkan = false;
+    }
+    if (wantVulkan) {
+        if (!vulkanBackendCompiledIn()) {
+            std::cerr << "Vulkan renderer not part of this build - using OpenGL" << std::endl;
+        } else if ((window = createRenderWindow(RenderApi::Vulkan, width, height, brand::kFullName))) {
+            std::unique_ptr<IRenderBackend> vulkan = createVulkanRenderBackend(window);
+            if (vulkan && vulkan->init()) {
+                renderer.setBackend(std::move(vulkan), true);
+            } else {
+                if (vulkan) vulkan->shutdown();
+                glfwDestroyWindow(window);
+                window = nullptr;
+            }
+        }
+        if (!window) std::cerr << "Vulkan renderer unavailable - falling back to OpenGL" << std::endl;
+    }
+    if (!window) window = createRenderWindow(RenderApi::OpenGL, width, height, brand::kFullName);
     if (!window) {
 #ifdef _WIN32
         // No OpenGL from the GPU driver at all (typical for a VM with a

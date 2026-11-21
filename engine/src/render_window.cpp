@@ -49,12 +49,24 @@ GLFWwindow* createGlWindow(int width, int height, const char* title) {
     return window;
 }
 
+GLFWwindow* createVulkanWindow(int width, int height, const char* title) {
+    if (!glfwVulkanSupported()) {
+        std::cerr << "Vulkan: no Vulkan loader found" << std::endl;
+        return nullptr;
+    }
+    glfwDefaultWindowHints();
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    return glfwCreateWindow(width, height, title, nullptr, nullptr);
+}
+
 } // namespace
 
 GLFWwindow* createRenderWindow(RenderApi api, int width, int height, const char* title) {
     switch (api) {
         case RenderApi::OpenGL:
             return createGlWindow(width, height, title);
+        case RenderApi::Vulkan:
+            return createVulkanWindow(width, height, title);
     }
     return nullptr;
 }

@@ -179,6 +179,13 @@ public:
     void setTextureArray(const TextureArrayDesc& desc) override;
     void renderFrame(const FramePacket& frame) override;
     void present() override { if (window_) glfwSwapBuffers(window_); }
+    void requestCapture() override { captureRequested_ = true; }
+    bool takeCapture(CapturedImage& out) override {
+        if (!captureReady_) return false;
+        out = std::move(capture_);
+        captureReady_ = false;
+        return true;
+    }
     void setVsync(bool enabled) override {
         // The swap interval belongs to the current context (this window's).
         if (window_ && glfwGetCurrentContext() == window_) glfwSwapInterval(enabled ? 1 : 0);
@@ -207,6 +214,9 @@ private:
     void setFrameMatrix(const glm::mat4& vp);
 
     GLFWwindow* window_ = nullptr;
+    bool captureRequested_ = false;
+    bool captureReady_ = false;
+    CapturedImage capture_;
     Shader* shader_ = nullptr;
     Shader* gltfShader_ = nullptr;
     unsigned int cubeVAO_ = 0;
@@ -594,6 +604,25 @@ void GlRenderBackend::renderFrame(const FramePacket& frame) {
     glDisable(GL_BLEND);
     glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
     glUseProgram(0);
+
+    if (captureRequested_) {
+        // The finished frame is in the back buffer until present() swaps.
+        captureRequested_ = false;
+        capture_.width = frame.viewportW;
+        capture_.height = frame.viewportH;
+        capture_.rgb.resize(static_cast<size_t>(capture_.width) * capture_.height * 3);
+        glFinish();
+        glReadBuffer(GL_BACK);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glReadPixels(frame.viewportX, frame.viewportY, capture_.width, capture_.height, GL_RGB,
+                     GL_UNSIGNED_BYTE, capture_.rgb.data());
+        // GL rows are bottom-up.
+        const size_t row = static_cast<size_t>(capture_.width) * 3;
+        for (int y = 0; y < capture_.height / 2; ++y)
+            std::swap_ranges(capture_.rgb.begin() + y * row, capture_.rgb.begin() + (y + 1) * row,
+                             capture_.rgb.begin() + (capture_.height - 1 - y) * row);
+        captureReady_ = true;
+    }
 }
 
 RenderBackendInfo GlRenderBackend::describe() const {

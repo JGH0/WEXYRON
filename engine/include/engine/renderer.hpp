@@ -62,7 +62,8 @@ public:
     /// which must come from createRenderWindow(RenderApi::OpenGL, ...).
     void init(GLFWwindow* window);
     /// Use `backend` instead of the default OpenGL backend. Call before init().
-    void setBackend(std::unique_ptr<IRenderBackend> backend);
+    /// Pass initialized = true when backend->init() already succeeded.
+    void setBackend(std::unique_ptr<IRenderBackend> backend, bool initialized = false);
     /// The active backend (nullptr before init()).
     IRenderBackend* backend() const { return backend_.get(); }
 
@@ -142,6 +143,9 @@ public:
     void present();
     /// Vsync preference; kept until the backend exists, then applied.
     void setVsync(bool enabled);
+    /// Read back the next frame (tests/screenshots); fetch it with takeCapture().
+    void requestCapture() { if (backend_) backend_->requestCapture(); }
+    bool takeCapture(CapturedImage& out) { return backend_ && backend_->takeCapture(out); }
 
     // ── Convenience wrappers used by the game code ───────────────────────────
 
@@ -283,6 +287,7 @@ private:
 
     int viewportX_ = 0, viewportY_ = 0, viewportW_ = 800, viewportH_ = 600;
     bool vsync_ = true;
+    bool backendInitialized_ = false;
 
     bool inUi_ = false;
     glm::mat4 view_{1.0f};               ///< active (UI while drawing UI)

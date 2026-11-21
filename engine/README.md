@@ -85,6 +85,40 @@ CUBE_MENU_TEST="menu:main;dump" xvfb-run -a ./build/bin/game
 - The earlier `src/engine/` prototype has been removed. The production engine
   is this directory.
 
+## Render backends
+
+`Renderer` (renderer.hpp) is an API-neutral frontend: it batches boxes, the UI
+and glTF draws into a `FramePacket` and hands it to an `IRenderBackend`
+(render_backend.hpp). Two backends draw the same image:
+
+| Backend | Code | Notes |
+|---|---|---|
+| OpenGL 3.3 core | `src/backends/gl/` | Default. GLSL shaders in `assets/shaders/`. |
+| Vulkan (NVRHI) | `src/backends/nvrhi/` | Needs Vulkan 1.2 with dynamic rendering and synchronization2. |
+
+- **Choosing:** the in-game setting VIDEO > RENDERER (`render_api=opengl|vulkan`
+  in settings.cfg) applies at the next start. `CUBE_RENDER_API=opengl|vulkan`
+  overrides it. VIDEO > ACTIVE RENDERER shows what is actually running.
+- **Fallback:** if Vulkan is selected but unusable (no driver, too old, a Mac
+  without MoltenVK, or a build without the submodules), the game logs why and
+  starts with OpenGL. Nothing links against the Vulkan loader; GLFW loads it.
+- **Building:** the Vulkan backend needs the `third_party/nvrhi` and
+  `third_party/vulkan-headers` submodules (`git submodule update --init`). The
+  Makefiles and CMake detect them and otherwise build OpenGL-only.
+- **Shaders:** the Vulkan shaders are HLSL in `engine/shaders/`, compiled to
+  SPIR-V headers (`src/backends/nvrhi/shaders/`, committed) by
+  `python tools/compile_shaders.py` (needs `dxc` from the Vulkan SDK). Keep
+  them in sync with the GLSL versions. `--check` reports stale headers.
+- **macOS:** OpenGL works out of the box. Vulkan needs MoltenVK and the Vulkan
+  loader (`brew install molten-vk vulkan-loader`); on Apple Silicon also set
+  `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib` so GLFW finds the loader.
+- **Validation:** `CUBE_VULKAN_VALIDATION=1` enables the Khronos validation
+  layer (Vulkan SDK) and NVRHI's validation; messages go to stderr.
+- **Parity check:** `render_capture_test capture <dir>` with each backend, then
+  `render_capture_test compare <gl-dir> <vk-dir> 1.0`. Glyph edges can differ
+  by one pixel (half-pixel rounding differs between the APIs); everything else
+  matches. `render_capture_test bench` prints the average frame time.
+
 ## Extraction summary
 
 Moved into `engine/`:

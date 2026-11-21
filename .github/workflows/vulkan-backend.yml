@@ -1,0 +1,153 @@
+# Vulkan backend check for the frame-generation branch.
+#
+# Builds the game with the regular Makefiles (submodules: NVRHI and
+# Vulkan-Headers) and renders the render_capture_test views with BOTH
+# backends, then compares them:
+#
+#   Linux    OpenGL on Mesa llvmpipe, Vulkan on lavapipe (Xvfb)
+#   macOS    OpenGL (Apple), Vulkan on MoltenVK (Homebrew)
+#   Windows  MinGW cross-compile only (no GPU on the runners)
+#
+# A job fails when Vulkan silently falls back to OpenGL, when a capture fails,
+# or when the two backends differ by more than a mean of 1.0 (of 255) in any
+# view. The captured frames are uploaded as artifacts.
+name: Vulkan backend
+
+on:
+  push:
+    branches: [feature/vulkan-dx12-framegen]
+    paths-ignore: ["**.md", "docs/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux (OpenGL llvmpipe + Vulkan lavapipe)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libglfw3-dev libglm-dev uuid-dev \
+            libgl1-mesa-dev libx11-dev libxrandr-dev libxi-dev \
+            libxcursor-dev libxinerama-dev \
+            xvfb mesa-vulkan-drivers libvulkan1 libgl1-mesa-dri
+
+      - name: Build game and tests
+        run: make -j"$(nproc)" client render-tests
+
+      - name: Capture both backends
+        run: |
+          run() {   # run <api> <outdir>
+            xvfb-run -a -s "-screen 0 1280x1024x24" env CUBE_RENDER_API="$1" \
+              LIBGL_ALWAYS_SOFTWARE=1 VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json \
+              ./build/bin/render_capture_test capture "$2" > "$2.log" 2>&1
+            local code=$?
+            grep -E "^backend:|resize|vsync|CAPTURE|FAIL|Vulkan" "$2.log"
+            return $code
+          }
+          run opengl captures/opengl
+          run vulkan captures/vulkan
+          grep -q "^backend: Vulkan" captures/vulkan.log || { echo "Vulkan fell back to OpenGL"; exit 1; }
+          ./build/bin/render_capture_test compare captures/opengl captures/vulkan 1.0
+
+      - name: Game tests on Vulkan
+        run: |
+          for t in render_test hud_test menu_smoke_test; do
+            xvfb-run -a env CUBE_RENDER_API=vulkan VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json \
+              ./build/bin/$t | tail -1
+          done
+          ./build/bin/map_loader_test | tail -1
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-captures
+          path: captures/
+          if-no-files-found: ignore
+
+  macos:
+    name: macOS (OpenGL + Vulkan on MoltenVK)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Install dependencies
+        run: brew install glfw glm molten-vk vulkan-loader
+
+      - name: Build game and tests
+        run: make -j"$(sysctl -n hw.ncpu)" client render-tests
+
+      - name: Capture both backends
+        run: |
+          # Homebrew's lib dir is not on the default dyld path on Apple Silicon;
+          # GLFW dlopens libvulkan from there.
+          export DYLD_FALLBACK_LIBRARY_PATH="$(brew --prefix)/lib:/usr/local/lib:/usr/lib"
+          set +e
+          CUBE_RENDER_API=opengl ./build/bin/render_capture_test capture captures/opengl > captures-opengl.log 2>&1
+          gl=$?
+          CUBE_RENDER_API=vulkan ./build/bin/render_capture_test capture captures/vulkan > captures-vulkan.log 2>&1
+          vk=$?
+          set -e
+          grep -E "^backend:|resize|vsync|CAPTURE|FAIL|Vulkan" captures-opengl.log captures-vulkan.log
+          [ "$gl" -eq 0 ] && [ "$vk" -eq 0 ]
+          grep -q "^backend: Vulkan" captures-vulkan.log || { echo "Vulkan fell back to OpenGL"; exit 1; }
+          ./build/bin/render_capture_test compare captures/opengl captures/vulkan 1.0
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-captures
+          path: |
+            captures/
+            captures-*.log
+          if-no-files-found: ignore
+
+  windows:
+    name: Windows (MinGW cross-compile)
+    runs-on: ubuntu-24.04
+    env:
+      MINGW: x86_64-w64-mingw32
+      GLFW_URL: https://github.com/glfw/glfw/releases/download/3.4/glfw-3.4.bin.WIN64.zip
+      GLFW_DIR: ${{ github.workspace }}/.mingw-deps/glfw
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            make curl ca-certificates python3 libglm-dev \
+            mingw-w64 g++-mingw-w64-x86-64-posix
+          sudo update-alternatives --set x86_64-w64-mingw32-g++ /usr/bin/x86_64-w64-mingw32-g++-posix
+          sudo ln -sf /usr/bin/x86_64-w64-mingw32-g++-posix /usr/local/bin/g++
+          sudo cp -a /usr/include/glm "/usr/${MINGW}/include/"
+
+      - name: Install GLFW for MinGW
+        run: |
+          MINGW_INCLUDE="/usr/${MINGW}/include"
+          GCC_LIB="$(dirname "$(/usr/bin/${MINGW}-g++-posix -print-libgcc-file-name)")"
+          curl -fsSL -o /tmp/glfw.zip "$GLFW_URL"
+          mkdir -p "$GLFW_DIR"
+          python3 -m zipfile -e /tmp/glfw.zip "$GLFW_DIR"
+          PKG="$GLFW_DIR/glfw-3.4.bin.WIN64"
+          sudo mkdir -p "$MINGW_INCLUDE/GLFW"
+          sudo cp "$PKG"/include/GLFW/*.h "$MINGW_INCLUDE/GLFW/"
+          sudo cp "$PKG/lib-mingw-w64/libglfw3dll.a" "$GCC_LIB/libglfw3.a"
+
+      - name: Build game and tests
+        run: |
+          make -f Makefile.windows -j"$(nproc)" client render-tests 2>&1 | tee build.log
+          ! grep -q "Vulkan backend disabled" build.log
+          file build/bin/game.exe

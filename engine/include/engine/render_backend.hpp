@@ -94,6 +94,13 @@ struct TextureArrayDesc {
     std::vector<const unsigned char*> layers;
 };
 
+/// A finished frame read back from the backend (tests, screenshots).
+struct CapturedImage {
+    int width = 0;
+    int height = 0;
+    std::vector<unsigned char> rgb;   ///< RGB8, top row first
+};
+
 /// Device information for logs (adapter, API version, vendor).
 struct RenderBackendInfo {
     std::string api;       ///< "OpenGL", "Vulkan", "Direct3D 12"
@@ -121,8 +128,20 @@ public:
     /// Wait for vertical blank when presenting (true) or present immediately.
     virtual void setVsync(bool enabled) = 0;
 
+    /// Read back the next frame drawn by renderFrame (before it is presented).
+    virtual void requestCapture() = 0;
+    /// The captured frame, once; false if none is ready.
+    virtual bool takeCapture(CapturedImage& out) = 0;
+
     virtual RenderBackendInfo describe() const = 0;
 };
+
+/// Vulkan backend (NVRHI) for a window made by
+/// createRenderWindow(RenderApi::Vulkan, ...). nullptr when the engine was
+/// built without Vulkan; init() fails when no usable Vulkan driver exists.
+std::unique_ptr<IRenderBackend> createVulkanRenderBackend(GLFWwindow* window);
+/// Whether this build contains the Vulkan backend.
+bool vulkanBackendCompiledIn();
 
 /// The OpenGL 3.3 core reference backend for a window made by
 /// createRenderWindow(RenderApi::OpenGL, ...); its context must be current.

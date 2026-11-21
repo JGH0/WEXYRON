@@ -216,6 +216,20 @@ void Game::openMainMenu() {
 // Settings + controls
 // ---------------------------------------------------------------------------
 
+namespace {
+/// The graphics API the game is actually running on, upper case for the menu
+/// font ("VULKAN", "OPENGL"). It can differ from the RENDERER setting: that
+/// applies after a restart, and Vulkan falls back to OpenGL without a driver.
+std::string activeRenderApiName(const Renderer& renderer) {
+    std::string api = "UNKNOWN";
+    if (const IRenderBackend* backend = renderer.backend()) {
+        api = backend->describe().api;
+        for (char& c : api) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    }
+    return api;
+}
+} // namespace
+
 void Game::openSettings() {
     // One stack: SETTINGS (values). CONTROLS and FRAME GENERATION are pushed on
     // top when chosen, and ESC returns to SETTINGS with that row still selected.
@@ -223,6 +237,8 @@ void Game::openSettings() {
     options.skipGroups = {settings::kFrameGenGroup};
     options.afterGroup = [this](menu::Page& page, const std::string& group) {
         if (group != "VIDEO") return;
+        page.add(menu::info("ACTIVE RENDERER", activeRenderApiName(renderer),
+                            "Running now; a RENDERER change applies after a restart"));
         page.add(menu::action(settings::kFrameGenGroup, [this]() { openFrameGenSettings(); },
                               "DLSS, FSR and XESS frame generation options"));
     };
@@ -258,19 +274,15 @@ void Game::openFrameGenSettings() {
         playUiSound("ui_select");
     });
 
-    // The options are stored now; they take effect with the Vulkan / Direct3D
-    // 12 renderer. Say so instead of letting the rows look broken.
-    std::string api = "UNKNOWN";
-    if (const IRenderBackend* backend = renderer.backend()) {
-        api = backend->describe().api;
-        for (char& c : api) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-    }
-    const bool available = api != "OPENGL" && api != "UNKNOWN";
+    // The options are stored now; frame generation itself (FSR / DLSS / XeSS
+    // on the Vulkan or Direct3D 12 renderer) comes in a later step. Say so
+    // instead of letting the rows look broken.
+    const std::string api = activeRenderApiName(renderer);
     page.add(menu::separator("STATUS"));
     page.add(menu::info("RENDERER", api, "Graphics API the game is running on"));
-    page.add(menu::info("ACTIVE", available ? "YES" : "NOT YET",
-                        available ? "Changes take effect immediately"
-                                  : "Needs the Vulkan or Direct3D 12 renderer (coming soon)"));
+    page.add(menu::info("ACTIVE", "NOT YET",
+                        api == "OPENGL" ? "Needs the Vulkan renderer (VIDEO > RENDERER) and a later update"
+                                        : "Frame generation arrives in a later update"));
 
     menu::push(settingsMenu_, std::move(page));
     settingsMenu_.legend = {{"UP/DOWN", "SELECT"}, {"LEFT/RIGHT", "ADJUST"}, {"ESC", "BACK"}};

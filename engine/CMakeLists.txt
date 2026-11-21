@@ -13,6 +13,8 @@ add_library(cube_engine STATIC
     src/renderer.cpp
     src/render_window.cpp
     src/backends/gl/gl_backend.cpp
+    src/backends/nvrhi/nvrhi_backend.cpp
+    src/backends/nvrhi/vulkan_device.cpp
     src/shader.cpp
     src/texture.cpp
     ${CMAKE_SOURCE_DIR}/glad.c
@@ -34,6 +36,42 @@ target_link_libraries(cube_engine PUBLIC
 
 if(TARGET glm::glm)
     target_link_libraries(cube_engine PUBLIC glm::glm)
+endif()
+
+# ---------------------------------------------------------------------------
+# Vulkan backend (NVRHI)
+# ---------------------------------------------------------------------------
+# Needs the third_party/nvrhi and third_party/vulkan-headers submodules
+# (git submodule update --init). Nothing links against the Vulkan loader:
+# GLFW loads it at runtime, so the game still starts without Vulkan and then
+# uses OpenGL. Without the submodules the engine builds OpenGL-only.
+set(CUBE_NVRHI_DIR "${CMAKE_SOURCE_DIR}/third_party/nvrhi")
+set(CUBE_VULKAN_HEADERS_DIR "${CMAKE_SOURCE_DIR}/third_party/vulkan-headers")
+if(EXISTS "${CUBE_NVRHI_DIR}/CMakeLists.txt" AND EXISTS "${CUBE_VULKAN_HEADERS_DIR}/CMakeLists.txt")
+    set(_cube_vulkan_default ON)
+else()
+    set(_cube_vulkan_default OFF)
+endif()
+option(CUBE_WITH_VULKAN "Build the Vulkan render backend (NVRHI)" ${_cube_vulkan_default})
+
+if(CUBE_WITH_VULKAN)
+    if(NOT TARGET Vulkan::Headers)
+        add_subdirectory(${CUBE_VULKAN_HEADERS_DIR} ${CMAKE_BINARY_DIR}/third_party/vulkan-headers EXCLUDE_FROM_ALL)
+    endif()
+    set(NVRHI_INSTALL OFF CACHE BOOL "" FORCE)
+    set(NVRHI_FETCH_VULKAN_HEADERS OFF CACHE BOOL "" FORCE)
+    set(NVRHI_WITH_VULKAN ON CACHE BOOL "" FORCE)
+    set(NVRHI_WITH_DX11 OFF CACHE BOOL "" FORCE)
+    set(NVRHI_WITH_DX12 OFF CACHE BOOL "" FORCE)   # Direct3D 12 comes in a later step
+    add_subdirectory(${CUBE_NVRHI_DIR} ${CMAKE_BINARY_DIR}/third_party/nvrhi EXCLUDE_FROM_ALL)
+    # Backend library before the common one (GNU ld resolves static archives
+    # left to right). nvrhi_vk also carries VK_USE_PLATFORM_WIN32_KHR on
+    # Windows, which must match between NVRHI and the engine.
+    target_link_libraries(cube_engine PUBLIC nvrhi_vk nvrhi Vulkan::Headers)
+    target_compile_definitions(cube_engine PUBLIC CUBE_WITH_VULKAN)
+    message(STATUS "Cube Engine: Vulkan backend enabled (NVRHI)")
+else()
+    message(STATUS "Cube Engine: Vulkan backend disabled (run 'git submodule update --init')")
 endif()
 
 target_compile_features(cube_engine PUBLIC cxx_std_17)
