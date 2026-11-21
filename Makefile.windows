@@ -71,11 +71,29 @@ SERVER_OBJECTS = $(SERVER_MAIN_OBJECT) $(NETWORK_OBJECTS) $(GAME_BOT_OBJECTS) $(
 # `mingw32-make` works from either environment without editing this file.
 DLL_SEARCH_DIRS = /ucrt64/bin /mingw64/bin /c/msys64/ucrt64/bin /c/msys64/mingw64/bin
 
+WINDRES           ?= windres
+LAUNCHER_TARGET    = $(BIN_DIR)/launcher.exe
+LAUNCHER_SRC       = launcher/main.cpp
+LAUNCHER_RES       = $(BUILD_DIR)/launcher.res
+LAUNCHER_CXXFLAGS  = -std=c++17 -Wall -DUNICODE -D_UNICODE
+# -mwindows: suppress the console window; statically link the C++ runtime so
+# launcher.exe works without the MinGW DLLs that ship alongside game.exe.
+LAUNCHER_LDFLAGS   = -mwindows -lwinhttp -lcomctl32 -lshell32 -luser32 -lkernel32 \
+                     -static-libgcc -static-libstdc++
+
 all: $(TARGET) $(SERVER_TARGET)
 
 client: $(TARGET)
 
 server: $(SERVER_TARGET)
+
+launcher: $(LAUNCHER_TARGET)
+
+$(LAUNCHER_TARGET): $(LAUNCHER_SRC) $(LAUNCHER_RES) | $(BIN_DIR)
+	$(CXX) $(LAUNCHER_CXXFLAGS) $(LAUNCHER_SRC) $(LAUNCHER_RES) -o $@ $(LAUNCHER_LDFLAGS)
+
+$(LAUNCHER_RES): launcher/resource.rc launcher/app.manifest | $(BUILD_DIR)
+	$(WINDRES) launcher/resource.rc -O coff -o $(LAUNCHER_RES)
 
 engine-test: $(BIN_DIR)/engine_smoke_test.exe
 
@@ -221,4 +239,4 @@ debug: $(TARGET)
 -include $(ENGINE_LIB_OBJECTS:.o=.d)
 -include $(DISCORD_OBJECTS:.o=.d)
 
-.PHONY: all clean run run-server debug client server engine-test swept-test stage-runtime
+.PHONY: all clean run run-server debug client server launcher engine-test swept-test stage-runtime

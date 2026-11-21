@@ -73,6 +73,12 @@ jobs:
           path: dist/*.AppImage
           if-no-files-found: error
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-tarball
+          path: dist/*.tar.gz
+          if-no-files-found: warn
+
   windows:
     name: Windows (exe, cross-compiled)
     runs-on: ubuntu-24.04
@@ -114,11 +120,52 @@ jobs:
           sudo cp "$PKG/lib-mingw-w64/glfw3.dll" "/usr/${MINGW}/bin/"
           echo "GCC_LIB=$GCC_LIB" >> "$GITHUB_ENV"
 
-      - name: Build
+      - name: Build game
         run: make -f Makefile.windows client
 
-      - name: Verify binary
-        run: file "$GAME_WINDOWS"
+      - name: Build launcher
+        run: |
+          make -f Makefile.windows launcher \
+            WINDRES=x86_64-w64-mingw32-windres \
+            CXX=x86_64-w64-mingw32-g++-posix
+
+      - name: Verify binaries
+        run: |
+          file "$GAME_WINDOWS"
+          file build/bin/launcher.exe
+
+      # ------------------------------------------------------------------ #
+      # Optional Authenticode signing.                                       #
+      # To enable: add CODESIGN_PFX_B64 (base64-encoded PFX) and           #
+      # CODESIGN_PFX_PASS (PFX password) as repository secrets.            #
+      #                                                                      #
+      # Recommended free certificate for open-source projects:              #
+      #   https://signpath.io/  (free tier for OSS)                         #
+      #                                                                      #
+      # With a valid EV or OV code-signing certificate the Windows          #
+      # SmartScreen "Windows protected your PC" prompt is fully suppressed. #
+      # The manifest already requests asInvoker + Win10 compatibility,      #
+      # which is the best mitigation available without a certificate.       #
+      # ------------------------------------------------------------------ #
+      - name: Sign Windows executables (optional)
+        if: ${{ secrets.CODESIGN_PFX_B64 != '' }}
+        env:
+          CODESIGN_PFX_B64:  ${{ secrets.CODESIGN_PFX_B64 }}
+          CODESIGN_PFX_PASS: ${{ secrets.CODESIGN_PFX_PASS }}
+        run: |
+          sudo apt-get install -y --no-install-recommends osslsigncode
+          echo "$CODESIGN_PFX_B64" | base64 -d > /tmp/cert.pfx
+          for exe in build/bin/game.exe build/bin/launcher.exe; do
+            [ -f "$exe" ] || continue
+            osslsigncode sign \
+              -pkcs12 /tmp/cert.pfx -pass "$CODESIGN_PFX_PASS" \
+              -n "WEXYRON" -i "https://github.com/JGH0/WEXYRON" \
+              -t "http://timestamp.digicert.com" \
+              -in "$exe" -out "${exe}.signed"
+            mv "${exe}.signed" "$exe"
+            echo "Signed $exe"
+          done
+          rm -f /tmp/cert.pfx
 
       - name: Package zip
         env:
@@ -175,5 +222,7 @@ jobs:
 
       - uses: softprops/action-gh-release@v2
         with:
+          # Uploads: Windows zip (with launcher.exe), Linux AppImage,
+          # and the Linux tarball (AppImage + launcher.sh + version.txt)
           files: dist/*
           generate_release_notes: true

@@ -108,6 +108,21 @@ EOF
         ARCH=x86_64 "$APPIMAGE_TOOL" "$APPDIR" "$OUTPUT"
         rm -rf "$APPDIR" "$DESKTOP"
         echo "Created $OUTPUT"
+
+        # Also create a tarball that includes the launcher script and version.txt
+        # so users can run ./launcher.sh for automatic update-on-launch.
+        TARNAME="WEXYRON-${VERSION}-linux-x86_64"
+        TARDIR="$DIST/$TARNAME"
+        rm -rf "$TARDIR"
+        mkdir -p "$TARDIR"
+        cp "$OUTPUT"           "$TARDIR/"
+        cp "$ROOT/launcher/launcher.sh" "$TARDIR/launcher.sh"
+        chmod +x "$TARDIR/launcher.sh"
+        echo "$VERSION" > "$TARDIR/version.txt"
+        TAR_OUTPUT="$DIST/${TARNAME}.tar.gz"
+        tar -czf "$TAR_OUTPUT" -C "$DIST" "$TARNAME"
+        rm -rf "$TARDIR"
+        echo "Created $TAR_OUTPUT"
         ;;
 
     exe)
@@ -158,6 +173,18 @@ EOF
         fi
 
         stage_assets "$STAGE/assets"
+
+        # Launcher exe — built separately; non-fatal if not present locally
+        # (CI builds it explicitly before calling this script).
+        if [ -f "$ROOT/build/bin/launcher.exe" ]; then
+            cp "$ROOT/build/bin/launcher.exe" "$STAGE/launcher.exe"
+        else
+            echo "note: launcher.exe not found in build/bin — zip will not include it" >&2
+        fi
+
+        # version.txt tells launcher.exe the installed version so it can
+        # decide whether a GitHub release is newer.
+        echo "$VERSION" > "$STAGE/version.txt"
 
         ZIP="$DIST/WEXYRON-${VERSION}-windows-x86_64.zip"
         rm -f "$ZIP"
