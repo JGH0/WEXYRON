@@ -495,7 +495,7 @@ bool Game::getRemotePlayerFeet(uint32_t id, glm::vec3& feet) const {
 // ---------------------------------------------------------------------------
 
 void Game::applyPlayerDamage(float damage) {
-    if (isDead || damage <= 0.0f) return;
+    if (isDead || damage <= 0.0f || spawnProtectionTimer_ > 0.0f) return;
 
     playerHealth -= damage;
     damageEffectTime = std::max(damageEffectTime, 1.0f);
@@ -526,6 +526,10 @@ void Game::reportLocalDamage(float damage, uint8_t weaponId) {
 void Game::dieLocally() {
     if (isDead) return;
     isDead = true;
+    // A death that happens while a menu page is open (the match keeps running
+    // on the server) must not close that menu or show the death screen. Keep
+    // the player in the match; the respawn happens on return to the round.
+    const bool inMenu = isInMatchMenu();
     deaths_++;
     // Team kill counters only exist in Team Deathmatch. Bomb Defusal's team
     // scores are ROUND wins and must never be overwritten with kill counts.
@@ -552,9 +556,11 @@ void Game::dieLocally() {
     playSoundEffect("player_death", playerPos + glm::vec3(0.0f, currentEyeHeight(), 0.0f));
 
     if (bombDefusalMode) {
+        // Dead in a round-based mode: spectate until the next round. In a menu
+        // this stays hidden behind the menu and is picked up on return.
         spectatorMode = true;
         std::cout << "Player died! Entering spectator mode." << std::endl;
-    } else {
+    } else if (!inMenu) {
         gameState = DEAD;
     }
 
@@ -567,13 +573,18 @@ void Game::dieLocally() {
                                        eye.x, eye.y, eye.z, false,
                                        static_cast<uint8_t>(currentGameMode),
                                        static_cast<uint8_t>(matchFormat_),
-                                       static_cast<uint8_t>(stance_));
+                                       static_cast<uint8_t>(stance_),
+                                       inMenu);
     }
     std::cout << "Player defeated!" << std::endl;
 }
 
 void Game::respawnLocally() {
+    respawnPending_ = false;
     resetGame();
+    // A fresh respawn cannot be hit for one second (the server enforces the
+    // same window for PvP; this also covers local damage sources).
+    spawnProtectionTimer_ = kSpawnProtectionSeconds;
     // resetGame() also rebuilds the practice bots; they have no place in a
     // networked match (other players are the opponents there).
     if (networkClient && networkClient->isConnected()) {
@@ -1736,6 +1747,7 @@ bool Game::checkProjectileEnemyCollision(Projectile& projectile) {
 }
 
 void Game::checkEnemyPlayerCollision(float deltaTime) {
+    if (spawnProtectionTimer_ > 0.0f) return;
     if (playerDamageCooldown > 0.0f) {
         playerDamageCooldown -= deltaTime;
         return;
@@ -1843,7 +1855,7 @@ bool Game::checkProjectilePlayerBody(Projectile& projectile) {
 }
 
 void Game::damagePlayer(float damage) {
-    if (isDead) return; // Already dead
+    if (isDead || spawnProtectionTimer_ > 0.0f) return; // Dead or spawn-protected
     
     playerHealth -= damage;
     if (playerHealth < 0.0f) playerHealth = 0.0f;
@@ -2489,7 +2501,20 @@ void Game::updateRoundEndTimer(float deltaTime) {
     if (roundEndTimer > 0.0f) {
         roundEndTimer -= deltaTime;
         if (roundEndTimer <= 0.0f) {
-            if (!matchOver_) startRound();
+            roundEndTimer = 0.0f;
+            if (bombDefusalMode && networkClient && networkClient->isConnected()) {
+                // The server owns the bomb-round intermission and starts the
+                // next round itself. In a menu the new BombState parks the
+                // local reset until the return; outside a menu it resets at
+                // once. Never start the round from here (that raced the
+                // server and respawned the player twice).
+            } else if (isInMatchMenu()) {
+                // Do not start the next round (and respawn everyone) while
+                // the player is browsing a menu: hold it until the return.
+                pendingRoundStart_ = true;
+            } else if (!matchOver_) {
+                startRound();
+            }
         }
     }
 }
@@ -2510,8 +2535,9 @@ void Game::startRound() {
     serverPlantActor_ = 0;
     serverDefuseActor_ = 0;
     
-    // Reset players
+    // Reset players (a new round is also a respawn: one second of protection)
     resetGame();
+    spawnProtectionTimer_ = kSpawnProtectionSeconds;
 
     // Single-player bomb defusal: bots that died in the previous round come
     // back at the same time as the player.
@@ -2527,6 +2553,29 @@ void Game::startRound() {
 
     playUiSound("round_start");
     std::cout << "NEW ROUND STARTED! Attacking Team: " << (attackingTeam == 0 ? "Team A (Red)" : "Team B (Blue)") << std::endl;
+}
+
+void Game::beginServerRound() {
+    // The server already reset the round/bomb and revived everyone; this is
+    // only the local side: take a fresh life at a spawn point. Never send a
+    // round-start packet from here, or the server would restart the round.
+    pendingRoundStart_ = false;
+    pendingRoundStartFromServer_ = false;
+    roundNumber_++;
+    roundTime = 0.0f;
+    roundActive = true;
+    roundEndTimer = 0.0f;
+    roundWinner = -1;
+    roundEndReason = ROUND_END_NONE;
+    serverRoundEnded = false;
+    teamADeaths = 0;
+    teamBDeaths = 0;
+
+    resetGame();
+    spawnProtectionTimer_ = kSpawnProtectionSeconds;
+    playUiSound("round_start");
+    std::cout << "NEW ROUND STARTED! Attacking Team: "
+              << (attackingTeam == 0 ? "Team A (Red)" : "Team B (Blue)") << std::endl;
 }
 
 void Game::updateSpectator(float deltaTime) {

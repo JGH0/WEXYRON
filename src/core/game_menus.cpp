@@ -174,10 +174,7 @@ void Game::openMainMenu() {
     // resume) and from the game itself (the first row resumes it).
     const bool resumable = gameInProgress_;
     page.add(menu::action(resumable ? "RESUME GAME" : "PLAY GAME", [this]() {
-        inp.resetNavKeys();
-        menuJustEntered = true;
-        gameState = PLAYING;
-        capturePlayCursor(true);
+        resumeGameFromMenu();
     }, resumable ? "Back to the match" : "Start a match on the selected map"));
 
     page.add(menu::action("MAP SELECTION", [this]() {

@@ -1425,6 +1425,20 @@ private:
     bool serverRoundEnded;
     uint32_t serverBombRoundId_ = 0; ///< last server round id applied
     uint32_t lastLocalStateSequence_ = 0; ///< ignore stale own death/respawn
+    /// Seconds of invulnerability left after spawning. PvP damage is blocked
+    /// by the server's own copy; this covers local damage sources (bots,
+    /// blasts, falls) and the client-side death handling.
+    float spawnProtectionTimer_ = 0.0f;
+    static constexpr float kSpawnProtectionSeconds = 1.0f;
+    /// The server already put us back on our feet while a menu was open. The
+    /// local respawn waits until the player returns to the round.
+    bool respawnPending_ = false;
+    /// A round finished while a menu was open: its next round (which respawns
+    /// everyone) starts as soon as the player is back in the match.
+    bool pendingRoundStart_ = false;
+    /// The pending round was already started by the server; on return only
+    /// the local reset is missing (no round-start packet may be sent again).
+    bool pendingRoundStartFromServer_ = false;
     int roundWinner;
     RoundEndReason roundEndReason;
     /// Authoritative seconds left to plant (from BombStatePacket).
@@ -1731,6 +1745,9 @@ private:
      * @brief Start a new round
      */
     void startRound();
+    /// Apply a round the server already started (BombState): respawn locally
+    /// without asking the server to start it again.
+    void beginServerRound();
     
     /**
      * @brief Update spectator camera (free-flying, like the map editor)
@@ -1832,6 +1849,21 @@ private:
      *        that was opened from the game).
      */
     void closeMenuToGame();
+
+    /**
+     * @brief True while a menu page is open over a running match.
+     *
+     * The match keeps running on the server. A death that happens here must
+     * not replace the menu with the death screen, and the pending respawn is
+     * only performed when the player returns to the round.
+     */
+    bool isInMatchMenu() const;
+
+    /**
+     * @brief Return from a menu to the match, respawning first when the player
+     *        died while the menu was open.
+     */
+    void resumeGameFromMenu();
     
     /**
      * @brief Render map editor

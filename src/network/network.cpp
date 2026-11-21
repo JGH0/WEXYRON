@@ -346,7 +346,7 @@ void NetworkClient::disconnect() {
 void NetworkClient::sendPlayerInput(float moveX, float moveZ, float yaw, float pitch,
                                      bool jump, bool shoot, uint8_t weaponId, float posX, float posY, float posZ,
                                      bool alive, uint8_t gameMode, uint8_t matchFormat,
-                                     uint8_t stance) {
+                                     uint8_t stance, bool inMenu) {
     if (!connected) return;
 
     PlayerInputPacket packet;
@@ -371,6 +371,7 @@ void NetworkClient::sendPlayerInput(float moveX, float moveZ, float yaw, float p
     packet.gameMode = gameMode;
     packet.matchFormat = matchFormat;
     packet.stance = stance;
+    packet.inMenu = inMenu ? 1 : 0;
 
     sendPacket(&packet, sizeof(packet));
 }
@@ -1181,9 +1182,11 @@ void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_
                 players[id].inLobby = false;
                 players[id].lobbyReady = false;
 
-                // Update player's map
+                // Update player's map. A new map is a new spawn: one second of
+                // protection so nobody is shot while the map is still coming up.
                 strncpy(players[id].mapName, newMap.c_str(), sizeof(players[id].mapName) - 1);
                 players[id].mapName[sizeof(players[id].mapName) - 1] = '\0';
+                players[id].spawnProtection = 1.0f;
 
                 std::cout << "Player " << id << " changed map from " << oldMap << " to " << newMap << std::endl;
 

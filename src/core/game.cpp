@@ -868,6 +868,7 @@ void Game::refreshBombSitesForMode() {
     teamAScore_ = 0;
     teamBScore_ = 0;
     roundTime = 0.0f;
+    serverBombRoundId_ = 0;
 
     // Changing mode must not leave a planted/defusing bomb or its sites behind.
     isPlanting = false;
@@ -1030,6 +1031,10 @@ void Game::resetGame() {
     playerDamageCooldown = 0.0f;
     damageEffectTime     = 0.0f;
     isDead               = false;
+    respawnPending_      = false;
+    pendingRoundStart_   = false;
+    pendingRoundStartFromServer_ = false;
+    spawnProtectionTimer_ = 0.0f;
     spectatorMode        = false;
     spectatorTarget      = -1;
     isPlanting           = false;
