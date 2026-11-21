@@ -1,0 +1,146 @@
+# Phase 0 gate for the Vulkan/DX12 port: build the NVRHI spike
+# (tools/spikes/nvrhi) on all three platforms and render frames with the API
+# validation layers on. Any validation error fails the job.
+#
+#   Windows  MSVC, Vulkan on lavapipe (no GPU on runners) + D3D12 on WARP
+#   Linux    GCC, Vulkan on lavapipe under Xvfb
+#   macOS    Clang, Vulkan on MoltenVK (Metal)
+name: NVRHI spike
+
+on:
+  push:
+    branches: [feature/vulkan-dx12-framegen]
+    paths:
+      - tools/spikes/**
+      - .github/workflows/nvrhi-spike.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  VK_SDK_VERSION: 1.4.363.0
+  MESA_URL: https://github.com/pal1000/mesa-dist-win/releases/download/26.2.6/mesa3d-26.2.6-release-mingw.7z
+
+jobs:
+  windows:
+    name: Windows (MSVC, Vulkan lavapipe + D3D12 WARP)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Vulkan SDK
+        run: |
+          curl.exe -fsSL -o vksdk.exe "https://sdk.lunarg.com/sdk/download/$env:VK_SDK_VERSION/windows/vulkansdk-windows-X64-$env:VK_SDK_VERSION.exe"
+          Start-Process .\vksdk.exe -Wait -ArgumentList '--root','C:\VulkanSDK','--accept-licenses','--default-answer','--confirm-command','install'
+          "VULKAN_SDK=C:\VulkanSDK" >> $env:GITHUB_ENV
+          "C:\VulkanSDK\Bin" >> $env:GITHUB_PATH
+
+      - name: Fetch lavapipe (Mesa software Vulkan)
+        run: |
+          curl.exe -fsSL -o mesa.7z $env:MESA_URL
+          7z e -y -olvp mesa.7z 'x64\lvp_icd.x86_64.json' 'x64\vulkan_lvp.dll'
+
+      - name: Build
+        run: |
+          cmake -S tools/spikes/nvrhi -B build-spike
+          cmake --build build-spike --config RelWithDebInfo
+
+      # GPU-less machines (runners, VMs) have no system Vulkan loader; the
+      # game will ship vulkan-1.dll from LunarG's redistributable runtime the
+      # same way.
+      - name: Stage Vulkan loader next to the exe
+        run: |
+          curl.exe -fsSL -o vkrt.zip "https://sdk.lunarg.com/sdk/download/$env:VK_SDK_VERSION/windows/VulkanRT-X64-$env:VK_SDK_VERSION-Components.zip"
+          7z e -y -ovkrt vkrt.zip "VulkanRT-X64-$env:VK_SDK_VERSION-Components\x64\vulkan-1.dll"
+          Copy-Item vkrt\vulkan-1.dll build-spike\RelWithDebInfo\
+
+      # Runners execute elevated, and the Vulkan loader ignores VK_DRIVER_FILES
+      # in elevated processes, so register lavapipe as a system ICD instead.
+      - name: Register lavapipe ICD
+        run: |
+          $key = 'HKLM:\SOFTWARE\Khronos\Vulkan\Drivers'
+          New-Item -Path $key -Force | Out-Null
+          New-ItemProperty -Path $key -Name "$pwd\lvp\lvp_icd.x86_64.json" -Value 0 -PropertyType DWord -Force | Out-Null
+
+      - name: Run Vulkan (lavapipe)
+        run: |
+          & .\build-spike\RelWithDebInfo\nvrhi_spike.exe --api=vulkan --validate --frames=60 *> vk.log
+          $code = $LASTEXITCODE
+          Get-Content vk.log
+          if ($code -ne 0 -or (Select-String -Path vk.log -Pattern 'Validation Error' -Quiet)) { exit 1 }
+
+      - name: Run D3D12 (WARP)
+        run: |
+          & .\build-spike\RelWithDebInfo\nvrhi_spike.exe --api=dx12 --validate --frames=60 *> dx.log
+          $code = $LASTEXITCODE
+          Get-Content dx.log
+          if ($code -ne 0 -or (Select-String -Path dx.log -Pattern '\[d3d12 [01] ' -Quiet)) { exit 1 }
+
+  linux:
+    name: Linux (GCC, Vulkan lavapipe)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential ninja-build xvfb libvulkan-dev mesa-vulkan-drivers \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+
+      - name: Install Vulkan SDK (dxc + validation layers)
+        run: |
+          curl -fsSL -o vksdk.tar.xz "https://sdk.lunarg.com/sdk/download/${VK_SDK_VERSION}/linux/vulkansdk-linux-x86_64-${VK_SDK_VERSION}.tar.xz"
+          mkdir -p "$HOME/vulkansdk" && tar -xJf vksdk.tar.xz -C "$HOME/vulkansdk"
+
+      - name: Build
+        run: |
+          source "$HOME/vulkansdk/${VK_SDK_VERSION}/setup-env.sh"
+          cmake -S tools/spikes/nvrhi -B build-spike -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake --build build-spike
+
+      - name: Run Vulkan (lavapipe)
+        run: |
+          source "$HOME/vulkansdk/${VK_SDK_VERSION}/setup-env.sh"
+          # Ubuntu names the manifest lvp_icd.json (no arch suffix).
+          export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json
+          export VK_LOADER_DEBUG=error,warn
+          set +e
+          xvfb-run -a ./build-spike/nvrhi_spike --api=vulkan --validate --frames=60 > vk.log 2>&1
+          code=$?
+          cat vk.log
+          [ "$code" -eq 0 ] && ! grep -q 'Validation Error' vk.log
+
+  macos:
+    name: macOS (Clang, Vulkan MoltenVK)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Vulkan SDK (MoltenVK, dxc, validation layers)
+        run: |
+          brew install ninja
+          curl -fsSL -o vksdk.zip "https://sdk.lunarg.com/sdk/download/${VK_SDK_VERSION}/mac/vulkansdk-macos-${VK_SDK_VERSION}.zip"
+          unzip -q vksdk.zip
+          sudo "./vulkansdk-macOS-${VK_SDK_VERSION}.app/Contents/MacOS/vulkansdk-macOS-${VK_SDK_VERSION}" \
+            --root "$HOME/VulkanSDK" --accept-licenses --default-answer --confirm-command install
+
+      - name: Build
+        run: |
+          source "$HOME/VulkanSDK/setup-env.sh"
+          cmake -S tools/spikes/nvrhi -B build-spike -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake --build build-spike
+
+      - name: Run Vulkan (MoltenVK)
+        run: |
+          source "$HOME/VulkanSDK/setup-env.sh"
+          set +e
+          ./build-spike/nvrhi_spike --api=vulkan --validate --frames=60 > vk.log 2>&1
+          code=$?
+          cat vk.log
+          [ "$code" -eq 0 ] && ! grep -q 'Validation Error' vk.log
