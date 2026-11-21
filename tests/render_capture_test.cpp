@@ -149,6 +149,24 @@ int capture(const fs::path& out) {
                       [&] { game.debugOpenMenu(menu); });
     }
 
+    // Resizing: the renderer must follow the framebuffer size on the next
+    // frame (there is no resize callback; render() reads the size itself).
+    glfwSetWindowSize(game.windowHandle(), 1024, 640);
+    for (int i = 0; i < 3; ++i) {
+        glfwPollEvents();
+        game.render();
+    }
+    int fbW = 0, fbH = 0;
+    glfwGetFramebufferSize(game.windowHandle(), &fbW, &fbH);
+    GLint vp[4] = {0, 0, 0, 0};
+    glGetIntegerv(GL_VIEWPORT, vp);
+    if (vp[2] != fbW || vp[3] != fbH || fbW != 1024) {
+        std::printf("FAIL resize: viewport %dx%d, framebuffer %dx%d\n", vp[2], vp[3], fbW, fbH);
+        ++failures;
+    } else {
+        std::printf("resize ok: viewport follows framebuffer %dx%d\n", fbW, fbH);
+    }
+
     game.cleanup();
     std::printf(failures ? "CAPTURE: %d FAILURES\n" : "CAPTURE: ALL OK\n", failures);
     return failures ? 1 : 0;

@@ -510,7 +510,6 @@ Game::Game(int width, int height)
     }
     glfwMakeContextCurrent(window);
     glfwSetWindowUserPointer(window, this);
-    glfwSetFramebufferSizeCallback(window, framebufferSizeCallback);
     glfwSetCursorPosCallback(window, mouseCallback);
     glfwSetScrollCallback(window, scrollCallback);
     // Start in the menu (NORMAL in init()); enable raw motion now so the
@@ -526,18 +525,6 @@ Game::Game(int width, int height)
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
         std::cerr << "Failed to initialize GLAD" << std::endl;
         exit(-1);
-    }
-
-    // Report which OpenGL implementation is actually in use: on a GPU-less
-    // Windows install this must say "Mesa" (llvmpipe), otherwise the fallback
-    // did not take effect.
-    {
-        const auto* version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
-        const auto* rendererName = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
-        const auto* vendor = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
-        std::cout << "OpenGL: " << (version ? version : "?") << "\n"
-                  << "  renderer: " << (rendererName ? rendererName : "?") << "\n"
-                  << "  vendor:   " << (vendor ? vendor : "?") << std::endl;
     }
 
     // Sound engine: open the device and load assets/audio (never fatal).
@@ -583,6 +570,16 @@ Game::~Game() {
 void Game::init() {
     std::cout << "Initializing renderer..." << std::endl;
     renderer.init();
+
+    // Report which implementation is actually in use: on a GPU-less Windows
+    // install this must say "Mesa" (llvmpipe), otherwise the fallback did not
+    // take effect.
+    if (const IRenderBackend* backend = renderer.backend()) {
+        const RenderBackendInfo info = backend->describe();
+        std::cout << info.api << ": " << info.version << "\n"
+                  << "  renderer: " << info.renderer << "\n"
+                  << "  vendor:   " << info.vendor << std::endl;
+    }
 
     // Re-apply the video settings now that a GL context exists (swap interval).
     applySettings();
@@ -1242,11 +1239,6 @@ void Game::capturePlayCursor(bool resetLook) {
         lastX = 400.0f;
         lastY = 300.0f;
     }
-}
-
-void Game::framebufferSizeCallback(GLFWwindow* /*window*/, int width, int height) {
-    if (width > 0 && height > 0)
-        glViewport(0, 0, width, height);
 }
 
 void Game::mouseCallback(GLFWwindow* window, double xpos, double ypos) {

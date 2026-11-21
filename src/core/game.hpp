@@ -1776,7 +1776,6 @@ private:
      * @param width New framebuffer width
      * @param height New framebuffer height
      */
-    static void framebufferSizeCallback(GLFWwindow* window, int width, int height);
     
     /**
      * @brief GLFW mouse position callback
