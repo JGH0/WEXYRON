@@ -221,8 +221,8 @@ void applySettingDef(size_t index) {
     if (def.apply) def.apply(*def.value);
 }
 
-void setChoiceIndex(Value& v, int index) {
-    v.i = clampInt(index, 0, 2);
+void setChoiceIndex(Value& v, int index, int choiceCount) {
+    v.i = clampInt(index, 0, std::max(0, choiceCount - 1));
 }
 
 void setKeyValue(Value& v, int code) {
@@ -261,15 +261,21 @@ std::vector<SettingDef> makeGameSettingDefs(GameSettings& s) {
     store.values.clear();
     // SettingDef::value points into store.values, so the vector must never
     // reallocate after the defs are built. Keep this comfortably above the
-    // number of rows (add new settings below and bump it if needed).
-    store.adapters.reserve(32);
-    store.values.reserve(32);
+    // number of rows (add new settings below and bump it if needed; push()
+    // refuses to grow past it).
+    constexpr size_t kMaxSettingRows = 64;
+    store.adapters.reserve(kMaxSettingRows);
+    store.values.reserve(kMaxSettingRows);
 
     std::vector<SettingDef> defs;
-    defs.reserve(32);
+    defs.reserve(kMaxSettingRows);
 
     auto push = [&](const char* key, const char* label, const char* group,
                     const char* help, const Value& initial, RowAdapter adapter) {
+        if (store.values.size() >= kMaxSettingRows) {
+            std::cerr << "settings: too many rows, raise kMaxSettingRows (" << key << ")" << std::endl;
+            std::abort();
+        }
         store.values.push_back(initial);
         store.adapters.push_back(std::move(adapter));
         SettingDef def = makeDef(key, label, group, help, &store.values.back());
@@ -305,6 +311,15 @@ std::vector<SettingDef> makeGameSettingDefs(GameSettings& s) {
         push(key, label, group, help, a.getFrom(s), a);
     };
 
+    // Choice rows: integer index plus the option names for menu and file.
+    auto addChoice = [&](const char* key, const char* label, const char* group,
+                         const char* help, int GameSettings::*member,
+                         std::vector<std::string> choices, std::vector<std::string> keys) {
+        addInt(key, label, group, help, ValueType::Choice, member);
+        defs.back().choices = std::move(choices);
+        defs.back().choiceKeys = std::move(keys);
+    };
+
     // Keys use the same integer storage as Int rows, with the Key value type.
     auto addKey = [&](const char* key, const char* label, const char* group,
                       const char* help, int GameSettings::*member) {
@@ -326,9 +341,21 @@ std::vector<SettingDef> makeGameSettingDefs(GameSettings& s) {
            "Frame-rate cap, INFINITY = uncapped", ValueType::Int, &GameSettings::maxFps);
     addBool("vsync", "V-SYNC", "VIDEO",
             "Lock the frame rate to the display", &GameSettings::vsync);
-    addInt("performance", "PERFORMANCE", "VIDEO",
-           "How much processing power the game may use", ValueType::Choice,
-           &GameSettings::performance);
+    addChoice("performance", "PERFORMANCE", "VIDEO",
+              "How much processing power the game may use", &GameSettings::performance,
+              {"LOW", "BALANCED", "HIGH"}, {"low", "balanced|medium", "high"});
+
+    // Own settings page (a link in the VIDEO section opens it).
+    addChoice("frame_gen", "MODE", kFrameGenGroup,
+              "Show generated frames between rendered ones", &GameSettings::frameGen,
+              {"OFF", "AUTO", "AMD FSR", "NVIDIA DLSS", "INTEL XESS"},
+              {"off", "auto", "fsr", "dlss", "xess"});
+    addChoice("frame_gen_output", "OUTPUT", kFrameGenGroup,
+              "Shown frames per rendered frame (3X, 4X: DLSS on RTX 50, XESS 3)",
+              &GameSettings::frameGenOutput, {"2X", "3X", "4X"}, {"2x", "3x", "4x"});
+    addBool("frame_gen_low_latency", "LOW LATENCY", kFrameGenGroup,
+            "REFLEX / ANTI-LAG 2 / XELL: cuts the input lag frame generation adds",
+            &GameSettings::frameGenLowLatency);
 
     addInt("master_volume", "MASTER VOLUME", "AUDIO",
            "Overall volume", ValueType::Volume, &GameSettings::masterVolume);
@@ -394,10 +421,10 @@ std::string displayValue(const SettingDef& def) {
             return v.b ? "ON" : "OFF";
         case ValueType::Int:
             return def.key == "max_fps" && v.i == 0 ? "INFINITY" : std::to_string(v.i);
-        case ValueType::Choice: {
-            static const char* const perf[] = {"LOW", "BALANCED", "HIGH"};
-            return perf[clampInt(v.i, 0, 2)];
-        }
+        case ValueType::Choice:
+            if (def.choices.empty()) return std::to_string(v.i);
+            return def.choices[static_cast<size_t>(
+                clampInt(v.i, 0, static_cast<int>(def.choices.size()) - 1))];
         case ValueType::Key:
             return bindingName(v.i);
         case ValueType::Volume:
@@ -475,13 +502,23 @@ bool parseValue(const SettingDef& def, const std::string& text) {
             return true;
         }
         case ValueType::Choice: {
-            int i = 0;
+            // A name ("balanced", "dlss", aliases split by '|') or an index.
             const std::string t = lower(text);
-            if (t == "low") i = PERF_LOW;
-            else if (t == "balanced" || t == "medium") i = PERF_BALANCED;
-            else if (t == "high") i = PERF_HIGH;
-            else if (!parseInt(text, i)) return false;
-            v.i = clampInt(i, 0, 2);
+            int i = -1;
+            for (size_t c = 0; c < def.choiceKeys.size() && i < 0; ++c) {
+                std::string names = def.choiceKeys[c] + "|";
+                for (size_t start = 0, bar; (bar = names.find('|', start)) != std::string::npos;
+                     start = bar + 1) {
+                    if (names.compare(start, bar - start, t) == 0 && bar > start) {
+                        i = static_cast<int>(c);
+                        break;
+                    }
+                }
+            }
+            if (i < 0 && !parseInt(text, i)) return false;
+            // Out-of-range indices are clamped (as the settings file always did).
+            const int count = def.choices.empty() ? 1 : static_cast<int>(def.choices.size());
+            v.i = clampInt(i, 0, count - 1);
             return true;
         }
         case ValueType::Volume: {

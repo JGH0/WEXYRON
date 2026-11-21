@@ -116,6 +116,51 @@ int main() {
         CHECK(all.find("bind_forward=") != std::string::npos);
     }
 
+    // Choice rows: names (with aliases) or indices from the file, menu text.
+    {
+        GameSettings s;
+        makeGameSettingDefs(s);
+        resetRegistry(s);
+        auto row = [](const char* key) -> size_t {
+            const auto& defs = gameSettingDefs();
+            for (size_t i = 0; i < defs.size(); ++i)
+                if (defs[i].key == key) return i;
+            return defs.size();
+        };
+        const size_t fg = row("frame_gen");
+        const size_t fgOut = row("frame_gen_output");
+        const size_t perf = row("performance");
+        CHECK(fg < gameSettingDefs().size());
+        CHECK(fgOut < gameSettingDefs().size());
+        CHECK(row("frame_gen_low_latency") < gameSettingDefs().size());
+
+        GameSettings defaults;
+        CHECK(defaults.frameGen == FRAMEGEN_OFF);
+        CHECK(defaults.frameGenOutput == FRAMEGEN_2X);
+        CHECK(defaults.frameGenLowLatency);
+
+        CHECK(setSettingFromText(fg, "dlss"));
+        CHECK(gameSettingDefs()[fg].value->i == FRAMEGEN_DLSS);
+        CHECK(displayValue(gameSettingDefs()[fg]) == "NVIDIA DLSS");
+        CHECK(setSettingFromText(fg, "XeSS"));             // names are case-insensitive
+        CHECK(gameSettingDefs()[fg].value->i == FRAMEGEN_XESS);
+        CHECK(setSettingFromText(fg, "2"));                // index form
+        CHECK(gameSettingDefs()[fg].value->i == FRAMEGEN_FSR);
+        CHECK(!setSettingFromText(fg, "turbo"));           // unknown name rejected
+        CHECK(gameSettingDefs()[fg].value->i == FRAMEGEN_FSR);
+        CHECK(setSettingFromText(fgOut, "4x"));
+        CHECK(displayValue(gameSettingDefs()[fgOut]) == "4X");
+
+        // Performance keeps its file format: names, the "medium" alias, and
+        // out-of-range indices clamped.
+        CHECK(setSettingFromText(perf, "medium"));
+        CHECK(gameSettingDefs()[perf].value->i == PERF_BALANCED);
+        CHECK(setSettingFromText(perf, "7"));
+        CHECK(gameSettingDefs()[perf].value->i == PERF_HIGH);
+        CHECK(displayValue(gameSettingDefs()[perf]) == "HIGH");
+        resetRegistry(defaults);
+    }
+
     // Display names.
     CHECK(keyName(GLFW_KEY_SPACE) == "SPACE");
     CHECK(keyName(GLFW_KEY_ESCAPE) == "ESC");

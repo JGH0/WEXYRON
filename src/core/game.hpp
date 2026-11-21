@@ -232,7 +232,8 @@ public:
     /// (network tests drive the connect screen with it).
     void debugPumpFrame();
     int debugState() const { return (int)gameState; }
-    /// Open a menu screen by name ("main", "settings", "maps", "server").
+    /// Open a menu screen by name ("main", "settings", "framegen", "maps",
+    /// "server").
     void debugOpenMenu(const std::string& name);
 
     // ── Spawn / movement tests ───────────────────────────────────────────────
@@ -769,6 +770,8 @@ private:
     const menu::MenuView& activeMenuViewConst() const;
     /// Open the settings screen (values + controls sub-page).
     void openSettings();
+    /// FRAME GENERATION sub-screen, pushed on top of SETTINGS.
+    void openFrameGenSettings();
     /// Append every key binding row (grouped) to `page`.
     void appendBindingRows(menu::Page& page);
     /// Restore the default key bindings (controls page "RESET BINDINGS").

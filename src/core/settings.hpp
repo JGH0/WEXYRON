@@ -59,7 +59,7 @@ std::string bindingName(int code);
 
 enum class ValueType { Bool, Int, Choice, Key, Volume };
 
-/// One setting value. `Choice` stores the index into `choices`.
+/// One setting value. `Choice` stores the index into SettingDef::choices.
 struct Value {
     ValueType type;
     bool b;               ///< Bool
@@ -72,6 +72,13 @@ struct Value {
 /// Possible values for the choice settings (kept next to the defaults so the
 /// file loader can parse and validate names).
 enum PerformanceLevel { PERF_LOW = 0, PERF_BALANCED = 1, PERF_HIGH = 2 };
+/// Settings group shown on its own page (linked from the VIDEO section).
+inline constexpr const char* kFrameGenGroup = "FRAME GENERATION";
+/// Frame generation technology (FRAME GENERATION settings page). AUTO picks
+/// the best one the GPU and renderer support.
+enum FrameGenMode { FRAMEGEN_OFF = 0, FRAMEGEN_AUTO, FRAMEGEN_FSR, FRAMEGEN_DLSS, FRAMEGEN_XESS };
+/// Displayed frames per rendered frame: 2X, 3X or 4X (multi-frame generation).
+enum FrameGenOutput { FRAMEGEN_2X = 0, FRAMEGEN_3X, FRAMEGEN_4X };
 const int kMaxFpsOptions[] = {20, 30, 60, 100, 120, 144, 200, 240, 0}; // 0 = unlimited
 const int kMaxFpsOptionCount = 9;
 
@@ -98,6 +105,14 @@ struct GameSettings {
     int  maxFps = 144;             ///< 0 = unlimited
     bool vsync = true;
     int  performance = PERF_BALANCED;
+
+    // Frame generation -------------------------------------------------------
+    // Stored now; applied once the Vulkan / Direct3D 12 renderer exists (the
+    // OpenGL renderer cannot use the vendor frame-generation SDKs).
+    int  frameGen = FRAMEGEN_OFF;
+    int  frameGenOutput = FRAMEGEN_2X;
+    /// NVIDIA Reflex / AMD Anti-Lag 2 / Intel XeLL with frame generation.
+    bool frameGenLowLatency = true;
 
     // Audio ------------------------------------------------------------------
     int masterVolume = 100;        ///< 0..100, applied live
@@ -139,6 +154,11 @@ struct SettingDef {
     std::string group;      ///< menu group, e.g. "VIDEO"
     std::string help;       ///< one-line description
     Value*      value;
+    /// Choice rows: menu text per option (index = stored value).
+    std::vector<std::string> choices;
+    /// Choice rows: names accepted in the settings file per option, besides
+    /// the index ("|" separates aliases, e.g. "balanced|medium").
+    std::vector<std::string> choiceKeys;
 
     /// Apply the stored value to the game member this row mirrors. Called by
     /// the menu whenever the value changes. Empty means the row is read-only.
@@ -186,7 +206,7 @@ void syncSettingDefs(GameSettings& s);
 
 // Small helpers used by the menu pages (they only touch a row's Value; the
 // page calls applySettingDef() afterwards to write it to the GameSettings).
-void setChoiceIndex(Value& v, int index);
+void setChoiceIndex(Value& v, int index, int choiceCount);
 void setKeyValue(Value& v, int code);
 
 /// Copy the current member values of `s` into `defs` again (used when the file

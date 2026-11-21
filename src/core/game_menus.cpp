@@ -25,6 +25,7 @@
 #include "../ui/ui_helpers.hpp"
 #include <iostream>
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <set>
@@ -216,15 +217,22 @@ void Game::openMainMenu() {
 // ---------------------------------------------------------------------------
 
 void Game::openSettings() {
-    // One stack: SETTINGS (values). CONTROLS is pushed on top when chosen, and
-    // ESC returns to SETTINGS with the CONTROLS row still selected.
+    // One stack: SETTINGS (values). CONTROLS and FRAME GENERATION are pushed on
+    // top when chosen, and ESC returns to SETTINGS with that row still selected.
+    menu::SettingRowsOptions options;
+    options.skipGroups = {settings::kFrameGenGroup};
+    options.afterGroup = [this](menu::Page& page, const std::string& group) {
+        if (group != "VIDEO") return;
+        page.add(menu::action(settings::kFrameGenGroup, [this]() { openFrameGenSettings(); },
+                              "DLSS, FSR and XESS frame generation options"));
+    };
     menu::Page page = menu::buildSettingsPage(settingDefs_, [this]() {
         // Volume/gameplay change from the menu: apply it and play a feedback
         // blip so the new volume can be heard immediately.
         applySettings();
         saveSettings();
         playUiSound("ui_select");
-    });
+    }, options);
     page.add(menu::separator("INPUT"));
     page.add(menu::action("CONTROLS", [this]() {
         // Built fresh on every open: bindings may have changed since the
@@ -241,6 +249,31 @@ void Game::openSettings() {
     settingsMenu_.legend = {{"UP/DOWN", "SELECT"}, {"ENTER", "CHANGE"},
                             {"LEFT/RIGHT", "ADJUST"}, {"ESC", "LEAVE"}};
     settingsMenu_.onClose = [this]() { closeMenuToGame(); };
+}
+
+void Game::openFrameGenSettings() {
+    menu::Page page = menu::buildFrameGenPage(settingDefs_, [this]() {
+        applySettings();
+        saveSettings();
+        playUiSound("ui_select");
+    });
+
+    // The options are stored now; they take effect with the Vulkan / Direct3D
+    // 12 renderer. Say so instead of letting the rows look broken.
+    std::string api = "UNKNOWN";
+    if (const IRenderBackend* backend = renderer.backend()) {
+        api = backend->describe().api;
+        for (char& c : api) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    }
+    const bool available = api != "OPENGL" && api != "UNKNOWN";
+    page.add(menu::separator("STATUS"));
+    page.add(menu::info("RENDERER", api, "Graphics API the game is running on"));
+    page.add(menu::info("ACTIVE", available ? "YES" : "NOT YET",
+                        available ? "Changes take effect immediately"
+                                  : "Needs the Vulkan or Direct3D 12 renderer (coming soon)"));
+
+    menu::push(settingsMenu_, std::move(page));
+    settingsMenu_.legend = {{"UP/DOWN", "SELECT"}, {"LEFT/RIGHT", "ADJUST"}, {"ESC", "BACK"}};
 }
 
 void Game::appendBindingRows(menu::Page& page) {
@@ -858,7 +891,9 @@ void Game::pollSettingsFile() {
     if (gameState == SETTINGS) {
         const menu::Page* page = settingsMenu_.stack.current();
         const bool onControls = page && page->title == "CONTROLS";
+        const bool onFrameGen = page && page->title == settings::kFrameGenGroup;
         openSettings();
+        if (onFrameGen) openFrameGenSettings();
         if (onControls) {
             menu::Page controls("CONTROLS", "KEYBOARD AND MOUSE BINDINGS");
             appendBindingRows(controls);
@@ -1193,6 +1228,10 @@ void Game::debugOpenMenu(const std::string& name) {
         gameState = MENU;
     } else if (name == "settings") {
         openSettings();
+        gameState = SETTINGS;
+    } else if (name == "framegen") {
+        openSettings();
+        openFrameGenSettings();
         gameState = SETTINGS;
     } else if (name == "maps") {
         openMapSelection();

@@ -18,10 +18,24 @@
 
 namespace menu {
 
+/// Which setting rows appendSettingRows() emits, and where callers may add
+/// their own rows.
+struct SettingRowsOptions {
+    std::string onlyGroup;                ///< empty = every group
+    std::vector<std::string> skipGroups;  ///< groups that live on their own page
+    /// Called after the last row of each group (e.g. to add a submenu link).
+    std::function<void(Page&, const std::string& group)> afterGroup;
+};
+
 /// Settings screen: one row per setting the registry describes, grouped by
 /// "GAMEPLAY" / "VIDEO" / "AUDIO" headers. Key bindings live on the controls
 /// page instead. `onChanged` runs after any value changed (save the file).
 Page buildSettingsPage(const std::vector<settings::SettingDef>& defs,
+                       std::function<void()> onChanged = nullptr,
+                       const SettingRowsOptions& options = SettingRowsOptions());
+
+/// FRAME GENERATION sub-screen: the rows of settings::kFrameGenGroup.
+Page buildFrameGenPage(const std::vector<settings::SettingDef>& defs,
                        std::function<void()> onChanged = nullptr);
 
 /// Only the VIDEO group (for a future "video" sub-screen).
@@ -42,6 +56,9 @@ void appendBindingRows(Page& page, const std::vector<settings::SettingDef>& defs
 void appendSettingRows(Page& page, const std::vector<settings::SettingDef>& defs,
                        const std::function<void()>& onChanged,
                        const std::string& groupFilter = std::string());
+void appendSettingRows(Page& page, const std::vector<settings::SettingDef>& defs,
+                       const std::function<void()>& onChanged,
+                       const SettingRowsOptions& options);
 
 } // namespace menu
 

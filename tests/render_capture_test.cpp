@@ -144,7 +144,7 @@ int capture(const fs::path& out) {
                       [&] { game.debugSetViewForTest(glm::vec3(1.5f, 1.7f, 1.5f), 45.0f, -5.0f); });
     }
 
-    for (const char* menu : {"main", "settings", "maps"}) {
+    for (const char* menu : {"main", "settings", "framegen", "maps"}) {
         renderAndSave(game, out, std::string("menu_") + menu, failures,
                       [&] { game.debugOpenMenu(menu); });
     }

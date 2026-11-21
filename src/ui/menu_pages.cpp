@@ -36,14 +36,28 @@ std::vector<std::string> volumeOptions() {
 void appendSettingRows(Page& page, const std::vector<settings::SettingDef>& defs,
                        const std::function<void()>& onChanged,
                        const std::string& groupFilter) {
+    SettingRowsOptions options;
+    options.onlyGroup = groupFilter;
+    appendSettingRows(page, defs, onChanged, options);
+}
+
+void appendSettingRows(Page& page, const std::vector<settings::SettingDef>& defs,
+                       const std::function<void()>& onChanged,
+                       const SettingRowsOptions& options) {
     std::string group;
+    auto closeGroup = [&]() {
+        if (!group.empty() && options.afterGroup) options.afterGroup(page, group);
+    };
     for (size_t index = 0; index < defs.size(); ++index) {
         const settings::SettingDef& def = defs[index];
-        if (!groupFilter.empty() && def.group != groupFilter) continue;
+        if (!options.onlyGroup.empty() && def.group != options.onlyGroup) continue;
+        if (std::find(options.skipGroups.begin(), options.skipGroups.end(), def.group) !=
+            options.skipGroups.end()) continue;
         if (def.value->type == settings::ValueType::Key) continue;   // controls page
 
         // Group header when the group changes.
         if (def.group != group) {
+            closeGroup();
             group = def.group;
             page.add(separator(group));
         }
@@ -86,14 +100,17 @@ void appendSettingRows(Page& page, const std::vector<settings::SettingDef>& defs
                 break;
             }
 
-            case settings::ValueType::Choice:
-                page.add(cycle(def.label, {"LOW", "BALANCED", "HIGH"}, v.i,
-                               [index, changed](int selected) {
-                                   settings::setChoiceIndex(*settings::gameSettingDefs()[index].value, selected);
+            case settings::ValueType::Choice: {
+                const int count = static_cast<int>(def.choices.size());
+                page.add(cycle(def.label, def.choices, std::min(std::max(v.i, 0), std::max(count - 1, 0)),
+                               [index, count, changed](int selected) {
+                                   settings::setChoiceIndex(*settings::gameSettingDefs()[index].value,
+                                                            selected, count);
                                    changed();
                                },
                                def.help));
                 break;
+            }
 
             case settings::ValueType::Volume:
                 page.add(cycle(def.label, volumeOptions(), v.i / 10,
@@ -108,12 +125,21 @@ void appendSettingRows(Page& page, const std::vector<settings::SettingDef>& defs
                 break;   // rebinding happens on the controls page
         }
     }
+    closeGroup();
 }
 
 Page buildSettingsPage(const std::vector<settings::SettingDef>& defs,
-                       std::function<void()> onChanged) {
+                       std::function<void()> onChanged,
+                       const SettingRowsOptions& options) {
     Page page("SETTINGS", "CHANGES ARE SAVED AUTOMATICALLY");
-    appendSettingRows(page, defs, onChanged);
+    appendSettingRows(page, defs, onChanged, options);
+    return page;
+}
+
+Page buildFrameGenPage(const std::vector<settings::SettingDef>& defs,
+                       std::function<void()> onChanged) {
+    Page page(settings::kFrameGenGroup, "CHANGES ARE SAVED AUTOMATICALLY");
+    appendSettingRows(page, defs, onChanged, std::string(settings::kFrameGenGroup));
     return page;
 }
 
