@@ -473,6 +473,12 @@ int main(int argc, char* argv[]) {
             const ServerBombManager::Snapshot bomb = bombManager.snapshot(player->mapName);
             if (bomb.valid && (bomb.roundEnded || bomb.roundActive)) {
                 player->velocity = glm::vec3(0.0f);
+                // Self-heal a client that still thinks it is alive: send the
+                // authoritative death so it enters spectator instead of
+                // walking around with a body everyone else sees frozen.
+                server.broadcastPlayerStateToMap(
+                    player->id, player->mapName, player->position, player->velocity,
+                    player->yaw, player->pitch, 0.0f, true, true);
                 return;
             }
         }

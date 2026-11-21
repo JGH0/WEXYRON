@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cstddef>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -1022,19 +1023,25 @@ void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_
         }
         
         case PACKET_PLAYER_INPUT: {
-            if (size < sizeof(PlayerInputPacket)) return;
-            
-            PlayerInputPacket* input = (PlayerInputPacket*)data;
-            uint32_t id = input->header.clientId;
-            
+            // Accept an input from a client built before the trailing inMenu
+            // flag existed too: a mixed-version LAN match must not turn into
+            // one-way movement (the newer server would silently drop every
+            // input from the older client and freeze its body at spawn).
+            constexpr size_t kLegacyInputSize = offsetof(PlayerInputPacket, inMenu);
+            if (size < kLegacyInputSize) return;
+
+            PlayerInputPacket input{};
+            std::memcpy(&input, data, std::min(size, sizeof(input)));
+            const uint32_t id = input.header.clientId;
+
             if (players.find(id) != players.end()) {
                 ServerPlayer& player = players[id];
-                player.lastInputSequence = input->header.sequence;
+                player.lastInputSequence = input.header.sequence;
                 player.inputIdle = 0.0f;
-                
+
                 // Notify game logic
                 if (onPlayerInput) {
-                    onPlayerInput(id, *input);
+                    onPlayerInput(id, input);
                 }
             }
             break;

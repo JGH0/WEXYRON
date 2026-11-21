@@ -207,6 +207,15 @@ void ServerBombManager::onRoundStart(const std::string& mapName, int gameMode,
     // After the match has been won, only an explicit fresh match may start
     // another round (a late round-start packet must not revive it).
     if (state.matchOver && !freshMatch) return;
+    // A client that still drives round starts (older build) may send this
+    // just after the server already started the same round. Treat it as a
+    // request for the current state, not a reset (a duplicate reset respawned
+    // everyone a second time and skipped a round id).
+    if (!freshMatch && state.roundActive && !state.roundEnded &&
+        state.roundAge < 2.0f) {
+        broadcastState(mapName, state, *server_);
+        return;
+    }
     resetRound(state, gameMode, attackingTeam, matchFormat);
     broadcastState(mapName, state, *server_);
 }

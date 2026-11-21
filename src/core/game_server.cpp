@@ -80,11 +80,11 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
             // isDead the player dies where they stand (after a hit), and the
             // respawned state it sends a few seconds later brings them back.
             if (packet.isDead || packet.health <= 0.0f) {
-                // Ignore a death state that belongs to the life before our
-                // respawn. The server sends it until it processes our next
-                // alive input; acting on it made the player respawn and die
-                // again in a loop right after being killed.
-                if (spawnProtectionTimer_ > 0.0f) return;
+                // The server is authoritative on death. Do not ignore this
+                // because of the local spawn-protection timer: if the server
+                // considers us dead, staying alive locally would freeze our
+                // body on everyone else's screen (and the server would never
+                // accept our movement again until the next round).
                 if (playerHealth > 0.0f) playerHealth = 0.0f;
                 if (!isDead) dieLocally();
             } else if (isDead) {
