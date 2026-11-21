@@ -56,7 +56,8 @@ target_compile_definitions(nvrhi_spike PRIVATE SPIKE_SHADER_DIR="${SHADER_OUT}")
 # Backend libraries before the common nvrhi library: GNU ld resolves static
 # archives in one pass, left to right.
 target_link_libraries(nvrhi_spike PRIVATE nvrhi_vk)
-if(WIN32)
+if(TARGET nvrhi_d3d12)   # not with MinGW (NVRHI_WITH_DX12=OFF)
     target_link_libraries(nvrhi_spike PRIVATE nvrhi_d3d12 d3d12 dxgi)
+    target_compile_definitions(nvrhi_spike PRIVATE SPIKE_WITH_D3D12)
 endif()
 target_link_libraries(nvrhi_spike PRIVATE nvrhi glfw Vulkan::Vulkan)

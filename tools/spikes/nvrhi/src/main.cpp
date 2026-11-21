@@ -24,7 +24,7 @@ VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 #include <algorithm>
 #include <memory>
 
-#ifdef _WIN32
+#if defined(_WIN32) && defined(SPIKE_WITH_D3D12)
 #  define GLFW_EXPOSE_NATIVE_WIN32
 #  include <GLFW/glfw3native.h>
 #  include <d3d12.h>
@@ -350,7 +350,7 @@ private:
     std::vector<nvrhi::FramebufferHandle> framebuffers_;
 };
 
-#ifdef _WIN32
+#if defined(_WIN32) && defined(SPIKE_WITH_D3D12)
 // ── Direct3D 12 ──────────────────────────────────────────────────────────────
 class D3D12Backend final : public Backend {
 public:
@@ -507,7 +507,7 @@ int main(int argc, char** argv) {
 
     std::unique_ptr<Backend> backend;
     if (api == "vulkan") backend = std::make_unique<VulkanBackend>();
-#ifdef _WIN32
+#if defined(_WIN32) && defined(SPIKE_WITH_D3D12)
     else if (api == "dx12") backend = std::make_unique<D3D12Backend>();
 #endif
     if (!backend) { std::fprintf(stderr, "unsupported api %s\n", api.c_str()); return 1; }
