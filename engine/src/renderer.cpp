@@ -11,6 +11,7 @@
 #include "engine/gltf_model.hpp"
 #include <iostream>
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <cctype>
@@ -526,7 +527,22 @@ void Renderer::endFrame() {
 
     // Each space has its own view-projection. UI states only call
     // setProjection(), which must not disturb the 3D camera, so keep them apart.
+    // 3D this frame, and whether the camera history is broken: a menu frame
+    // in between, or an explicit cut from the game.
+    const bool has3D = !mapBatch.instances.empty() || !batches_[WORLD_ALPHA].instances.empty() ||
+                       !worldModels_.empty();
+    const double now = std::chrono::duration<double>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+
     FramePacket frame;
+    frame.has3D = has3D;
+    frame.cameraCut = has3D && (cameraCutPending_ || !lastFrameHad3D_);
+    frame.frameTime = lastEndFrameTime_ > 0.0 ? static_cast<float>(now - lastEndFrameTime_) : 0.0f;
+    if (has3D) cameraCutPending_ = false;
+    lastFrameHad3D_ = has3D;
+    lastEndFrameTime_ = now;
+    frame.worldView = worldView_;
+    frame.worldProjection = worldProjection_;
     frame.viewportX = viewportX_;
     frame.viewportY = viewportY_;
     frame.viewportW = viewportW_;

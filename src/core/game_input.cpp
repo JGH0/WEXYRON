@@ -348,6 +348,7 @@ void Game::processGameInput(float deltaTime) {
 
     // Unstuck (U by default, rebindable) - move player to a safe centre spot.
     if (bindingDown(keyBindings.unstuck)) {
+        renderer.markCameraCut();   // teleport: no motion history
         playerPos = glm::vec3(0.0f, 2.0f, 0.0f); // Reset to center well above floor
         playerVelocity = glm::vec3(0.0f, 0.0f, 0.0f); // Stop all movement
         stance_ = STANCE_STANDING;

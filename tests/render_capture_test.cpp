@@ -230,6 +230,66 @@ int compare(const fs::path& ref, const fs::path& out, double maxMean) {
 
 } // namespace
 
+// Motion vectors: turn the camera between two frames and check that warping
+// the first frame with the second frame's motion vectors reproduces the second
+// frame far better than the unwarped first frame does (sign and scale right).
+int motionCheck() {
+    useFreshSettingsFile();
+    Game game(800, 600);
+    game.init();
+    if (!game.debugStartMapForTest("arena.map")) return 1;
+    game.debugStepForTest(30, 1.0f / 60.0f);
+    const glm::vec3 dims = game.debugCurrentMap()->getDimensions();
+    const glm::vec3 eye(-dims.x * 0.45f, std::max(4.0f, dims.y * 0.8f), -dims.z * 0.45f);
+
+    auto shot = [&](float yaw, float pitch) {
+        game.debugSetViewForTest(eye, yaw, pitch);
+        glfwSetTime(1.0);
+        game.debugRenderer().requestCapture();
+        game.render();
+        CapturedImage img;
+        game.debugRenderer().takeCapture(img);
+        return img;
+    };
+    shot(45.0f, -25.0f);                       // history
+    const CapturedImage a = shot(45.0f, -25.0f);
+    const CapturedImage b = shot(46.5f, -24.0f);
+    if (b.motion.empty()) {
+        std::printf("motion: backend has no motion vectors (OpenGL) - skipped\n");
+        game.cleanup();
+        return 0;
+    }
+
+    // Compare only the 3D region (the HUD layer is not in the motion target).
+    const int x0 = b.width / 8, x1 = b.width * 5 / 8, y0 = b.height / 4, y1 = b.height * 3 / 4;
+    double warped = 0.0, still = 0.0;
+    float maxMotion = 0.0f;
+    int samples = 0;
+    for (int y = y0; y < y1; ++y) {
+        for (int x = x0; x < x1; ++x) {
+            const size_t i = static_cast<size_t>(y) * b.width + x;
+            const float mx = b.motion[i * 2], my = b.motion[i * 2 + 1];
+            maxMotion = std::max(maxMotion, std::max(std::abs(mx), std::abs(my)));
+            const int px = static_cast<int>(std::lround(x + mx * b.width));
+            const int py = static_cast<int>(std::lround(y + my * b.height));
+            if (px < 0 || py < 0 || px >= a.width || py >= a.height) continue;
+            const size_t j = static_cast<size_t>(py) * a.width + px;
+            for (int c = 0; c < 3; ++c) {
+                warped += std::abs(int(b.rgb[i * 3 + c]) - int(a.rgb[j * 3 + c]));
+                still += std::abs(int(b.rgb[i * 3 + c]) - int(a.rgb[i * 3 + c]));
+            }
+            ++samples;
+        }
+    }
+    warped /= std::max(1, samples) * 3.0;
+    still /= std::max(1, samples) * 3.0;
+    const bool ok = samples > 0 && maxMotion > 0.001f && warped < still * 0.5;
+    std::printf("motion %s: max |mv| %.4f uv, error without motion %.2f, reprojected %.2f (%d px)\n",
+                ok ? "ok" : "FAIL", maxMotion, still, warped, samples);
+    game.cleanup();
+    return ok ? 0 : 1;
+}
+
 // Average frame time with vsync off: arena overview with bots, 600 frames.
 int bench() {
     useFreshSettingsFile();
@@ -261,9 +321,11 @@ int main(int argc, char** argv) {
     const std::string mode = argc > 1 ? argv[1] : "";
     if (mode == "capture" && argc > 2) return capture(argv[2]);
     if (mode == "bench") return bench();
+    if (mode == "motion") return motionCheck();
     if (mode == "compare" && argc > 3) return compare(argv[2], argv[3], argc > 4 ? std::atof(argv[4]) : 0.5);
     std::printf("usage: render_capture_test capture <outdir>\n"
                 "       render_capture_test compare <refdir> <outdir> [maxMeanDiff]\n"
-                "       render_capture_test bench\n");
+                "       render_capture_test bench\n"
+                "       render_capture_test motion\n");
     return 2;
 }

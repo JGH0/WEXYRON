@@ -2,10 +2,15 @@
  * @file nvrhi_backend.cpp
  * @brief IRenderBackend on NVRHI (Vulkan now; Direct3D 12 uses the same code).
  *
- * Mirrors the OpenGL backend pass for pass so both draw the same image
- * (tests/render_capture_test.cpp compares them):
- *   clear -> map + per-frame boxes -> glTF models -> viewmodel (cleared depth)
- *   -> UI ranges in painter's order.
+ * Draws the same image as the OpenGL backend (tests/render_capture_test.cpp
+ * compares them), but keeps what frame generation needs apart:
+ *   scene pass  -> HUD-less colour + motion vectors + depth
+ *                  (map + per-frame boxes, glTF models, then the viewmodel in
+ *                  its own sliver of the depth range instead of a depth clear,
+ *                  so the depth buffer stays valid for the whole image)
+ *   UI pass     -> HUD layer, premultiplied alpha, painter's order
+ *   composite   -> HUD over scene into the back buffer (same maths as drawing
+ *                  the HUD straight onto the scene)
  * All buffer uploads are recorded first, before any draw, because a copy ends
  * the render pass.
  *
@@ -31,8 +36,11 @@ bool vulkanBackendCompiledIn() { return false; }
 
 #include <nvrhi/utils.h>
 
+#include "shaders/g_box_ps_mv_spirv.h"
 #include "shaders/g_box_ps_spirv.h"
 #include "shaders/g_box_vs_spirv.h"
+#include "shaders/g_composite_ps_spirv.h"
+#include "shaders/g_composite_vs_spirv.h"
 #include "shaders/g_gltf_ps_spirv.h"
 #include "shaders/g_gltf_vs_spirv.h"
 
@@ -42,6 +50,7 @@ bool vulkanBackendCompiledIn() { return false; }
 #include <cstring>
 #include <iostream>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -60,7 +69,10 @@ const float kUnitQuad[] = {
 struct GltfDrawConstants {
     glm::mat4 model;
     glm::mat4 viewProjection;
+    glm::mat4 prevModel;
+    glm::mat4 prevViewProjection;
     glm::mat4 bones[kGltfMaxBones];
+    glm::mat4 prevBones[kGltfMaxBones];
     glm::vec4 baseColorFactor;
     glm::vec4 emissiveFactor;
     glm::vec4 tint;
@@ -76,8 +88,20 @@ struct GltfDrawConstants {
     int32_t hasEmissiveTexture;
     int32_t pad;
 };
-static_assert(sizeof(GltfDrawConstants) == 64 * (2 + kGltfMaxBones) + 16 * 6 + 32,
+static_assert(sizeof(GltfDrawConstants) == 64 * (4 + 2 * kGltfMaxBones) + 16 * 6 + 32,
               "must match DrawBlock in engine/shaders/gltf.hlsl");
+
+/// FrameBlock of box.hlsl.
+struct FrameConstants {
+    glm::mat4 viewProjection;
+    glm::mat4 prevViewProjection;
+};
+
+/// The first-person viewmodel is drawn into [0, kViewmodelDepth] of the depth
+/// range and the world into [kViewmodelDepth, 1]: the gun always wins the depth
+/// test (as with the old depth clear) and the depth buffer still describes the
+/// whole image for frame generation. 1e-4 keeps the world's depth precision.
+constexpr float kViewmodelDepth = 1e-4f;
 
 /// Box faces are wound counter-clockwise in GL's Y-up clip space. NVRHI sets
 /// a D3D-style (Y-up) viewport on Vulkan, so the same convention applies.
@@ -181,15 +205,25 @@ public:
     }
 
 private:
-    bool createPipelines(const nvrhi::FramebufferInfoEx& info);
+    /// Where a glTF instance's nodes were last frame (motion vectors).
+    struct PrevPose {
+        uint64_t frame = 0;
+        std::vector<glm::mat4> models;
+        std::vector<std::vector<glm::mat4>> bones;
+    };
+
+    bool createPipelines();
     void ensureTargets();
     void upload(DynamicBuffer& target, const std::vector<BoxInstance>* data, const char* name);
     const NvrhiGltfData& gltfData(const GltfModel& model);
     void rebuildBoxBindingSet();
 
-    void drawBoxes(nvrhi::IGraphicsPipeline* pipeline, nvrhi::IBuffer* instances,
+    void drawBoxes(nvrhi::IGraphicsPipeline* pipeline, nvrhi::IFramebuffer* framebuffer,
+                   const nvrhi::Viewport& viewport, nvrhi::IBuffer* instances,
                    uint32_t first, uint32_t count);
-    void drawModels(const std::vector<ModelDraw>* draws, const glm::mat4& viewProjection);
+    void drawModels(const std::vector<ModelDraw>* draws, const glm::mat4& viewProjection,
+                    const glm::mat4& prevViewProjection, const nvrhi::Viewport& viewport, bool cut);
+    void writeFrameConstants(const glm::mat4& viewProjection, const glm::mat4& prevViewProjection);
     void readBack();
 
     std::unique_ptr<NvrhiDeviceManager> manager_;
@@ -198,11 +232,12 @@ private:
     nvrhi::CommandListHandle cl_;
     std::shared_ptr<bool> alive_ = std::make_shared<bool>(false);
 
-    nvrhi::ShaderHandle boxVS_, boxPS_, gltfVS_, gltfPS_;
+    nvrhi::ShaderHandle boxVS_, boxPS_, boxPSMotion_, gltfVS_, gltfPS_, compositeVS_, compositePS_;
     nvrhi::InputLayoutHandle boxLayout_, gltfLayout_;
-    nvrhi::BindingLayoutHandle boxBindings_, gltfBindings_;
-    nvrhi::GraphicsPipelineHandle boxWorld_, boxUiOpaque_, boxUiBlend_;
+    nvrhi::BindingLayoutHandle boxBindings_, gltfBindings_, compositeBindings_;
+    nvrhi::GraphicsPipelineHandle boxWorld_, boxUiOpaque_, boxUiBlend_, composite_;
     nvrhi::GraphicsPipelineHandle gltfPipelines_[2][2];   ///< [doubleSided][blend]
+    nvrhi::BindingSetHandle compositeSet_;
 
     nvrhi::BufferHandle quadBuffer_, frameConstants_, gltfConstants_;
     nvrhi::TextureHandle textureArray_, fontTexture_, whiteTexture_;
@@ -212,17 +247,26 @@ private:
     DynamicBuffer staticBoxes_, dynamicBoxes_, viewmodelBoxes_, uiBoxes_;
     std::uint64_t uploadedStaticRevision_ = ~std::uint64_t(0);
 
-    nvrhi::TextureHandle depth_;
-    std::vector<nvrhi::FramebufferHandle> framebuffers_;   ///< per back buffer
+    // Render targets (window size). Frame generation reads sceneColor_ (HUD-
+    // less), depth_, motion_ (UV units, previous - current) and ui_.
+    nvrhi::TextureHandle sceneColor_, motion_, ui_, depth_;
+    nvrhi::FramebufferHandle sceneFramebuffer_, uiFramebuffer_;
+    std::vector<nvrhi::FramebufferHandle> backFramebuffers_;   ///< per back buffer
     uint64_t targetsGeneration_ = 0;
-    nvrhi::IFramebuffer* framebuffer_ = nullptr;           ///< this frame's target
-    nvrhi::Viewport viewport_;
+    nvrhi::IFramebuffer* backFramebuffer_ = nullptr;           ///< this frame's
     bool frameStarted_ = false;
+
+    // History for motion vectors.
+    bool hasHistory_ = false;
+    glm::mat4 prevWorldViewProjection_{1.0f};
+    glm::mat4 prevViewmodelViewProjection_{1.0f};
+    uint64_t frameIndex_ = 0;
+    std::unordered_map<const GltfInstance*, PrevPose> prevPoses_;
 
     bool captureRequested_ = false;
     bool captureReady_ = false;
     CapturedImage capture_;
-    nvrhi::StagingTextureHandle captureStaging_;
+    nvrhi::StagingTextureHandle captureStaging_, motionStaging_;
 
     std::vector<GltfNodeDraw> nodeDraws_;
 };
@@ -238,9 +282,13 @@ bool NvrhiRenderBackend::init() {
     };
     boxVS_ = shader(nvrhi::ShaderType::Vertex, "main_vs", g_box_vs_spirv, g_box_vs_spirv_size);
     boxPS_ = shader(nvrhi::ShaderType::Pixel, "main_ps", g_box_ps_spirv, g_box_ps_spirv_size);
+    boxPSMotion_ = shader(nvrhi::ShaderType::Pixel, "main_ps_mv", g_box_ps_mv_spirv, g_box_ps_mv_spirv_size);
+    compositeVS_ = shader(nvrhi::ShaderType::Vertex, "main_vs", g_composite_vs_spirv, g_composite_vs_spirv_size);
+    compositePS_ = shader(nvrhi::ShaderType::Pixel, "main_ps", g_composite_ps_spirv, g_composite_ps_spirv_size);
     gltfVS_ = shader(nvrhi::ShaderType::Vertex, "main_vs", g_gltf_vs_spirv, g_gltf_vs_spirv_size);
     gltfPS_ = shader(nvrhi::ShaderType::Pixel, "main_ps", g_gltf_ps_spirv, g_gltf_ps_spirv_size);
-    if (!boxVS_ || !boxPS_ || !gltfVS_ || !gltfPS_) return false;
+    if (!boxVS_ || !boxPS_ || !boxPSMotion_ || !gltfVS_ || !gltfPS_ || !compositeVS_ || !compositePS_)
+        return false;
 
     // Box stream: slot 0 = unit quad, slot 1 = one BoxInstance per face.
     const uint32_t quadStride = 4 * sizeof(float);
@@ -287,11 +335,16 @@ bool NvrhiRenderBackend::init() {
     boxBindings_ = device_->createBindingLayout(layout);
     gltfBindings_ = device_->createBindingLayout(layout);
 
+    nvrhi::BindingLayoutDesc compositeLayout;
+    compositeLayout.visibility = nvrhi::ShaderType::Pixel;
+    compositeLayout.bindings = {nvrhi::BindingLayoutItem::Texture_SRV(0), nvrhi::BindingLayoutItem::Texture_SRV(1)};
+    compositeBindings_ = device_->createBindingLayout(compositeLayout);
+
     quadBuffer_ = device_->createBuffer(nvrhi::BufferDesc().setByteSize(sizeof(kUnitQuad))
         .setIsVertexBuffer(true).setInitialState(nvrhi::ResourceStates::VertexBuffer)
         .setKeepInitialState(true).setDebugName("unit quad"));
     frameConstants_ = device_->createBuffer(nvrhi::utils::CreateVolatileConstantBufferDesc(
-        sizeof(glm::mat4), "frame constants", 256));
+        sizeof(FrameConstants), "frame constants", 256));
     gltfConstants_ = device_->createBuffer(nvrhi::utils::CreateVolatileConstantBufferDesc(
         sizeof(GltfDrawConstants), "glTF draw constants", 4096));
 
@@ -357,10 +410,11 @@ void NvrhiRenderBackend::rebuildBoxBindingSet() {
     boxSet_ = device_->createBindingSet(set, boxBindings_);
 }
 
-bool NvrhiRenderBackend::createPipelines(const nvrhi::FramebufferInfoEx& info) {
-    auto pipeline = [&](nvrhi::IShader* vs, nvrhi::IShader* ps, nvrhi::IInputLayout* layout,
-                        nvrhi::IBindingLayout* bindings, bool depth, bool depthWrite,
-                        nvrhi::RasterCullMode cull, bool blend) {
+bool NvrhiRenderBackend::createPipelines() {
+    struct Blend { bool enable; nvrhi::BlendFactor srcAlpha; };
+    auto pipeline = [&](nvrhi::IFramebuffer* target, nvrhi::IShader* vs, nvrhi::IShader* ps,
+                        nvrhi::IInputLayout* layout, nvrhi::IBindingLayout* bindings, bool depth,
+                        bool depthWrite, nvrhi::RasterCullMode cull, Blend blend) {
         nvrhi::GraphicsPipelineDesc desc;
         desc.VS = vs;
         desc.PS = ps;
@@ -369,47 +423,74 @@ bool NvrhiRenderBackend::createPipelines(const nvrhi::FramebufferInfoEx& info) {
         desc.renderState.rasterState.setCullMode(cull).setFrontCounterClockwise(kFrontCounterClockwise);
         desc.renderState.depthStencilState.setDepthTestEnable(depth).setDepthWriteEnable(depthWrite)
             .setDepthFunc(nvrhi::ComparisonFunc::LessOrEqual).setStencilEnable(false);
-        auto& target = desc.renderState.blendState.targets[0];
-        target.setBlendEnable(blend)
+        // Colour: classic "over". Alpha: SrcAlpha for the scene (as GL), One
+        // for the UI layer, which makes it premultiplied (see composite.hlsl).
+        // The motion target (scene, index 1) is never blended.
+        desc.renderState.blendState.targets[0].setBlendEnable(blend.enable)
             .setSrcBlend(nvrhi::BlendFactor::SrcAlpha).setDestBlend(nvrhi::BlendFactor::InvSrcAlpha)
-            .setSrcBlendAlpha(nvrhi::BlendFactor::SrcAlpha).setDestBlendAlpha(nvrhi::BlendFactor::InvSrcAlpha);
-        return device_->createGraphicsPipeline(desc, info);
+            .setSrcBlendAlpha(blend.srcAlpha).setDestBlendAlpha(nvrhi::BlendFactor::InvSrcAlpha);
+        return device_->createGraphicsPipeline(desc, target->getFramebufferInfo());
     };
     using Cull = nvrhi::RasterCullMode;
-    // World: depth-tested, depth-writing, back faces culled, no blending
+    const Blend off{false, nvrhi::BlendFactor::SrcAlpha};
+    // Scene: depth-tested, depth-writing, back faces culled, no blending
     // (both box streams are solid geometry, as in the GL backend).
-    boxWorld_ = pipeline(boxVS_, boxPS_, boxLayout_, boxBindings_, true, true, Cull::Back, false);
-    // UI: painter's order, no depth, single-sided planes are never culled.
-    boxUiOpaque_ = pipeline(boxVS_, boxPS_, boxLayout_, boxBindings_, false, false, Cull::None, false);
-    boxUiBlend_ = pipeline(boxVS_, boxPS_, boxLayout_, boxBindings_, false, false, Cull::None, true);
+    boxWorld_ = pipeline(sceneFramebuffer_, boxVS_, boxPSMotion_, boxLayout_, boxBindings_, true, true,
+                         Cull::Back, off);
+    // UI layer: painter's order, no depth, single-sided planes are never culled.
+    boxUiOpaque_ = pipeline(uiFramebuffer_, boxVS_, boxPS_, boxLayout_, boxBindings_, false, false,
+                            Cull::None, off);
+    boxUiBlend_ = pipeline(uiFramebuffer_, boxVS_, boxPS_, boxLayout_, boxBindings_, false, false,
+                           Cull::None, Blend{true, nvrhi::BlendFactor::One});
     for (int doubleSided = 0; doubleSided < 2; ++doubleSided) {
         for (int blend = 0; blend < 2; ++blend) {
             // BLEND materials are drawn without depth writes (as in GL).
             gltfPipelines_[doubleSided][blend] =
-                pipeline(gltfVS_, gltfPS_, gltfLayout_, gltfBindings_, true, blend == 0,
-                         doubleSided ? Cull::None : Cull::Back, blend == 1);
+                pipeline(sceneFramebuffer_, gltfVS_, gltfPS_, gltfLayout_, gltfBindings_, true, blend == 0,
+                         doubleSided ? Cull::None : Cull::Back, Blend{blend == 1, nvrhi::BlendFactor::SrcAlpha});
         }
     }
-    return boxWorld_ && boxUiOpaque_ && boxUiBlend_ && gltfPipelines_[0][0] && gltfPipelines_[1][1];
+    composite_ = pipeline(backFramebuffer_, compositeVS_, compositePS_, nullptr, compositeBindings_, false,
+                          false, Cull::None, off);
+    return boxWorld_ && boxUiOpaque_ && boxUiBlend_ && composite_ && gltfPipelines_[0][0] &&
+           gltfPipelines_[1][1];
 }
 
 void NvrhiRenderBackend::ensureTargets() {
-    if (targetsGeneration_ != manager_->swapchainGeneration() || !depth_) {
+    const bool resized = targetsGeneration_ != manager_->swapchainGeneration() || !depth_;
+    if (resized) {
         targetsGeneration_ = manager_->swapchainGeneration();
-        framebuffers_.assign(manager_->backBufferCount(), nullptr);
-        depth_ = device_->createTexture(nvrhi::TextureDesc().setWidth(manager_->width())
-            .setHeight(manager_->height()).setFormat(nvrhi::Format::D32).setIsRenderTarget(true)
+        const uint32_t w = manager_->width(), h = manager_->height();
+        auto target = [&](nvrhi::Format format, const char* name, nvrhi::Color clear) {
+            return device_->createTexture(nvrhi::TextureDesc().setWidth(w).setHeight(h).setFormat(format)
+                .setIsRenderTarget(true).setInitialState(nvrhi::ResourceStates::RenderTarget)
+                .setKeepInitialState(true).setClearValue(clear).setUseClearValue(true).setDebugName(name));
+        };
+        // The HUD-less scene uses the back buffer's format (frame generation
+        // SDKs expect that); the HUD layer needs alpha.
+        sceneColor_ = target(manager_->backBuffer()->getDesc().format, "scene colour", nvrhi::Color(0.0f));
+        motion_ = target(nvrhi::Format::RG16_FLOAT, "motion vectors", nvrhi::Color(0.0f));
+        ui_ = target(nvrhi::Format::RGBA8_UNORM, "hud", nvrhi::Color(0.0f));
+        depth_ = device_->createTexture(nvrhi::TextureDesc().setWidth(w).setHeight(h)
+            .setFormat(nvrhi::Format::D32).setIsRenderTarget(true)
             .setInitialState(nvrhi::ResourceStates::DepthWrite).setKeepInitialState(true)
             .setClearValue(nvrhi::Color(1.0f)).setUseClearValue(true).setDebugName("depth"));
+        sceneFramebuffer_ = device_->createFramebuffer(nvrhi::FramebufferDesc()
+            .addColorAttachment(sceneColor_).addColorAttachment(motion_).setDepthAttachment(depth_));
+        uiFramebuffer_ = device_->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(ui_));
+        backFramebuffers_.assign(manager_->backBufferCount(), nullptr);
+
+        nvrhi::BindingSetDesc set;
+        set.bindings = {nvrhi::BindingSetItem::Texture_SRV(0, sceneColor_),
+                        nvrhi::BindingSetItem::Texture_SRV(1, ui_)};
+        compositeSet_ = device_->createBindingSet(set, compositeBindings_);
         captureStaging_ = nullptr;
+        motionStaging_ = nullptr;
     }
-    nvrhi::FramebufferHandle& fb = framebuffers_[manager_->backBufferIndex()];
-    if (!fb) {
-        fb = device_->createFramebuffer(nvrhi::FramebufferDesc()
-            .addColorAttachment(manager_->backBuffer()).setDepthAttachment(depth_));
-    }
-    framebuffer_ = fb;
-    if (!boxWorld_) createPipelines(framebuffer_->getFramebufferInfo());
+    nvrhi::FramebufferHandle& fb = backFramebuffers_[manager_->backBufferIndex()];
+    if (!fb) fb = device_->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(manager_->backBuffer()));
+    backFramebuffer_ = fb;
+    if (!boxWorld_) createPipelines();
 }
 
 void NvrhiRenderBackend::upload(DynamicBuffer& target, const std::vector<BoxInstance>* data,
@@ -505,13 +586,20 @@ const NvrhiGltfData& NvrhiRenderBackend::gltfData(const GltfModel& model) {
     return *static_cast<NvrhiGltfData*>(model.gpuData());
 }
 
-void NvrhiRenderBackend::drawBoxes(nvrhi::IGraphicsPipeline* pipeline, nvrhi::IBuffer* instances,
+void NvrhiRenderBackend::writeFrameConstants(const glm::mat4& viewProjection,
+                                             const glm::mat4& prevViewProjection) {
+    const FrameConstants c{viewProjection, prevViewProjection};
+    cl_->writeBuffer(frameConstants_, &c, sizeof(c));
+}
+
+void NvrhiRenderBackend::drawBoxes(nvrhi::IGraphicsPipeline* pipeline, nvrhi::IFramebuffer* framebuffer,
+                                   const nvrhi::Viewport& viewport, nvrhi::IBuffer* instances,
                                    uint32_t first, uint32_t count) {
     if (!pipeline || !instances || count == 0) return;
     nvrhi::GraphicsState state;
     state.pipeline = pipeline;
-    state.framebuffer = framebuffer_;
-    state.viewport.addViewportAndScissorRect(viewport_);
+    state.framebuffer = framebuffer;
+    state.viewport.addViewportAndScissorRect(viewport);
     state.bindings = {boxSet_};
     state.vertexBuffers = {
         nvrhi::VertexBufferBinding().setBuffer(quadBuffer_).setSlot(0).setOffset(0),
@@ -521,16 +609,20 @@ void NvrhiRenderBackend::drawBoxes(nvrhi::IGraphicsPipeline* pipeline, nvrhi::IB
     cl_->draw(nvrhi::DrawArguments().setVertexCount(6).setInstanceCount(count).setStartInstanceLocation(first));
 }
 
-void NvrhiRenderBackend::drawModels(const std::vector<ModelDraw>* draws, const glm::mat4& viewProjection) {
+void NvrhiRenderBackend::drawModels(const std::vector<ModelDraw>* draws, const glm::mat4& viewProjection,
+                                    const glm::mat4& prevViewProjection, const nvrhi::Viewport& viewport,
+                                    bool cut) {
     if (!draws) return;
     GltfDrawConstants c{};
     c.viewProjection = viewProjection;
+    c.prevViewProjection = prevViewProjection;
     c.lightDir = glm::vec4(glm::normalize(glm::vec3(0.4f, 0.8f, 0.5f)), 0.0f);
     c.lightColor = glm::vec4(glm::vec3(0.95f), 0.0f);
     const glm::mat4 inverseViewProjection = glm::inverse(viewProjection);
     const glm::vec4 camera = inverseViewProjection * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
     c.cameraPos = glm::vec4(camera.w != 0.0f ? glm::vec3(camera) / camera.w : glm::vec3(0.0f), 1.0f);
     for (glm::mat4& bone : c.bones) bone = glm::mat4(1.0f);
+    for (glm::mat4& bone : c.prevBones) bone = glm::mat4(1.0f);
 
     for (const ModelDraw& d : *draws) {
         if (!d.model || !d.instance || !d.model->isLoaded()) continue;
@@ -539,11 +631,26 @@ void NvrhiRenderBackend::drawModels(const std::vector<ModelDraw>* draws, const g
         model.collectNodeDraws(*d.instance, d.transform, nodeDraws_);
         c.tint = glm::vec4(d.tint, 0.0f);
 
+        // Where these nodes were last frame; without history, where they are.
+        PrevPose& prev = prevPoses_[d.instance];
+        const bool history = !cut && prev.frame + 1 == frameIndex_ && prev.models.size() == nodeDraws_.size();
+        PrevPose next;
+        next.frame = frameIndex_;
+
         const std::vector<GltfMaterial>& materials = model.materials();
-        for (const GltfNodeDraw& node : nodeDraws_) {
+        for (size_t n = 0; n < nodeDraws_.size(); ++n) {
+            const GltfNodeDraw& node = nodeDraws_[n];
             c.model = node.model;
+            c.prevModel = history ? prev.models[n] : node.model;
             c.hasSkin = node.skinned ? 1 : 0;
-            if (node.skinned) std::copy(node.bones.begin(), node.bones.end(), c.bones);
+            if (node.skinned) {
+                std::copy(node.bones.begin(), node.bones.end(), c.bones);
+                const auto& prevBones = (history && prev.bones[n].size() == node.bones.size())
+                                            ? prev.bones[n] : node.bones;
+                std::copy(prevBones.begin(), prevBones.end(), c.prevBones);
+            }
+            next.models.push_back(node.model);
+            next.bones.push_back(node.bones);
 
             const auto& primitives = model.meshes()[static_cast<size_t>(node.mesh)].primitives;
             const auto& gpuPrimitives = gpu.meshes[static_cast<size_t>(node.mesh)];
@@ -568,8 +675,8 @@ void NvrhiRenderBackend::drawModels(const std::vector<ModelDraw>* draws, const g
 
                 nvrhi::GraphicsState state;
                 state.pipeline = gltfPipelines_[material.doubleSided ? 1 : 0][material.alphaMode == 2 ? 1 : 0];
-                state.framebuffer = framebuffer_;
-                state.viewport.addViewportAndScissorRect(viewport_);
+                state.framebuffer = sceneFramebuffer_;
+                state.viewport.addViewportAndScissorRect(viewport);
                 state.bindings = {gpu.materialSets[setIndex]};
                 state.vertexBuffers = {nvrhi::VertexBufferBinding().setBuffer(prim.vertexBuffer).setSlot(0)};
                 state.indexBuffer = nvrhi::IndexBufferBinding().setBuffer(prim.indexBuffer)
@@ -578,6 +685,7 @@ void NvrhiRenderBackend::drawModels(const std::vector<ModelDraw>* draws, const g
                 cl_->drawIndexed(nvrhi::DrawArguments().setVertexCount(prim.indexCount));
             }
         }
+        prev = std::move(next);
     }
 }
 
@@ -590,9 +698,17 @@ void NvrhiRenderBackend::renderFrame(const FramePacket& frame) {
     // The packet's viewport is in GL window coordinates (origin bottom-left).
     const float fbH = static_cast<float>(manager_->height());
     const float top = fbH - static_cast<float>(frame.viewportY + frame.viewportH);
-    viewport_ = nvrhi::Viewport(static_cast<float>(frame.viewportX),
-                                static_cast<float>(frame.viewportX + frame.viewportW),
-                                top, top + static_cast<float>(frame.viewportH), 0.0f, 1.0f);
+    const float x0 = static_cast<float>(frame.viewportX), x1 = x0 + static_cast<float>(frame.viewportW);
+    const float y1 = top + static_cast<float>(frame.viewportH);
+    const nvrhi::Viewport worldViewport(x0, x1, top, y1, kViewmodelDepth, 1.0f);
+    const nvrhi::Viewport viewmodelViewport(x0, x1, top, y1, 0.0f, kViewmodelDepth);
+    const nvrhi::Viewport uiViewport(x0, x1, top, y1, 0.0f, 1.0f);
+
+    // Motion history: none on the first 3D frame or across a camera cut.
+    ++frameIndex_;
+    const bool cut = frame.cameraCut || !hasHistory_;
+    const glm::mat4 prevWorld = cut ? frame.worldViewProjection : prevWorldViewProjection_;
+    const glm::mat4 prevViewmodel = cut ? frame.viewmodelViewProjection : prevViewmodelViewProjection_;
 
     cl_->open();
 
@@ -612,34 +728,57 @@ void NvrhiRenderBackend::renderFrame(const FramePacket& frame) {
     }
 
     // ── Clear ──
-    nvrhi::utils::ClearColorAttachment(cl_, framebuffer_, 0,
+    cl_->clearTextureFloat(sceneColor_, nvrhi::AllSubresources,
         nvrhi::Color(frame.clearColor.r, frame.clearColor.g, frame.clearColor.b, frame.clearColor.a));
+    cl_->clearTextureFloat(motion_, nvrhi::AllSubresources, nvrhi::Color(0.0f));
+    cl_->clearTextureFloat(ui_, nvrhi::AllSubresources, nvrhi::Color(0.0f));
     cl_->clearDepthStencilTexture(depth_, nvrhi::AllSubresources, true, 1.0f, false, 0);
 
-    // ── World ──
-    cl_->writeBuffer(frameConstants_, glm::value_ptr(frame.worldViewProjection), sizeof(glm::mat4));
-    drawBoxes(boxWorld_, staticBoxes_.buffer, 0, static_cast<uint32_t>(staticCount));
-    drawBoxes(boxWorld_, dynamicBoxes_.buffer, 0,
+    // ── Scene: world ──
+    writeFrameConstants(frame.worldViewProjection, prevWorld);
+    drawBoxes(boxWorld_, sceneFramebuffer_, worldViewport, staticBoxes_.buffer, 0,
+              static_cast<uint32_t>(staticCount));
+    drawBoxes(boxWorld_, sceneFramebuffer_, worldViewport, dynamicBoxes_.buffer, 0,
               static_cast<uint32_t>(frame.worldDynamic ? frame.worldDynamic->size() : 0));
-    drawModels(frame.worldModels, frame.worldViewProjection);
+    drawModels(frame.worldModels, frame.worldViewProjection, prevWorld, worldViewport, cut);
 
-    // ── First-person weapon: own camera, cleared depth ──
+    // ── Scene: first-person weapon, own camera, in front of everything ──
     const size_t viewmodelCount = frame.viewmodelBoxes ? frame.viewmodelBoxes->size() : 0;
     const bool hasViewmodelModels = frame.viewmodelModels && !frame.viewmodelModels->empty();
     if (viewmodelCount > 0 || hasViewmodelModels) {
-        cl_->clearDepthStencilTexture(depth_, nvrhi::AllSubresources, true, 1.0f, false, 0);
-        cl_->writeBuffer(frameConstants_, glm::value_ptr(frame.viewmodelViewProjection), sizeof(glm::mat4));
-        drawBoxes(boxWorld_, viewmodelBoxes_.buffer, 0, static_cast<uint32_t>(viewmodelCount));
-        drawModels(frame.viewmodelModels, frame.viewmodelViewProjection);
+        writeFrameConstants(frame.viewmodelViewProjection, prevViewmodel);
+        drawBoxes(boxWorld_, sceneFramebuffer_, viewmodelViewport, viewmodelBoxes_.buffer, 0,
+                  static_cast<uint32_t>(viewmodelCount));
+        drawModels(frame.viewmodelModels, frame.viewmodelViewProjection, prevViewmodel, viewmodelViewport, cut);
     }
 
-    // ── UI in submission order ──
+    // ── HUD layer in submission order ──
     if (frame.uiRanges && !frame.uiRanges->empty()) {
-        cl_->writeBuffer(frameConstants_, glm::value_ptr(frame.uiViewProjection), sizeof(glm::mat4));
+        writeFrameConstants(frame.uiViewProjection, frame.uiViewProjection);
         for (const UiRange& range : *frame.uiRanges) {
-            drawBoxes(range.blended ? boxUiBlend_ : boxUiOpaque_, uiBoxes_.buffer,
+            drawBoxes(range.blended ? boxUiBlend_ : boxUiOpaque_, uiFramebuffer_, uiViewport, uiBoxes_.buffer,
                       static_cast<uint32_t>(range.first), static_cast<uint32_t>(range.count));
         }
+    }
+
+    // ── Composite HUD over scene into the back buffer ──
+    {
+        nvrhi::GraphicsState state;
+        state.pipeline = composite_;
+        state.framebuffer = backFramebuffer_;
+        state.viewport.addViewportAndScissorRect(nvrhi::Viewport(static_cast<float>(manager_->width()),
+                                                                 static_cast<float>(manager_->height())));
+        state.bindings = {compositeSet_};
+        cl_->setGraphicsState(state);
+        cl_->draw(nvrhi::DrawArguments().setVertexCount(3));
+    }
+
+    // History for the next frame (glTF instances not drawn this frame drop out).
+    hasHistory_ = frame.has3D;
+    prevWorldViewProjection_ = frame.worldViewProjection;
+    prevViewmodelViewProjection_ = frame.viewmodelViewProjection;
+    for (auto it = prevPoses_.begin(); it != prevPoses_.end();) {
+        it = (it->second.frame == frameIndex_) ? std::next(it) : prevPoses_.erase(it);
     }
 
     if (captureRequested_) {
@@ -652,6 +791,16 @@ void NvrhiRenderBackend::renderFrame(const FramePacket& frame) {
             captureStaging_ = device_->createStagingTexture(desc, nvrhi::CpuAccessMode::Read);
         }
         cl_->copyTexture(captureStaging_, nvrhi::TextureSlice(), manager_->backBuffer(), nvrhi::TextureSlice());
+        if (!motionStaging_) {
+            nvrhi::TextureDesc desc = motion_->getDesc();
+            desc.isRenderTarget = false;
+            desc.useClearValue = false;
+            desc.initialState = nvrhi::ResourceStates::CopyDest;
+            desc.keepInitialState = true;
+            desc.debugName = "motion capture";
+            motionStaging_ = device_->createStagingTexture(desc, nvrhi::CpuAccessMode::Read);
+        }
+        cl_->copyTexture(motionStaging_, nvrhi::TextureSlice(), motion_, nvrhi::TextureSlice());
     }
 
     cl_->close();
@@ -682,6 +831,40 @@ void NvrhiRenderBackend::readBack() {
         }
     }
     device_->unmapStagingTexture(captureStaging_);
+
+    // Motion vectors: RG16F -> float.
+    auto halfToFloat = [](uint16_t h) {
+        const uint32_t sign = (h & 0x8000u) << 16, exp = (h >> 10) & 0x1Fu, mant = h & 0x3FFu;
+        uint32_t bits;
+        if (exp == 0) {
+            if (mant == 0) bits = sign;
+            else {   // subnormal
+                int e = -1;
+                uint32_t m = mant;
+                do { ++e; m <<= 1; } while (!(m & 0x400u));
+                bits = sign | ((127 - 15 - e) << 23) | ((m & 0x3FFu) << 13);
+            }
+        } else if (exp == 31) bits = sign | 0x7F800000u | (mant << 13);
+        else bits = sign | ((exp + 112) << 23) | (mant << 13);
+        float f;
+        std::memcpy(&f, &bits, sizeof f);
+        return f;
+    };
+    capture_.motion.clear();
+    if (motionStaging_) {
+        size_t mpitch = 0;
+        const auto* m = static_cast<const unsigned char*>(device_->mapStagingTexture(
+            motionStaging_, nvrhi::TextureSlice(), nvrhi::CpuAccessMode::Read, &mpitch));
+        if (m) {
+            capture_.motion.resize(static_cast<size_t>(desc.width) * desc.height * 2);
+            for (uint32_t y = 0; y < desc.height; ++y) {
+                const auto* row = reinterpret_cast<const uint16_t*>(m + y * mpitch);
+                float* out = capture_.motion.data() + static_cast<size_t>(y) * desc.width * 2;
+                for (uint32_t x = 0; x < desc.width * 2; ++x) out[x] = halfToFloat(row[x]);
+            }
+            device_->unmapStagingTexture(motionStaging_);
+        }
+    }
     captureReady_ = true;
 }
 
@@ -694,18 +877,21 @@ void NvrhiRenderBackend::shutdown() {
     *alive_ = false;   // models still holding GPU copies give them up
     cl_ = nullptr;
     boxSet_ = nullptr;
-    framebuffers_.clear();
-    depth_ = nullptr;
-    captureStaging_ = nullptr;
-    boxWorld_ = boxUiOpaque_ = boxUiBlend_ = nullptr;
+    compositeSet_ = nullptr;
+    prevPoses_.clear();
+    backFramebuffers_.clear();
+    sceneFramebuffer_ = uiFramebuffer_ = nullptr;
+    sceneColor_ = motion_ = ui_ = depth_ = nullptr;
+    captureStaging_ = motionStaging_ = nullptr;
+    boxWorld_ = boxUiOpaque_ = boxUiBlend_ = composite_ = nullptr;
     for (auto& row : gltfPipelines_) for (auto& p : row) p = nullptr;
     staticBoxes_ = dynamicBoxes_ = viewmodelBoxes_ = uiBoxes_ = DynamicBuffer{};
     quadBuffer_ = frameConstants_ = gltfConstants_ = nullptr;
     textureArray_ = fontTexture_ = whiteTexture_ = nullptr;
     arraySampler_ = fontSampler_ = defaultGltfSampler_ = nullptr;
-    boxBindings_ = gltfBindings_ = nullptr;
+    boxBindings_ = gltfBindings_ = compositeBindings_ = nullptr;
     boxLayout_ = gltfLayout_ = nullptr;
-    boxVS_ = boxPS_ = gltfVS_ = gltfPS_ = nullptr;
+    boxVS_ = boxPS_ = boxPSMotion_ = gltfVS_ = gltfPS_ = compositeVS_ = compositePS_ = nullptr;
     device_ = nullptr;
     manager_->destroy();
 }

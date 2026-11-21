@@ -27,8 +27,11 @@ OUT = ROOT / "engine" / "src" / "backends" / "nvrhi" / "shaders"
 SHADERS = [
     ("box.hlsl", "main_vs", "vs_6_0", "g_box_vs_spirv"),
     ("box.hlsl", "main_ps", "ps_6_0", "g_box_ps_spirv"),
+    ("box.hlsl", "main_ps_mv", "ps_6_0", "g_box_ps_mv_spirv"),
     ("gltf.hlsl", "main_vs", "vs_6_0", "g_gltf_vs_spirv"),
     ("gltf.hlsl", "main_ps", "ps_6_0", "g_gltf_ps_spirv"),
+    ("composite.hlsl", "main_vs", "vs_6_0", "g_composite_vs_spirv"),
+    ("composite.hlsl", "main_ps", "ps_6_0", "g_composite_ps_spirv"),
 ]
 
 # No -fvk-invert-y: NVRHI's Vulkan backend already sets a D3D-style

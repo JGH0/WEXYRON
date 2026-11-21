@@ -814,6 +814,7 @@ void Game::pollMapLoad() {
 }
 
 void Game::installMap(std::unique_ptr<Map> loaded) {
+    renderer.markCameraCut();   // new world: no motion history
     if (currentMap) delete currentMap;
     currentMap = loaded.release();
     if (!currentMap) return;
@@ -1012,6 +1013,7 @@ void Game::scanMapsFolder() {
 // resetGame – spawn player, reset health/ammo/weapons
 // ---------------------------------------------------------------------------
 void Game::resetGame() {
+    renderer.markCameraCut();   // respawn moves the camera
     playerHealth         = playerMaxHealth;
     playerDamageCooldown = 0.0f;
     damageEffectTime     = 0.0f;

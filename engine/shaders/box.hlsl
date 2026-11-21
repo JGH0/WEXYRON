@@ -1,13 +1,19 @@
 // Instanced box/quad shader for the NVRHI backends (Vulkan now, D3D12 later).
 // HLSL port of assets/shaders/glow_vertex.glsl + glow_fragment.glsl: keep the
-// two in sync, the OpenGL backend still uses the GLSL version.
+// colour maths in sync, the OpenGL backend still uses the GLSL version.
+//
+// Two pixel shaders:
+//   main_ps     UI layer: colour only (premultiplied-alpha blending is set up
+//               by the pipeline, see nvrhi_backend.cpp).
+//   main_ps_mv  scene: colour + motion vector (frame generation input).
 //
 // Compiled offline by tools/compile_shaders.py (dxc) into
 // engine/src/backends/nvrhi/shaders/*.h.
 
 cbuffer FrameBlock : register(b0)
 {
-    float4x4 uViewProjection;   // GL-style clip space (z in [-w, w])
+    float4x4 uViewProjection;       // GL-style clip space (z in [-w, w])
+    float4x4 uPrevViewProjection;   // same camera, previous frame (motion vectors)
 };
 
 Texture2DArray uTextures : register(t0);  // map materials (world + UI colours)
@@ -39,6 +45,8 @@ struct VSOutput
     float4 color : TEXCOORD2;
     float3 tint  : TEXCOORD3;
     float  shade : TEXCOORD4;
+    float4 curClip  : TEXCOORD5;   // unmodified clip positions for motion vectors
+    float4 prevClip : TEXCOORD6;
 };
 
 VSOutput main_vs(VSInput i)
@@ -47,6 +55,8 @@ VSOutput main_vs(VSInput i)
     // aPos is the [-0.5, 0.5] unit quad; iRight/iUp are half-extents.
     float3 world = i.iOffset + i.iRight * (i.aPos.x * 2.0) + i.iUp * (i.aPos.y * 2.0);
     float4 clip = mul(uViewProjection, float4(world, 1.0));
+    o.curClip = clip;
+    o.prevClip = mul(uPrevViewProjection, float4(world, 1.0));   // boxes do not move
     clip.z = (clip.z + clip.w) * 0.5;   // GL depth range [-w, w] -> Vulkan/D3D [0, w]
     o.position = clip;
 
@@ -65,7 +75,7 @@ VSOutput main_vs(VSInput i)
 }
 
 // atlas.y selects the sampler: 0 = flat colour, 1 = map texture, 2 = font.
-float4 main_ps(VSOutput i) : SV_Target0
+float4 shade(VSOutput i)
 {
     int mode = int(i.atlas.y + 0.5);
     float4 result;
@@ -81,4 +91,32 @@ float4 main_ps(VSOutput i) : SV_Target0
     }
     if (result.a <= 0.002) discard;
     return result;
+}
+
+/// Screen-space motion from this pixel to where it was last frame, in UV units
+/// (x right, y down): previous minus current position.
+float2 motionVector(float4 curClip, float4 prevClip)
+{
+    float2 cur = curClip.xy / curClip.w;
+    float2 prev = prevClip.xy / prevClip.w;
+    return (prev - cur) * float2(0.5, -0.5);
+}
+
+float4 main_ps(VSOutput i) : SV_Target0
+{
+    return shade(i);
+}
+
+struct SceneOutput
+{
+    float4 color  : SV_Target0;
+    float2 motion : SV_Target1;
+};
+
+SceneOutput main_ps_mv(VSOutput i)
+{
+    SceneOutput o;
+    o.color = shade(i);
+    o.motion = motionVector(i.curClip, i.prevClip);
+    return o;
 }

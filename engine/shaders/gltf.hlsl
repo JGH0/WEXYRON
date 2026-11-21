@@ -1,9 +1,11 @@
 // glTF 2.0 mesh shader for the NVRHI backends (Vulkan now, D3D12 later).
 // HLSL port of assets/shaders/gltf_vertex.glsl + gltf_fragment.glsl: keep the
-// two in sync, the OpenGL backend still uses the GLSL version.
+// colour maths in sync, the OpenGL backend still uses the GLSL version.
 //
 // Unskinned meshes and GPU linear-blend skinning with up to 32 bones; cheap
-// metallic/roughness shading with one directional light plus ambient.
+// metallic/roughness shading with one directional light plus ambient. Writes
+// colour + motion vector (the previous model matrix, camera and bone palette
+// give where the vertex was last frame).
 //
 // Compiled offline by tools/compile_shaders.py (dxc) into
 // engine/src/backends/nvrhi/shaders/*.h.
@@ -13,7 +15,10 @@ cbuffer DrawBlock : register(b0)
 {
     float4x4 uModel;
     float4x4 uViewProjection;    // GL-style clip space (z in [-w, w])
+    float4x4 uPrevModel;
+    float4x4 uPrevViewProjection;
     float4x4 uBones[32];
+    float4x4 uPrevBones[32];
     float4   uBaseColorFactor;
     float4   uEmissiveFactor;    // xyz
     float4   uTint;              // xyz
@@ -52,31 +57,48 @@ struct VSOutput
     float3 normal   : TEXCOORD1;
     float2 uv       : TEXCOORD2;
     float4 color    : TEXCOORD3;
+    float4 curClip  : TEXCOORD4;
+    float4 prevClip : TEXCOORD5;
 };
+
+float4x4 skinMatrix(float4x4 bones[32], uint4 joints, float4 weights)
+{
+    return bones[joints.x] * weights.x + bones[joints.y] * weights.y +
+           bones[joints.z] * weights.z + bones[joints.w] * weights.w;
+}
 
 VSOutput main_vs(VSInput i)
 {
-    float4x4 skin = float4x4(1, 0, 0, 0,  0, 1, 0, 0,  0, 0, 1, 0,  0, 0, 0, 1);
+    float4x4 identity = float4x4(1, 0, 0, 0,  0, 1, 0, 0,  0, 0, 1, 0,  0, 0, 0, 1);
+    float4x4 skin = identity;
+    float4x4 prevSkin = identity;
     if (uHasSkin != 0) {
-        skin = uBones[i.aJoints.x] * i.aWeights.x +
-               uBones[i.aJoints.y] * i.aWeights.y +
-               uBones[i.aJoints.z] * i.aWeights.z +
-               uBones[i.aJoints.w] * i.aWeights.w;
+        skin = skinMatrix(uBones, i.aJoints, i.aWeights);
+        prevSkin = skinMatrix(uPrevBones, i.aJoints, i.aWeights);
     }
 
     VSOutput o;
     float4 world = mul(uModel, mul(skin, float4(i.aPos, 1.0)));
+    float4 prevWorld = mul(uPrevModel, mul(prevSkin, float4(i.aPos, 1.0)));
     o.worldPos = world.xyz;
     o.normal = mul((float3x3)uModel, mul((float3x3)skin, i.aNormal));
     o.uv = i.aUV;
     o.color = i.aColor;
     float4 clip = mul(uViewProjection, world);
+    o.curClip = clip;
+    o.prevClip = mul(uPrevViewProjection, prevWorld);
     clip.z = (clip.z + clip.w) * 0.5;   // GL depth range [-w, w] -> Vulkan/D3D [0, w]
     o.position = clip;
     return o;
 }
 
-float4 main_ps(VSOutput i) : SV_Target0
+struct SceneOutput
+{
+    float4 color  : SV_Target0;
+    float2 motion : SV_Target1;
+};
+
+SceneOutput main_ps(VSOutput i)
 {
     float4 base = uBaseColorFactor * i.color;
     if (uHasBaseColorTexture != 0) {
@@ -113,5 +135,11 @@ float4 main_ps(VSOutput i) : SV_Target0
     } else {
         color += uEmissiveFactor.xyz;
     }
-    return float4(color, base.a);
+
+    SceneOutput o;
+    o.color = float4(color, base.a);
+    float2 cur = i.curClip.xy / i.curClip.w;
+    float2 prev = i.prevClip.xy / i.prevClip.w;
+    o.motion = (prev - cur) * float2(0.5, -0.5);   // UV units, previous - current
+    return o;
 }

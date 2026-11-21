@@ -290,6 +290,8 @@ bool VulkanDeviceManager::pickPhysicalDevice() {
         features.pNext = &f12;
         VKD.vkGetPhysicalDeviceFeatures2(gpu, &features);
         if (!f12.timelineSemaphore || !dyn.dynamicRendering || !sync2.synchronization2) continue;
+        // The scene pass blends colour but not motion vectors (two targets).
+        if (!features.features.independentBlend) continue;
 
         uint32_t familyCount = 0;
         VKD.vkGetPhysicalDeviceQueueFamilyProperties(gpu, &familyCount, nullptr);
@@ -314,7 +316,8 @@ bool VulkanDeviceManager::pickPhysicalDevice() {
             queueFamily_ = static_cast<uint32_t>(family);
         }
     }
-    if (!gpu_) return fail("no GPU supports Vulkan 1.2 with dynamic rendering and synchronization2");
+    if (!gpu_) return fail("no GPU supports Vulkan 1.2 with dynamic rendering, synchronization2 "
+                           "and independent blending");
     return true;
 }
 
@@ -349,8 +352,12 @@ bool VulkanDeviceManager::createDevice() {
     queueInfo.queueCount = 1;
     queueInfo.pQueuePriorities = &priority;
 
+    VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+    features.features.independentBlend = VK_TRUE;
+    features.pNext = &f12;
+
     VkDeviceCreateInfo info{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
-    info.pNext = &f12;
+    info.pNext = &features;
     info.queueCreateInfoCount = 1;
     info.pQueueCreateInfos = &queueInfo;
     info.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions_.size());

@@ -67,6 +67,9 @@ struct FramePacket {
 
     // ── World pass (depth-tested, back faces culled) ────────────────────────
     glm::mat4 worldViewProjection{1.0f};
+    /// The same camera split up (frame generation needs view and projection).
+    glm::mat4 worldView{1.0f};
+    glm::mat4 worldProjection{1.0f};
     /// Persistent map geometry. Re-upload only when `staticRevision` changes.
     const std::vector<BoxInstance>* worldStatic = nullptr;
     std::uint64_t staticRevision = 0;
@@ -83,6 +86,15 @@ struct FramePacket {
     glm::mat4 uiViewProjection{1.0f};
     const std::vector<BoxInstance>* uiInstances = nullptr;
     const std::vector<UiRange>* uiRanges = nullptr;
+
+    // ── Frame history (motion vectors, frame generation) ─────────────────────
+    /// True when this frame shows 3D (a pure menu frame has none).
+    bool has3D = false;
+    /// The camera jumped (map change, respawn, teleport, menu -> game): there
+    /// is no motion history across this frame.
+    bool cameraCut = false;
+    /// Seconds since the previous frame was submitted.
+    float frameTime = 0.0f;
 };
 
 /// Source data for the shared texture array (map textures + checker layer).
@@ -99,6 +111,9 @@ struct CapturedImage {
     int width = 0;
     int height = 0;
     std::vector<unsigned char> rgb;   ///< RGB8, top row first
+    /// Motion vectors (2 floats per pixel, UV units, previous - current
+    /// position, top row first). Empty when the backend has none (OpenGL).
+    std::vector<float> motion;
 };
 
 /// Device information for logs (adapter, API version, vendor).
