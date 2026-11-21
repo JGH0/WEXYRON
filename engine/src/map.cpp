@@ -159,12 +159,10 @@ bool Map::loadTexture(const std::string& texturePath, int textureId) {
         delete textures[textureId];
     }
     
-    // Create new texture with appropriate texture unit
-    GLenum textureUnit = GL_TEXTURE0 + textureId;
     std::string fullPath = "assets/textures/" + texturePath;
-    textures[textureId] = new Texture(fullPath.c_str(), textureUnit);
-    
-    return textures[textureId]->ID != 0;
+    textures[textureId] = new Texture(fullPath.c_str());
+
+    return textures[textureId]->valid();
 }
 
 void Map::addBlock(const MapBlock& block) {

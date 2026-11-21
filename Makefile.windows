@@ -113,7 +113,7 @@ $(BIN_DIR)/swept_hit_test.exe: tests/swept_hit_test.cpp | $(BIN_DIR)
 # GL tests that drive the real Game (need a window; run from build/bin so
 # assets/ resolves). render_capture_test captures/compares reference images
 # for renderer refactors and backend parity.
-GAME_TESTS = render_test render_capture_test hud_test menu_smoke_test
+GAME_TESTS = render_test render_capture_test hud_test menu_smoke_test map_loader_test
 GAME_TEST_OBJECTS = $(filter-out $(MAIN_OBJECT),$(ALL_OBJECTS))
 render-tests: $(addprefix $(BIN_DIR)/,$(addsuffix .exe,$(GAME_TESTS)))
 

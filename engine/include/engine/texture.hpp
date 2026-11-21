@@ -1,6 +1,6 @@
 /**
  * @file texture.hpp
- * @brief Texture class for loading and managing OpenGL textures
+ * @brief Decoded RGBA image loaded from a file (map material textures)
  * @author OpenGL Game Developer
  * @date 2025
  */
@@ -8,84 +8,41 @@
 #ifndef TEXTURE_HPP
 #define TEXTURE_HPP
 
-#include <glad/glad.h>
-#include <string>
-
 /**
- * @brief Texture class for loading and managing OpenGL textures
- * 
- * Supports loading PNG, JPG, and other common image formats.
- * Provides texture binding and management functionality.
+ * @brief An image file decoded to RGBA8 in CPU memory.
+ *
+ * Supports PNG, JPG and the other formats stb_image reads. The renderer copies
+ * these pixels into its texture array; no GPU object is created here, so a
+ * Texture can be loaded on any thread (the map loader decodes on a worker).
  */
 class Texture {
 public:
-    /// OpenGL texture ID
-    unsigned int ID;
-    /// Texture width
-    int width;
-    /// Texture height
-    int height;
-    /// Number of color channels
-    int nrChannels;
-    /// Owned RGBA copy of the source image (width * height * 4), or nullptr.
-    /// Kept so the renderer can upload it into the shared texture array.
+    /// Image width in pixels (0 if loading failed)
+    int width = 0;
+    /// Image height in pixels (0 if loading failed)
+    int height = 0;
+    /// Channels in `pixels` (always 4 once loaded)
+    int nrChannels = 0;
+    /// Owned RGBA copy of the image (width * height * 4), or nullptr.
     unsigned char* pixels = nullptr;
-    
+
     /**
-     * @brief Construct a new Texture object
-     * 
-     * @param path Path to the texture file
-     * @param textureUnit OpenGL texture unit (default: GL_TEXTURE0)
+     * @brief Load and decode an image file.
+     *
+     * Relative paths are also tried under the usual asset folders and next to
+     * the executable (see texture.cpp).
+     * @param path Path to the image file
      */
-    Texture(const char* path, GLenum textureUnit = GL_TEXTURE0);
-    
-    /**
-     * @brief Destructor - cleans up texture resources
-     */
+    explicit Texture(const char* path);
     ~Texture();
-    
-    /**
-     * @brief Bind this texture for use in rendering
-     */
-    void bind() const;
-    
-    /**
-     * @brief Unbind the current texture
-     */
-    void unbind() const;
-    
-    /**
-     * @brief Set texture wrapping parameters
-     * 
-     * @param wrapS Texture wrapping mode for S coordinate (default: GL_REPEAT)
-     * @param wrapT Texture wrapping mode for T coordinate (default: GL_REPEAT)
-     */
-    void setWrapParameters(GLenum wrapS = GL_REPEAT, GLenum wrapT = GL_REPEAT);
-    
-    /**
-     * @brief Set texture filtering parameters
-     * 
-     * @param minFilter Minification filter (default: GL_LINEAR)
-     * @param magFilter Magnification filter (default: GL_LINEAR)
-     */
-    void setFilterParameters(GLenum minFilter = GL_LINEAR, GLenum magFilter = GL_LINEAR);
-    
-    /**
-     * @brief Get the OpenGL texture unit this texture uses
-     * @return GLenum The texture unit (GL_TEXTURE0, GL_TEXTURE1, etc.)
-     */
-    GLenum getUnit() const { return textureUnit; }
+
+    Texture(const Texture&) = delete;
+    Texture& operator=(const Texture&) = delete;
+
+    /// @return true when the image was decoded
+    bool valid() const { return pixels != nullptr; }
 
 private:
-    /// OpenGL texture unit
-    GLenum textureUnit;
-    
-    /**
-     * @brief Load texture from file
-     * 
-     * @param path Path to the texture file
-     * @return true if loaded successfully, false otherwise
-     */
     bool loadFromFile(const char* path);
 };
 

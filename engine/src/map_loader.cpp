@@ -6,8 +6,6 @@
 #include "engine/map_loader.hpp"
 #include "engine/map.hpp"
 
-#include <GLFW/glfw3.h>
-#include <chrono>
 #include <iostream>
 
 namespace {
@@ -31,19 +29,14 @@ void MapLoader::ensureTextures(Map& map) {
 }
 
 std::unique_ptr<Map> MapLoader::loadBlocking(const std::string& mapFile) {
-    // Textures are created on the calling thread, which must own a context.
+    // Parsing and texture decoding are CPU work; any thread will do.
     auto map = std::make_unique<Map>("assets/maps/" + mapFile);
     ensureTextures(*map);
     return map;
 }
 
-bool MapLoader::start(const std::string& mapFile, GLFWwindow* sharedWith) {
+void MapLoader::start(const std::string& mapFile) {
     cancel();
-
-    if (!sharedWith) {
-        // No context to share: the caller must use loadBlocking() instead.
-        return false;
-    }
 
     {
         std::lock_guard<std::mutex> lock(resultMutex_);
@@ -52,40 +45,18 @@ bool MapLoader::start(const std::string& mapFile, GLFWwindow* sharedWith) {
     }
     loading_.store(true, std::memory_order_release);
 
-    const bool firstLoad = !sharedContextReady_;
-    sharedContextReady_ = true;
-
-    future_ = std::async(std::launch::async, [this, mapFile, sharedWith, firstLoad]() {
-        // A worker needs its own current context. GLFW can create one that
-        // shares objects (textures, buffers) with the main context, so the
-        // texture objects built here are usable on the main thread.
-        GLFWwindow* workerContext = glfwCreateWindow(1, 1, "map-loader", nullptr, sharedWith);
-        if (workerContext) {
-            glfwMakeContextCurrent(workerContext);
-        } else if (firstLoad) {
-            // Some drivers only allow sharing at creation time; report once.
-            std::cerr << "MapLoader: sharing GL context unavailable, loading "
-                         "synchronously on the main thread." << std::endl;
-        }
-
+    // Everything here is CPU work (file parse + image decode): no graphics
+    // context is needed on the worker. The renderer uploads the decoded
+    // pixels on the main thread when the map is swapped in.
+    future_ = std::async(std::launch::async, [this, mapFile]() {
         auto map = std::make_unique<Map>("assets/maps/" + mapFile);
         ensureTextures(*map);
-
-        if (workerContext) {
-            // Make the objects resident and finish all GPU work before the
-            // context is destroyed.
-            glFlush();
-            glfwMakeContextCurrent(nullptr);
-            glfwDestroyWindow(workerContext);
-        }
 
         std::lock_guard<std::mutex> lock(resultMutex_);
         pending_ = std::move(map);
         hasResult_.store(true, std::memory_order_release);
         return true;
     });
-
-    return true;
 }
 
 void MapLoader::cancel() {
@@ -102,7 +73,7 @@ void MapLoader::cancel() {
 std::unique_ptr<Map> MapLoader::pollFinished() {
     if (!hasResult_.load(std::memory_order_acquire)) return nullptr;
 
-    // The worker signalled completion; collect it and release its context work.
+    // The worker signalled completion; collect it.
     if (future_.valid()) {
         future_.get();
     }

@@ -801,8 +801,7 @@ void Game::setPerformanceLevel(int level) {
 // loadMap
 // ---------------------------------------------------------------------------
 bool Game::loadMap(const std::string& mapFile) {
-    // Blocking path: used at startup and whenever a worker context can't be
-    // created. Parsing + texture upload happen here, on the GL thread.
+    // Blocking path (startup, editor): parse + texture decode on this thread.
     activeMapFile_ = mapFile;
     std::unique_ptr<Map> loaded = MapLoader::loadBlocking(mapFile);
     if (!loaded) return false;
@@ -812,11 +811,9 @@ bool Game::loadMap(const std::string& mapFile) {
 
 void Game::requestMapLoad(const std::string& mapFile) {
     // Keep the current map on screen while the new one is parsed and its
-    // textures are uploaded on a worker thread.
+    // textures are decoded on a worker thread.
     activeMapFile_ = mapFile;
-    if (!mapLoader_.start(mapFile, window)) {
-        loadMap(mapFile);
-    }
+    mapLoader_.start(mapFile);
 }
 
 void Game::pollMapLoad() {

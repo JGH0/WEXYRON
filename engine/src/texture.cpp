@@ -1,6 +1,6 @@
 /**
  * @file texture.cpp
- * @brief Implementation of Texture class for OpenGL texture management
+ * @brief Texture: image files decoded to RGBA in CPU memory
  * @author OpenGL Game Developer
  * @date 2025
  */
@@ -96,8 +96,7 @@ bool fileExists(const std::filesystem::path& path) {
 
 } // namespace
 
-Texture::Texture(const char* path, GLenum textureUnit) 
-    : ID(0), width(0), height(0), nrChannels(0), textureUnit(textureUnit) {
+Texture::Texture(const char* path) {
     
     if (!loadFromFile(path)) {
         std::cerr << "Failed to load texture: " << path << std::endl;
@@ -106,9 +105,6 @@ Texture::Texture(const char* path, GLenum textureUnit)
 
 Texture::~Texture() {
     if (pixels) stbi_image_free(pixels);
-    if (ID != 0) {
-        glDeleteTextures(1, &ID);
-    }
 }
 
 bool Texture::loadFromFile(const char* path) {
@@ -127,8 +123,7 @@ bool Texture::loadFromFile(const char* path) {
     }
 
     // Decode once, always as RGBA. The renderer uploads this same buffer into
-    // its texture array, so there is no second decode that could disagree with
-    // the GL texture (and no path-sensitive difference between platforms).
+    // its texture array (no GPU object is created here).
     int w = 0, h = 0, channels = 0;
     unsigned char* data = stbi_load(resolved.string().c_str(), &w, &h, &channels, 4);
     if (!data || w <= 0 || h <= 0) {
@@ -140,55 +135,9 @@ bool Texture::loadFromFile(const char* path) {
     width = w;
     height = h;
     nrChannels = 4;
-
-    glGenTextures(1, &ID);
-    glActiveTexture(textureUnit);
-    glBindTexture(GL_TEXTURE_2D, ID);
-
-    // Set default texture parameters
-    setWrapParameters();
-    setFilterParameters();
-
-    // Upload texture data to GPU. No glGenerateMipmap on purpose: the 64x64
-    // source textures are ever only read back as pixels and re-uploaded into
-    // the renderer's texture array (NEAREST, no mipmaps), so mipmaps are never
-    // sampled. Calling glGenerateMipmap here crashes the Mesa D3D12 software
-    // driver on GPU-less Windows VMs (process exits with 0x80070057 while
-    // loading the second texture) and is wasted work on every driver.
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0,
-                 GL_RGBA, GL_UNSIGNED_BYTE, data);
-
-    // Keep the RGBA copy of the source pixels. The renderer copies textures
-    // into a single texture array, and CPUs cannot read a GPU texture back
-    // cheaply (the old FBO readback also crashed inside the Mesa driver).
     pixels = data;
 
     std::cout << "Loaded texture: " << resolved.string() << " (" << width << "x"
               << height << ", " << nrChannels << " channels)" << std::endl;
     return true;
-}
-
-void Texture::bind() const {
-    glActiveTexture(textureUnit);
-    glBindTexture(GL_TEXTURE_2D, ID);
-}
-
-void Texture::unbind() const {
-    glActiveTexture(textureUnit);
-    glBindTexture(GL_TEXTURE_2D, 0);
-}
-
-void Texture::setWrapParameters(GLenum wrapS, GLenum wrapT) {
-    glActiveTexture(textureUnit);
-    glBindTexture(GL_TEXTURE_2D, ID);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrapS);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrapT);
-}
-
-void Texture::setFilterParameters(GLenum minFilter, GLenum magFilter) {
-    glActiveTexture(textureUnit);
-    glBindTexture(GL_TEXTURE_2D, ID);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, minFilter);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, magFilter);
 }

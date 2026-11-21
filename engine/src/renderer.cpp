@@ -98,7 +98,7 @@ void Renderer::refreshTextures(Map* map) {
         mapLayers.assign(8, -1);
         for (int id = 0; id < 8; ++id) {
             Texture* tex = map->getTexture(id);
-            if (tex && tex->ID) {
+            if (tex && tex->valid()) {
                 mapLayers[id] = static_cast<int>(sources.size());
                 sources.push_back(tex);
             }
