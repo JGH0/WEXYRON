@@ -9,7 +9,8 @@
  * actions.
  *
  *   openMainMenu()    – (re)build the main menu for the current game state
- *   openSettings()    – settings page (values) + controls page (rebinding)
+ *   openSettings()    – settings overview; one sub-page per group, controls
+ *                       (rebinding) and frame generation (inside VIDEO)
  *   openMapSelection()– map list + game mode
  *   menu()            – draw the active menu
  *   processMenuInput() (game_input.cpp) – route input to the active menu
@@ -230,49 +231,76 @@ std::string activeRenderApiName(const Renderer& renderer) {
 }
 } // namespace
 
+namespace {
+/// One line of help per settings group on the SETTINGS overview.
+const char* groupHelp(const std::string& group) {
+    if (group == "GAMEPLAY") return "Ammo, lying down and the FPS counter";
+    if (group == "VIDEO") return "Frame rate, renderer and frame generation";
+    if (group == "AUDIO") return "Master, music and effects volume";
+    if (group == "INTERFACE") return "Discord status";
+    return "";
+}
+} // namespace
+
+void Game::onSettingRowChanged() {
+    // Apply right away and play a feedback blip, so a new volume can be heard.
+    applySettings();
+    saveSettings();
+    playUiSound("ui_select");
+}
+
 void Game::openSettings() {
-    // One stack: SETTINGS (values). CONTROLS and FRAME GENERATION are pushed on
-    // top when chosen, and ESC returns to SETTINGS with that row still selected.
+    // SETTINGS is an overview: one entry per group, each a sub-screen pushed
+    // on the same stack, so ESC returns here with that entry still selected.
+    // The groups and their order come from the settings registry; key
+    // bindings (CONTROLS) and FRAME GENERATION (inside VIDEO) have own pages.
+    menu::Page page("SETTINGS", "CHANGES ARE SAVED AUTOMATICALLY");
+    std::vector<std::string> groups;
+    for (const settings::SettingDef& def : settingDefs_) {
+        if (def.value->type == settings::ValueType::Key) continue;
+        if (def.group == settings::kFrameGenGroup) continue;
+        if (std::find(groups.begin(), groups.end(), def.group) == groups.end()) groups.push_back(def.group);
+    }
+    for (const std::string& group : groups) {
+        page.add(menu::action(group, [this, group]() { openSettingsGroup(group); }, groupHelp(group)));
+    }
+    page.add(menu::action("CONTROLS", [this]() { openControlsSettings(); },
+                          "Change the keyboard and mouse bindings"));
+
+    openMenuView(settingsMenu_, std::move(page));
+    settingsMenu_.legend = {{"UP/DOWN", "SELECT"}, {"ENTER", "OPEN"}, {"ESC", "LEAVE"}};
+    settingsMenu_.onClose = [this]() { closeMenuToGame(); };
+}
+
+void Game::openSettingsGroup(const std::string& group) {
     menu::SettingRowsOptions options;
-    options.skipGroups = {settings::kFrameGenGroup};
-    options.afterGroup = [this](menu::Page& page, const std::string& group) {
-        if (group != "VIDEO") return;
+    options.onlyGroup = group;
+    options.afterGroup = [this](menu::Page& page, const std::string& done) {
+        if (done != "VIDEO") return;
         page.add(menu::info("ACTIVE RENDERER", activeRenderApiName(renderer),
                             "Running now; a RENDERER change applies after a restart"));
         page.add(menu::action(settings::kFrameGenGroup, [this]() { openFrameGenSettings(); },
                               "DLSS, FSR and XESS frame generation options"));
     };
-    menu::Page page = menu::buildSettingsPage(settingDefs_, [this]() {
-        // Volume/gameplay change from the menu: apply it and play a feedback
-        // blip so the new volume can be heard immediately.
-        applySettings();
-        saveSettings();
-        playUiSound("ui_select");
-    }, options);
-    page.add(menu::separator("INPUT"));
-    page.add(menu::action("CONTROLS", [this]() {
-        // Built fresh on every open: bindings may have changed since the
-        // settings page was created.
-        menu::Page controls = menu::buildControlsPage(settingDefs_, [this]() { saveSettings(); });
-        controls.add(menu::separator("ACTIONS"));
-        controls.add(menu::action("RESET BINDINGS", [this]() { resetBindingsToDefaults(); },
-                                  "Restore the default key bindings"));
-        menu::push(settingsMenu_, std::move(controls));
-        settingsMenu_.legend = {{"ENTER", "REBIND"}, {"R", "DEFAULTS"}, {"ESC", "BACK"}};
-    }, "Change the keyboard and mouse bindings"));
-
-    openMenuView(settingsMenu_, std::move(page));
+    menu::Page page(group, "CHANGES ARE SAVED AUTOMATICALLY");
+    menu::appendSettingRows(page, settingDefs_, [this]() { onSettingRowChanged(); }, options);
+    menu::push(settingsMenu_, std::move(page));
     settingsMenu_.legend = {{"UP/DOWN", "SELECT"}, {"ENTER", "CHANGE"},
-                            {"LEFT/RIGHT", "ADJUST"}, {"ESC", "LEAVE"}};
-    settingsMenu_.onClose = [this]() { closeMenuToGame(); };
+                            {"LEFT/RIGHT", "ADJUST"}, {"ESC", "BACK"}};
+}
+
+void Game::openControlsSettings() {
+    // Built fresh on every open: bindings may have changed since.
+    menu::Page controls = menu::buildControlsPage(settingDefs_, [this]() { saveSettings(); });
+    controls.add(menu::separator("ACTIONS"));
+    controls.add(menu::action("RESET BINDINGS", [this]() { resetBindingsToDefaults(); },
+                              "Restore the default key bindings"));
+    menu::push(settingsMenu_, std::move(controls));
+    settingsMenu_.legend = {{"ENTER", "REBIND"}, {"R", "DEFAULTS"}, {"ESC", "BACK"}};
 }
 
 void Game::openFrameGenSettings() {
-    menu::Page page = menu::buildFrameGenPage(settingDefs_, [this]() {
-        applySettings();
-        saveSettings();
-        playUiSound("ui_select");
-    });
+    menu::Page page = menu::buildFrameGenPage(settingDefs_, [this]() { onSettingRowChanged(); });
 
     // The options are stored now; frame generation itself (FSR / DLSS / XeSS
     // on the Vulkan or Direct3D 12 renderer) comes in a later step. Say so
@@ -286,10 +314,6 @@ void Game::openFrameGenSettings() {
 
     menu::push(settingsMenu_, std::move(page));
     settingsMenu_.legend = {{"UP/DOWN", "SELECT"}, {"LEFT/RIGHT", "ADJUST"}, {"ESC", "BACK"}};
-}
-
-void Game::appendBindingRows(menu::Page& page) {
-    menu::appendBindingRows(page, settingDefs_, [this]() { saveSettings(); });
 }
 
 void Game::resetBindingsToDefaults() {
@@ -901,19 +925,15 @@ void Game::pollSettingsFile() {
 
     // Rebuild the settings screen so its rows show the new values.
     if (gameState == SETTINGS) {
-        const menu::Page* page = settingsMenu_.stack.current();
-        const bool onControls = page && page->title == "CONTROLS";
-        const bool onFrameGen = page && page->title == settings::kFrameGenGroup;
+        // Reopen the same path (e.g. SETTINGS > VIDEO > FRAME GENERATION).
+        std::vector<std::string> path;
+        for (size_t i = 1; i < settingsMenu_.stack.depth(); ++i)
+            path.push_back(settingsMenu_.stack.pageAt(i).title);
         openSettings();
-        if (onFrameGen) openFrameGenSettings();
-        if (onControls) {
-            menu::Page controls("CONTROLS", "KEYBOARD AND MOUSE BINDINGS");
-            appendBindingRows(controls);
-            controls.add(menu::separator("ACTIONS"));
-            controls.add(menu::action("RESET BINDINGS", [this]() { resetBindingsToDefaults(); },
-                                      "Restore the default key bindings"));
-            menu::push(settingsMenu_, std::move(controls));
-            settingsMenu_.legend = {{"ENTER", "REBIND"}, {"R", "DEFAULTS"}, {"ESC", "BACK"}};
+        for (const std::string& title : path) {
+            if (title == "CONTROLS") openControlsSettings();
+            else if (title == settings::kFrameGenGroup) openFrameGenSettings();
+            else openSettingsGroup(title);
         }
         menuJustEntered = true;
     }
@@ -1241,8 +1261,15 @@ void Game::debugOpenMenu(const std::string& name) {
     } else if (name == "settings") {
         openSettings();
         gameState = SETTINGS;
+    } else if (name == "video" || name == "audio" || name == "gameplay") {
+        openSettings();
+        std::string group = name;
+        for (char& c : group) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        openSettingsGroup(group);
+        gameState = SETTINGS;
     } else if (name == "framegen") {
         openSettings();
+        openSettingsGroup("VIDEO");
         openFrameGenSettings();
         gameState = SETTINGS;
     } else if (name == "maps") {

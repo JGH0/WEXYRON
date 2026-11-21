@@ -232,8 +232,8 @@ public:
     /// (network tests drive the connect screen with it).
     void debugPumpFrame();
     int debugState() const { return (int)gameState; }
-    /// Open a menu screen by name ("main", "settings", "framegen", "maps",
-    /// "server").
+    /// Open a menu screen by name ("main", "settings", "gameplay", "video",
+    /// "audio", "framegen", "maps", "server").
     void debugOpenMenu(const std::string& name);
 
     // ── Spawn / movement tests ───────────────────────────────────────────────
@@ -772,10 +772,14 @@ private:
     const menu::MenuView& activeMenuViewConst() const;
     /// Open the settings screen (values + controls sub-page).
     void openSettings();
-    /// FRAME GENERATION sub-screen, pushed on top of SETTINGS.
+    /// One settings group ("GAMEPLAY", "VIDEO", "AUDIO", ...) as a sub-screen.
+    void openSettingsGroup(const std::string& group);
+    /// Key bindings sub-screen.
+    void openControlsSettings();
+    /// FRAME GENERATION sub-screen (opened from VIDEO).
     void openFrameGenSettings();
-    /// Append every key binding row (grouped) to `page`.
-    void appendBindingRows(menu::Page& page);
+    /// Apply + save after a row changed, with a feedback blip.
+    void onSettingRowChanged();
     /// Restore the default key bindings (controls page "RESET BINDINGS").
     void resetBindingsToDefaults();
     /// Rebuild the current server page (list/status/address values change).

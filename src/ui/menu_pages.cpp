@@ -55,11 +55,12 @@ void appendSettingRows(Page& page, const std::vector<settings::SettingDef>& defs
             options.skipGroups.end()) continue;
         if (def.value->type == settings::ValueType::Key) continue;   // controls page
 
-        // Group header when the group changes.
+        // Group header when the group changes (not on a single-group page:
+        // its title already names the group).
         if (def.group != group) {
             closeGroup();
             group = def.group;
-            page.add(separator(group));
+            if (options.onlyGroup.empty()) page.add(separator(group));
         }
 
         // The callbacks edit the registry row's value and then apply that row

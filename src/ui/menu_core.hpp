@@ -168,6 +168,8 @@ public:
 
     bool empty() const { return pages_.empty(); }
     size_t depth() const { return pages_.size(); }
+    /// Page `index` from the bottom (0 = root); index < depth().
+    const Page& pageAt(size_t index) const { return pages_[index]; }
     Page* current();
     const Page* current() const;
 

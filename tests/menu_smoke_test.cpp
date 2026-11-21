@@ -38,9 +38,25 @@ int main() {
     // state without a page draws an empty screen (the "blank screen" bug).
     CHECK(game.debugMainMenuReady());
 
-    // ── Settings page: one row per non-key setting + a CONTROLS row ────────
+    // ── Settings overview: one entry per group, then CONTROLS ──────────────
+    // (Every group must stay reachable; the single long page used to push
+    // AUDIO off the screen.)
     game.debugOpenMenu("settings");
-    std::printf("--- settings page ---\n");
+    std::printf("--- settings overview ---\n");
+    game.debugMenuDump();
+    {
+        const menu::Page* page = game.debugMenuPage();
+        CHECK(page != nullptr);
+        std::vector<std::string> labels;
+        if (page)
+            for (const menu::Row& row : page->rows) labels.push_back(row.label);
+        const std::vector<std::string> expected = {"GAMEPLAY", "VIDEO", "AUDIO", "INTERFACE", "CONTROLS"};
+        CHECK(labels == expected);
+    }
+
+    // ── GAMEPLAY page: one row per setting of the group ────────────────────
+    game.debugOpenMenu("gameplay");
+    std::printf("--- gameplay page ---\n");
     game.debugMenuDump();
     std::vector<menu::Row> rows;
     {
