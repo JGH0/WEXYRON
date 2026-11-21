@@ -30,12 +30,12 @@ int main() {
     CHECK(humanoid::hitZone(glm::vec3(0.0f, 0.75f, 0.0f), feet, yaw, 1) == humanoid::HitZone::Body);
     CHECK(humanoid::hitZone(glm::vec3(0.0f, 0.35f, 0.0f), feet, yaw, 1) == humanoid::HitZone::Limb);
 
-    // Prone: the body lies forward along local +Z, so the head is at the far
-    // end of the box rather than above the feet.
-    CHECK(humanoid::hitZone(glm::vec3(1.60f, 0.30f, 0.0f), feet, yaw, 2) == humanoid::HitZone::Head);
-    CHECK(humanoid::hitZone(glm::vec3(1.00f, 0.30f, 0.0f), feet, yaw, 2) == humanoid::HitZone::Body);
-    CHECK(humanoid::hitZone(glm::vec3(0.30f, 0.30f, 0.0f), feet, yaw, 2) == humanoid::HitZone::Limb);
-    CHECK(humanoid::hitZone(glm::vec3(1.00f, 0.30f, 0.32f), feet, yaw, 2) == humanoid::HitZone::Limb);
+    // Prone: the body lies along local +Z, so the head is forward of the
+    // torso and the legs trail behind the feet.
+    CHECK(humanoid::hitZone(glm::vec3(0.90f, 0.35f, 0.0f), feet, yaw, 2) == humanoid::HitZone::Head);
+    CHECK(humanoid::hitZone(glm::vec3(0.30f, 0.35f, 0.0f), feet, yaw, 2) == humanoid::HitZone::Body);
+    CHECK(humanoid::hitZone(glm::vec3(-0.50f, 0.35f, 0.0f), feet, yaw, 2) == humanoid::HitZone::Limb);
+    CHECK(humanoid::hitZone(glm::vec3(0.30f, 0.35f, 0.32f), feet, yaw, 2) == humanoid::HitZone::Limb);
 
     CHECK(humanoid::damageMultiplier(humanoid::HitZone::Head) == 2.0f);
     CHECK(humanoid::damageMultiplier(humanoid::HitZone::Body) == 1.0f);

@@ -49,6 +49,24 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
 
     // Set up callbacks
     networkClient->onPlayerState = [this](const PlayerStatePacket& packet) {
+        // PlayerState is sent over UDP: ignore a datagram older than the last
+        // one applied for this player. A delayed death state arriving after a
+        // respawn used to kill the player a second time (extra death sound).
+        if (networkClient && packet.header.sequence != 0) {
+            if (packet.playerId == networkClient->getClientId()) {
+                if (packet.header.sequence <= lastLocalStateSequence_) return;
+                lastLocalStateSequence_ = packet.header.sequence;
+            } else {
+                for (int i = 0; i < MAX_REMOTE_PLAYERS; ++i) {
+                    if (remotePlayers[i].active &&
+                        remotePlayers[i].id == packet.playerId &&
+                        packet.header.sequence <= remotePlayers[i].stateSequence) {
+                        return;
+                    }
+                }
+            }
+        }
+
         // Only sync health/death state for local player (client controls own movement)
         if (networkClient && packet.playerId == networkClient->getClientId()) {
             // The server assigns teams (balanced on connect); keep the local
@@ -86,8 +104,15 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
                                        remotePlayers[i].id != packet.playerId;
                     const float oldHealth = isNew ? packet.health
                                                   : remotePlayers[i].health;
-                    if (isNew) {
+                    const bool respawned = !isNew && remotePlayers[i].isDead &&
+                                           !packet.isDead;
+                    // A respawn (or any health increase) invalidates pending
+                    // damage reports. Resending old damage here could kill the
+                    // just-respawned player a second time from one shot.
+                    if (isNew || respawned || (!isNew && packet.health > oldHealth + 0.5f)) {
                         pvpRemotes_[i] = PvpRemote{};
+                    }
+                    if (isNew) {
                         remotePlayers[i].anim = humanoid::Anim{};
                     }
                     remotePlayers[i].id       = packet.playerId;
@@ -100,6 +125,7 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
                     remotePlayers[i].active   = true;
                     remotePlayers[i].team     = packet.team;
                     remotePlayers[i].stance   = packet.stance <= 2 ? packet.stance : 0;
+                    remotePlayers[i].stateSequence = packet.header.sequence;
                     // A health drop caused by anyone's shot flinches the body.
                     if (!isNew && packet.health < oldHealth - 0.5f) {
                         remotePlayers[i].anim.damage = 1.0f;
@@ -131,6 +157,7 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
                 remotePlayers[i].isDead         = false;
                 remotePlayers[i].team           = packet.team;
                 remotePlayers[i].stance         = 0;
+                remotePlayers[i].stateSequence  = 0;
                 return;
             }
         }
@@ -150,6 +177,7 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
                 remotePlayers[i].active         = true;
                 remotePlayers[i].team           = packet.team;
                 remotePlayers[i].stance         = 0;
+                remotePlayers[i].stateSequence  = 0;
                 remotePlayers[i].anim           = humanoid::Anim{};
                 playerCount++; // Update player count
                 break;
@@ -216,6 +244,18 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
 
     networkClient->onBombState = [this](const BombStatePacket& packet) {
         if (!bombDefusalMode) return;
+
+        // Ignore packets from an older round. UDP can deliver a delayed
+        // "round ended" datagram after the client already started the next
+        // round, which used to end that fresh round immediately (the next
+        // round appeared twice in a row).
+        if (packet.roundId < serverBombRoundId_) return;
+        if (packet.roundId != serverBombRoundId_) {
+            serverBombRoundId_ = packet.roundId;
+            serverRoundEnded = false;
+            roundWinner = -1;
+            roundEndReason = ROUND_END_NONE;
+        }
 
         // The server owns the bomb. Keep the local HUD/render state in sync;
         // planting, defusing and the fuse are advanced server-side.
@@ -352,6 +392,8 @@ void Game::disconnectFromServer() {
     lobbyReady_ = false;
     lobbyViews_.clear();
     serverRoundEnded = false;
+    serverBombRoundId_ = 0;
+    lastLocalStateSequence_ = 0;
     roundWinner = -1;
     roundEndReason = ROUND_END_NONE;
     roundTimeLeft = 0.0f;

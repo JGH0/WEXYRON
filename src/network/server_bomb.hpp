@@ -99,6 +99,7 @@ private:
         int matchFormat = 0;           ///< 0 free play, 1 normal, 2 swift
         int roundsPlayed = 0;          ///< completed rounds (side switching)
         bool roundActive = false;
+        uint32_t roundId = 0;          ///< increments on every round start
         bool hasHumans = false;        ///< a human is currently on this map
         uint8_t attackingTeam = 0;
         float roundTimeLeft = 0.0f;

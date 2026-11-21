@@ -104,6 +104,7 @@ void ServerBombManager::resetRound(MapState& state, int gameMode, int attackingT
                                    int matchFormat) {
     state.gameMode = gameMode;
     state.matchFormat = matchFormat;
+    ++state.roundId;
     state.roundActive = true;
     state.attackingTeam = static_cast<uint8_t>(attackingTeam & 1);
     state.roundTimeLeft = config_.roundTime;
@@ -559,6 +560,7 @@ void ServerBombManager::broadcastState(const std::string& mapName, MapState& sta
     packet.roundWinner = state.roundWinner;
     packet.roundEndReason = state.roundEndReason;
     packet.attackingTeam = state.attackingTeam;
+    packet.roundId = state.roundId;
     packet.plantingTeam = state.planted ? state.plantingTeam : kNoTeam;
     packet.siteIndex = state.siteIndex >= 0 && state.siteIndex <= 254
                            ? static_cast<uint8_t>(state.siteIndex)

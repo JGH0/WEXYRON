@@ -1334,6 +1334,32 @@ void GltfInstance::setPose(int clipA, float timeA, float weightA,
     poseDirty_ = true;
 }
 
+void GltfInstance::clearNodeOverrides() {
+    overrides_.clear();
+    poseDirty_ = true;
+}
+
+void GltfInstance::setNodeRotationOffset(int nodeIndex, const glm::quat& delta) {
+    if (nodeIndex < 0) return;
+    if (static_cast<std::size_t>(nodeIndex) >= overrides_.size()) {
+        overrides_.resize(static_cast<std::size_t>(nodeIndex) + 1);
+    }
+    overrides_[static_cast<std::size_t>(nodeIndex)].hasRotation = true;
+    overrides_[static_cast<std::size_t>(nodeIndex)].rotationDelta =
+        glm::normalize(delta);
+    poseDirty_ = true;
+}
+
+void GltfInstance::setNodeTranslationOffset(int nodeIndex, const glm::vec3& delta) {
+    if (nodeIndex < 0) return;
+    if (static_cast<std::size_t>(nodeIndex) >= overrides_.size()) {
+        overrides_.resize(static_cast<std::size_t>(nodeIndex) + 1);
+    }
+    overrides_[static_cast<std::size_t>(nodeIndex)].hasTranslation = true;
+    overrides_[static_cast<std::size_t>(nodeIndex)].translationDelta = delta;
+    poseDirty_ = true;
+}
+
 glm::mat4 GltfInstance::localMatrix(const LocalTRS& local) {
     return glm::translate(glm::mat4(1.0f), local.translation) *
            glm::mat4_cast(local.rotation) *
@@ -1413,6 +1439,18 @@ void GltfInstance::update() {
                 blended.scale = glm::mix(rest_[i].scale, blended.scale, total);
             }
             pose_[i] = blended;
+        }
+    }
+
+    // Stance overrides are applied on top of the evaluated clip so crouching
+    // and prone poses can bend the existing skeleton instead of scaling the
+    // whole model.
+    const std::size_t overrideCount = std::min(overrides_.size(), pose_.size());
+    for (std::size_t i = 0; i < overrideCount; ++i) {
+        const NodeOverride& override = overrides_[i];
+        if (override.hasTranslation) pose_[i].translation += override.translationDelta;
+        if (override.hasRotation) {
+            pose_[i].rotation = glm::normalize(pose_[i].rotation * override.rotationDelta);
         }
     }
 

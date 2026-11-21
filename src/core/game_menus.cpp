@@ -466,6 +466,7 @@ void Game::startMatchNow(const std::string& mapFile) {
             remotePlayers[i].health         = 0.0f;
             remotePlayers[i].isDead         = true;
             remotePlayers[i].stance         = 0;
+            remotePlayers[i].stateSequence  = 0;
         }
         playerCount = 1;
     }

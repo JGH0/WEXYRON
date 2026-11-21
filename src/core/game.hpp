@@ -984,7 +984,7 @@ private:
     static constexpr float bodyWidth   = 0.8f;   ///< body box width and depth
     static constexpr float bodyHeight  = 1.8f;   ///< standing body box height
     static constexpr float crouchBodyHeight = 1.2f;
-    static constexpr float proneBodyHeight  = 0.55f;
+    static constexpr float proneBodyHeight  = 0.65f;
     static constexpr float crouchEyeHeight  = 1.05f;
     static constexpr float proneEyeHeight   = 0.35f;
 
@@ -1085,6 +1085,7 @@ private:
         bool active;
         uint8_t team = 0; ///< server-assigned team (0 = Team A, 1 = Team B)
         uint8_t stance = 0; ///< 0 standing, 1 crouching, 2 prone
+        uint32_t stateSequence = 0; ///< newest applied PlayerState sequence
         humanoid::Anim anim; ///< walk / air / flinch / shooting animation
     };
     static const int MAX_REMOTE_PLAYERS = 16;
@@ -1109,7 +1110,21 @@ private:
     /// Load assets/models/*.glb and bind the per-actor animation instances.
     void initModels();
     /// Select and blend the player's idle/walk/shoot/death clips.
-    void posePlayerInstance(GltfInstance& instance, const humanoid::Anim& anim);
+    void posePlayerInstance(GltfInstance& instance, const humanoid::Anim& anim,
+                            uint8_t stance = 0);
+    /// Bend the player skeleton into a crouch or prone pose on top of the
+    /// active clip (the asset ships no stance clips).
+    void applyPlayerStancePose(GltfInstance& instance, uint8_t stance);
+    /// Bone node indices of playerModel_ (-1 when the asset is unavailable).
+    int playerHipsNode_ = -1;
+    int playerSpineNode_ = -1;
+    int playerHeadNode_ = -1;
+    int playerUpperLegLNode_ = -1;
+    int playerUpperLegRNode_ = -1;
+    int playerLowerLegLNode_ = -1;
+    int playerLowerLegRNode_ = -1;
+    int playerFootLNode_ = -1;
+    int playerFootRNode_ = -1;
 
     /// Upright body box of a player at `feet` (feet = bottom centre).
     /// `height` defaults to the standing body; pass currentBodyHeight() for
@@ -1408,6 +1423,8 @@ private:
     /// Server-owned round results are applied once per round (client HUD /
     /// effects must not fire endRound() again for every periodic state packet).
     bool serverRoundEnded;
+    uint32_t serverBombRoundId_ = 0; ///< last server round id applied
+    uint32_t lastLocalStateSequence_ = 0; ///< ignore stale own death/respawn
     int roundWinner;
     RoundEndReason roundEndReason;
     /// Authoritative seconds left to plant (from BombStatePacket).

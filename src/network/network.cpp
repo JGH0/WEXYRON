@@ -319,6 +319,7 @@ void NetworkClient::closeSocket() {
     connecting = false;
     clientId   = 0;
     assignedTeam = 0;
+    lastOwnStateSequence_ = 0;
 }
 
 double NetworkClient::secondsSinceLastReceive() const {
@@ -599,7 +600,12 @@ void NetworkClient::update() {
                 if (connected && received >= sizeof(PlayerStatePacket)) {
                     const PlayerStatePacket& state = *(PlayerStatePacket*)buffer;
                     // The server may change our team in the pre-match setup.
-                    if (state.playerId == clientId && state.team <= 1) {
+                    // Ignore stale state packets so a late team update cannot
+                    // undo a newer one.
+                    if (state.playerId == clientId && state.team <= 1 &&
+                        (state.header.sequence == 0 ||
+                         state.header.sequence > lastOwnStateSequence_)) {
+                        lastOwnStateSequence_ = state.header.sequence;
                         assignedTeam = static_cast<uint8_t>(state.team & 1u);
                     }
                     if (onPlayerState) onPlayerState(state);
@@ -1239,6 +1245,9 @@ void NetworkServer::broadcastPlayerState(uint32_t playerId, const glm::vec3& pos
     auto stateIt = players.find(playerId);
     packet.team = (stateIt != players.end()) ? stateIt->second.team : 0;
     packet.stance = (stateIt != players.end()) ? stateIt->second.stance : 0;
+    if (stateIt != players.end()) {
+        packet.header.sequence = ++stateIt->second.stateSequence;
+    }
 
     // Only broadcast to players on the same map
     if (players.find(playerId) != players.end()) {
@@ -1383,6 +1392,9 @@ void NetworkServer::broadcastPlayerStateToMap(uint32_t playerId, const std::stri
     auto stateIt = players.find(playerId);
     packet.team = (stateIt != players.end()) ? stateIt->second.team : 0;
     packet.stance = (stateIt != players.end()) ? stateIt->second.stance : 0;
+    if (stateIt != players.end()) {
+        packet.header.sequence = ++stateIt->second.stateSequence;
+    }
 
     // Damage and respawn outcomes must also reach the player they describe
     // (otherwise the victim never learns it died). Ordinary position updates

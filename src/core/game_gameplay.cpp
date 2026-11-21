@@ -133,9 +133,10 @@ void Game::stanceBodyLocalBox(uint8_t stance, glm::vec3& boxMin, glm::vec3& boxM
     const float half = bodyWidth * 0.5f;
     boxMin = glm::vec3(-half, 0.0f, -half);
     if (stance == 2) {
-        // A prone body is rotated forward around the feet by the renderer, so
-        // its hit box extends along local +Z instead of upwards.
-        boxMax = glm::vec3(half, proneBodyHeight, bodyHeight);
+        // A prone body lies along local Z: torso/head forward of the feet and
+        // legs trailing just behind them.
+        boxMin = glm::vec3(-half, 0.0f, -0.9f);
+        boxMax = glm::vec3(half, proneBodyHeight, 1.2f);
     } else {
         boxMax = glm::vec3(half, bodyHeightForStance(stance), half);
     }
@@ -1233,11 +1234,15 @@ void Game::updateProjectiles(float deltaTime) {
                 // Check projectile type by type field
                 bool isGrenade = projectiles[i].type == 1;
                 bool isFlashbang = projectiles[i].type == 2;
-                bool isPistolBullet = projectiles[i].type == 0;
-                bool isShotgun = projectiles[i].type == 3;
+                // Bullet types: pistol 0, shotgun pellet 3, sniper 4.
+                // The sniper round used to be missing here, so it passed
+                // straight through walls for its full lifetime.
+                const bool isBullet = projectiles[i].type == 0 ||
+                                      projectiles[i].type == 3 ||
+                                      projectiles[i].type == 4;
 
-                if (isPistolBullet || isShotgun) {
-                    // Pistol/shotgun bullets: simple damage, no bounce, no explosion
+                if (isBullet) {
+                    // Bullets: simple impact, no bounce, no explosion
                     playSoundEffect("bullet_impact", projectiles[i].position, 0.6f);
                     createBulletHole(projectiles[i].position, glm::vec3(0.0f, 1.0f, 0.0f)); // Default normal up
                     projectiles[i].active = false;
@@ -2139,10 +2144,9 @@ void Game::renderRemotePlayers() {
                                     : glm::clamp(remote.health / 100.0f, 0.0f, 1.0f);
         const uint8_t renderStance = remote.isDead ? 0 : remote.stance;
         if (playerModel_ && remoteModelAnims[i].valid()) {
-            posePlayerInstance(remoteModelAnims[i], remote.anim);
+            posePlayerInstance(remoteModelAnims[i], remote.anim, renderStance);
             renderer.submitModel(playerModel_.get(), &remoteModelAnims[i],
-                                 humanoid::rootTransform(remote.renderPosition, remote.yaw,
-                                                         renderStance),
+                                 humanoid::rootTransform(remote.renderPosition, remote.yaw),
                                  color);
         } else {
             humanoid::render(renderer, remote.renderPosition, remote.yaw, color,

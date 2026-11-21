@@ -102,7 +102,7 @@ const size_t MAX_LOBBY_PLAYERS = 16;
 inline float stanceBodyHeight(uint8_t stance) {
     switch (stance) {
         case 1: return 1.2f;
-        case 2: return 0.55f;
+        case 2: return 0.65f;
         default: return 1.8f;
     }
 }
@@ -289,6 +289,7 @@ struct BombStatePacket {
     uint8_t roundWinner;       ///< 0 = Team A, 1 = Team B, 255 = draw
     uint8_t roundEndReason;    ///< RoundEndReason
     uint8_t attackingTeam;
+    uint32_t roundId;          ///< increments on every server round start
     uint8_t plantingTeam;      ///< 255 when no bomb has been planted
     uint8_t siteIndex;         ///< index in the map's bomb-site list (255 = none)
     uint8_t siteLabel;         ///< 'A' or 'B'
@@ -461,6 +462,7 @@ private:
     bool connecting;
     uint32_t clientId;
     uint8_t assignedTeam = 0;
+    uint32_t lastOwnStateSequence_ = 0; ///< ignore stale own-team updates
     uint32_t sequence;
 
     // Session bookkeeping
@@ -517,6 +519,7 @@ struct ServerPlayer {
     uint8_t gameMode = 0; ///< last game mode the client reported
     uint8_t matchFormat = 0; ///< last match format the client reported
     uint8_t stance = 0;   ///< 0 standing, 1 crouching, 2 prone
+    uint32_t stateSequence = 0; ///< monotonic PlayerState sequence
     bool isBot = false;   ///< server-controlled player (no socket / timeout)
 
     // Pre-match lobby (separate from the map the player is currently in).

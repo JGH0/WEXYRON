@@ -181,6 +181,13 @@ public:
     /// Evaluate the current pose and rebuild the node/skin matrices.
     void update();
 
+    /// Add a local rotation / translation on top of the evaluated clip pose.
+    /// Used for stance poses (bent knees, prone) the asset has no clips for.
+    /// Overrides are reset by clearNodeOverrides() (call once per frame).
+    void clearNodeOverrides();
+    void setNodeRotationOffset(int nodeIndex, const glm::quat& delta);
+    void setNodeTranslationOffset(int nodeIndex, const glm::vec3& delta);
+
     const glm::mat4& globalTransform(int nodeIndex) const;
     const std::vector<glm::mat4>& globalTransforms() const { return globals_; }
 
@@ -193,9 +200,17 @@ private:
         glm::vec3 scale{1.0f};
     };
 
+    struct NodeOverride {
+        bool hasRotation = false;
+        glm::quat rotationDelta{1.0f, 0.0f, 0.0f, 0.0f};
+        bool hasTranslation = false;
+        glm::vec3 translationDelta{0.0f};
+    };
+
     const GltfModel* model_ = nullptr;
     std::vector<LocalTRS> rest_;       ///< rest pose per node
     std::vector<LocalTRS> pose_;       ///< evaluated per-node pose
+    std::vector<NodeOverride> overrides_; ///< per-node stance offsets
     std::vector<glm::mat4> globals_;   ///< world matrix per node
     bool poseDirty_ = true;
 

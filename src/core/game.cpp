@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <filesystem>
 #include <algorithm>
 #include <cctype>
@@ -641,6 +642,15 @@ void Game::initModels() {
         playerJumpClip_ = playerModel_->findAnimation("Jump");
         playerHitClip_ = playerModel_->findAnimation("Hit");
         playerDeathClip_ = playerModel_->findAnimation("Death");
+        playerHipsNode_ = playerModel_->findNode("hips");
+        playerSpineNode_ = playerModel_->findNode("spine");
+        playerHeadNode_ = playerModel_->findNode("head");
+        playerUpperLegLNode_ = playerModel_->findNode("upper_leg_l");
+        playerUpperLegRNode_ = playerModel_->findNode("upper_leg_r");
+        playerLowerLegLNode_ = playerModel_->findNode("lower_leg_l");
+        playerLowerLegRNode_ = playerModel_->findNode("lower_leg_r");
+        playerFootLNode_ = playerModel_->findNode("foot_l");
+        playerFootRNode_ = playerModel_->findNode("foot_r");
         for (int i = 0; i < MAX_REMOTE_PLAYERS; ++i) remoteModelAnims[i].init(playerModel_.get());
         for (int i = 0; i < MAX_ENEMIES; ++i) enemyModelAnims[i].init(playerModel_.get());
         std::cout << "[models] player.glb (" << playerModel_->animationCount()
@@ -682,8 +692,53 @@ void Game::initModels() {
     }
 }
 
-void Game::posePlayerInstance(GltfInstance& instance, const humanoid::Anim& anim) {
+void Game::applyPlayerStancePose(GltfInstance& instance, uint8_t stance) {
+    instance.clearNodeOverrides();
+    if (stance == 0 || !playerModel_ || !instance.valid()) return;
+
+    auto rotate = [&](int node, float degrees) {
+        if (node < 0) return;
+        instance.setNodeRotationOffset(
+            node, glm::angleAxis(glm::radians(degrees), glm::vec3(1.0f, 0.0f, 0.0f)));
+    };
+    auto translate = [&](int node, const glm::vec3& delta) {
+        if (node < 0) return;
+        instance.setNodeTranslationOffset(node, delta);
+    };
+
+    if (stance == 1) {
+        // Crouch: drop the hips, bend the knees ~125 degrees and lean the
+        // torso forward. This keeps the feet on the floor instead of scaling
+        // the whole character down.
+        translate(playerHipsNode_, glm::vec3(0.0f, -0.48f, 0.0f));
+        rotate(playerSpineNode_, 30.0f);
+        rotate(playerHeadNode_, -20.0f);
+        rotate(playerUpperLegLNode_, -65.0f);
+        rotate(playerUpperLegRNode_, -65.0f);
+        rotate(playerLowerLegLNode_, 125.0f);
+        rotate(playerLowerLegRNode_, 125.0f);
+        rotate(playerFootLNode_, -60.0f);
+        rotate(playerFootRNode_, -60.0f);
+    } else if (stance == 2) {
+        // Prone: hips near the floor, torso horizontal forward, legs trailing
+        // behind. The head lifts so the face is not buried in the ground.
+        translate(playerHipsNode_, glm::vec3(0.0f, -0.55f, 0.0f));
+        rotate(playerSpineNode_, 90.0f);
+        rotate(playerHeadNode_, -25.0f);
+        rotate(playerUpperLegLNode_, 90.0f);
+        rotate(playerUpperLegRNode_, 90.0f);
+        rotate(playerFootLNode_, -90.0f);
+        rotate(playerFootRNode_, -90.0f);
+    }
+}
+
+void Game::posePlayerInstance(GltfInstance& instance, const humanoid::Anim& anim,
+                              uint8_t stance) {
     if (!playerModel_ || !instance.valid()) return;
+
+    // Dead bodies use the death clip only; a stance override would fight it.
+    if (anim.death > 0.001f) stance = 0;
+    const bool stanceLocked = stance != 0;
 
     const float twoPi = 6.28318530718f;
     const float idleDuration = playerModel_->animationDuration(playerIdleClip_);
@@ -706,23 +761,25 @@ void Game::posePlayerInstance(GltfInstance& instance, const humanoid::Anim& anim
     } else if (!anim.onGround && playerJumpClip_ >= 0) {
         instance.setPose(playerJumpClip_, 0.0f, 1.0f);
     } else if (anim.shoot > 0.01f) {
-        const bool walking = anim.walkBlend > 0.5f;
+        const bool walking = anim.walkBlend > 0.5f && !stanceLocked;
         instance.setPose(playerShootClip_,
                          (1.0f - anim.shoot) * shootDuration, anim.shoot,
                          walking ? playerWalkClip_ : playerIdleClip_,
                          walking ? walkTime : idleTime,
                          1.0f - anim.shoot);
     } else if (anim.damage > 0.01f && playerHitClip_ >= 0) {
-        const bool walking = anim.walkBlend > 0.5f;
+        const bool walking = anim.walkBlend > 0.5f && !stanceLocked;
         instance.setPose(playerHitClip_,
                          (1.0f - anim.damage) * hitDuration, anim.damage,
                          walking ? playerWalkClip_ : playerIdleClip_,
                          walking ? walkTime : idleTime,
                          1.0f - anim.damage);
     } else {
-        instance.setPose(playerWalkClip_, walkTime, anim.walkBlend,
-                         playerIdleClip_, idleTime, 1.0f - anim.walkBlend);
+        const float walkWeight = stanceLocked ? 0.0f : anim.walkBlend;
+        instance.setPose(playerWalkClip_, walkTime, walkWeight,
+                         playerIdleClip_, idleTime, 1.0f - walkWeight);
     }
+    applyPlayerStancePose(instance, stance);
     instance.update();
 }
 

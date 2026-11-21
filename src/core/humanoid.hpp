@@ -134,10 +134,10 @@ inline HitZone hitZone(const glm::vec3& point, const glm::vec3& feet,
     const float localZ = d.x * cy + d.z * sy;
 
     if (stance == 2) {
-        // The prone body lies forward from the feet: head at the far end, legs
-        // near the feet, arms outside the torso line.
-        if (localZ > 1.30f && std::abs(localX) <= 0.20f) return HitZone::Head;
-        if (localZ < 0.85f) return HitZone::Limb;
+        // The prone body lies along local Z: head forward of the torso, legs
+        // trailing behind the feet, arms outside the torso line.
+        if (localZ > 0.65f && std::abs(localX) <= 0.20f) return HitZone::Head;
+        if (localZ < -0.20f) return HitZone::Limb;
         if (std::abs(localX) > kArmHalfX) return HitZone::Limb;
         return HitZone::Body;
     }
@@ -158,21 +158,6 @@ inline HitZone hitZone(const glm::vec3& point, const glm::vec3& feet,
     return HitZone::Body;
 }
 
-/// Local transform that turns an upright model into the requested stance.
-/// Crouching compresses the model to the crouch body height; prone rotates it
-/// forward around the feet and lifts it just clear of the floor. The hit box
-/// in Game::stanceBodyLocalBox uses the same dimensions.
-inline glm::mat4 stanceTransform(uint8_t stance) {
-    glm::mat4 m(1.0f);
-    if (stance == 1) {
-        m = glm::scale(m, glm::vec3(1.0f, 1.2f / kBodyHeight, 1.0f));
-    } else if (stance == 2) {
-        m = glm::translate(m, glm::vec3(0.0f, 0.20f, 0.0f));
-        m = glm::rotate(m, glm::radians(88.0f), glm::vec3(1.0f, 0.0f, 0.0f));
-    }
-    return m;
-}
-
 /// Root matrix for an actor whose feet are at `feet` and that faces `yawDeg`
 /// (camera yaw convention). The same facing the procedural body uses.
 ///
@@ -180,8 +165,7 @@ inline glm::mat4 stanceTransform(uint8_t stance) {
 /// the triangle winding of a glTF mesh, so back-face culling removes the
 /// front faces and the model looks inside-out. The old per-face box renderer
 /// corrected its own winding, which is why this was harmless before.
-inline glm::mat4 rootTransform(const glm::vec3& feet, float yawDeg,
-                               uint8_t stance = 0) {
+inline glm::mat4 rootTransform(const glm::vec3& feet, float yawDeg) {
     const float yaw = glm::radians(yawDeg);
     const float cy = std::cos(yaw);
     const float sy = std::sin(yaw);
@@ -193,7 +177,7 @@ inline glm::mat4 rootTransform(const glm::vec3& feet, float yawDeg,
     root[1] = glm::vec4(0.0f, 1.0f, 0.0f, 0.0f);
     root[2] = glm::vec4(forward, 0.0f);
     root[3] = glm::vec4(feet, 1.0f);
-    return root * stanceTransform(stance);
+    return root;
 }
 
 /// Draw one blocky humanoid.
@@ -235,10 +219,11 @@ inline void render(Renderer& renderer, const glm::vec3& feet, float yawDeg,
         const float fall = death * (2.0f - death);   // ease out
         root = glm::rotate(root, glm::radians(-82.0f * fall), vec3(1, 0, 0));
         root[3].y += 0.10f * fall;
-    } else {
-        // Crouch / prone pose. Dead bodies use the collapse animation instead.
-        root = root * stanceTransform(stance);
     }
+
+    const bool crouching = stance == 1 && death <= 0.0f;
+    const bool prone = stance == 2 && death <= 0.0f;
+    const float hipY = prone ? 0.35f : (crouching ? 0.42f : kHipY);
 
     // Push a box in a parent's local space. `rot` is applied around the box
     // centre (X then Y then Z).
@@ -326,11 +311,38 @@ inline void render(Renderer& renderer, const glm::vec3& feet, float yawDeg,
         torsoBob = 0.0f;
     }
 
+    // Crouch: bent knees, lowered hips and a forward torso lean. Prone: the
+    // hips drop to the floor, the spine lies forward and the legs trail back.
+    if (crouching) {
+        leftHip = rightHip = -65.0f;
+        leftKnee = rightKnee = 125.0f;
+        if (fire <= 0.0f) {
+            leftArm = rightArm = -10.0f;
+            armOutL = 5.0f;
+            armOutR = -5.0f;
+        }
+        torsoLean = 30.0f;
+        torsoTwist = 0.0f;
+        torsoBob = 0.0f;
+    } else if (prone) {
+        leftHip = rightHip = 90.0f;
+        leftKnee = rightKnee = 0.0f;
+        if (fire <= 0.0f) {
+            leftArm = rightArm = 0.0f;
+            armOutL = 7.0f;
+            armOutR = -7.0f;
+        }
+        torsoLean = 90.0f;
+        torsoTwist = 0.0f;
+        torsoBob = 0.0f;
+    }
+
+    const float stanceHeadPitch = prone ? -35.0f : (crouching ? -22.0f : 0.0f);
     const float headPitch = std::clamp(pitchDeg * 0.35f, -18.0f, 18.0f)
-                          - 8.0f * flinch - 14.0f * death;
+                          - 8.0f * flinch - 14.0f * death + stanceHeadPitch;
 
     // ── Torso / neck / head ────────────────────────────────────────────────
-    mat4 torsoRoot = glm::translate(root, vec3(0.0f, kHipY + torsoBob, 0.0f));
+    mat4 torsoRoot = glm::translate(root, vec3(0.0f, hipY + torsoBob, 0.0f));
     torsoRoot = glm::rotate(torsoRoot, glm::radians(torsoLean), vec3(1, 0, 0));
     torsoRoot = glm::rotate(torsoRoot, glm::radians(torsoTwist), vec3(0, 1, 0));
 
@@ -402,8 +414,8 @@ inline void render(Renderer& renderer, const glm::vec3& feet, float yawDeg,
     }
 
     // ── Legs ────────────────────────────────────────────────────────────────
-    auto leg = [&](float side, float hipDeg, float kneeDeg) {
-        mat4 hip = glm::translate(root, vec3(side * kHipHalfX, kHipY, 0.0f));
+    auto leg = [&](float side, float hipDeg, float kneeDeg, float footDeg) {
+        mat4 hip = glm::translate(root, vec3(side * kHipHalfX, hipY, 0.0f));
         hip = glm::rotate(hip, glm::radians(hipDeg), vec3(1, 0, 0));
         add(hip, vec3(0.0f, -0.20f, 0.0f), vec3(0.21f, 0.40f, 0.22f), upperColor);
 
@@ -412,11 +424,15 @@ inline void render(Renderer& renderer, const glm::vec3& feet, float yawDeg,
         add(knee, vec3(0.0f, -0.20f, 0.0f), vec3(0.19f, 0.40f, 0.20f), lowerColor);
 
         mat4 ankle = glm::translate(knee, vec3(0.0f, -0.40f, 0.0f));
+        if (footDeg != 0.0f) {
+            ankle = glm::rotate(ankle, glm::radians(footDeg), vec3(1, 0, 0));
+        }
         add(ankle, vec3(0.0f, -0.05f, 0.06f), vec3(0.21f, 0.10f, 0.32f), feetColor);
     };
 
-    leg(+1.0f, leftHip, leftKnee);
-    leg(-1.0f, rightHip, rightKnee);
+    const float footDeg = crouching ? -60.0f : (prone ? -90.0f : 0.0f);
+    leg(+1.0f, leftHip, leftKnee, footDeg);
+    leg(-1.0f, rightHip, rightKnee, footDeg);
 }
 
 } // namespace humanoid
