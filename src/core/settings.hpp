@@ -25,6 +25,7 @@
 #ifndef SETTINGS_HPP
 #define SETTINGS_HPP
 
+#include <cstdlib>
 #include <string>
 #include <vector>
 #include <cstdint>
@@ -197,7 +198,12 @@ void syncSettingDefs(GameSettings& s, std::vector<SettingDef>& defs);
 void bindSettingDefs(GameSettings& s, std::vector<SettingDef>& defs);
 
 /// Settings file used by the game (relative to the working directory).
-inline const char* defaultSettingsPath() { return "assets/settings.cfg"; }
+/// CUBE_SETTINGS_PATH overrides it, so tests can run on their own file
+/// without touching the player's settings.
+inline const char* defaultSettingsPath() {
+    const char* overridePath = std::getenv("CUBE_SETTINGS_PATH");
+    return (overridePath && *overridePath) ? overridePath : "assets/settings.cfg";
+}
 
 // ---------------------------------------------------------------------------
 // Values <-> text

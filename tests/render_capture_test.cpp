@@ -105,6 +105,17 @@ void renderAndSave(Game& game, const fs::path& out, const std::string& name, int
 int capture(const fs::path& out) {
     fs::create_directories(out);
     int failures = 0;
+
+    // Run on a fresh settings file with the defaults: the HUD and menus show
+    // setting values, and other runs/tests write assets/settings.cfg. The
+    // player's file is never touched.
+    const fs::path settingsFile = fs::temp_directory_path() / "wexyron_render_capture_settings.cfg";
+    fs::remove(settingsFile);
+    const std::string settingsEnv = "CUBE_SETTINGS_PATH=" + settingsFile.string();
+    static std::string keepAlive;  // putenv keeps a pointer to the string
+    keepAlive = settingsEnv;
+    putenv(keepAlive.data());
+
     Game game(800, 600);
     game.init();
 
