@@ -2,18 +2,17 @@
 // Checks GitHub releases, downloads/applies updates, then launches game.exe
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
-#define UNICODE
-#define _UNICODE
+// UNICODE/_UNICODE are injected via -DUNICODE -D_UNICODE compiler flags;
+// defining them here too would cause a redefinition warning on GCC/MinGW.
 #include <windows.h>
 #include <winhttp.h>
 #include <commctrl.h>
+#include <algorithm>
 #include <string>
 #include <fstream>
 #include <thread>
 #include <filesystem>
-
-#pragma comment(lib, "winhttp.lib")
-#pragma comment(lib, "comctl32.lib")
+// Libraries linked via -l flags in Makefile (pragma comment is MSVC-only)
 
 static const wchar_t* API_HOST = L"api.github.com";
 static const wchar_t* API_PATH = L"/repos/JGH0/WEXYRON/releases/latest";
@@ -39,7 +38,7 @@ static std::wstring GetExeDir() {
 }
 
 static std::string ReadVersionFile(const std::wstring& dir) {
-    std::ifstream f(dir + L"\\version.txt");
+    std::ifstream f((dir + L"\\version.txt").c_str());
     std::string v;
     if (f) std::getline(f, v);
     while (!v.empty() && (v.back() == '\r' || v.back() == '\n' || v.back() == ' '))
@@ -150,12 +149,13 @@ static bool HttpDownload(const std::wstring& url, const std::wstring& dest, HWND
         WinHttpQueryHeaders(hr, WINHTTP_QUERY_CONTENT_LENGTH | WINHTTP_QUERY_FLAG_NUMBER,
             nullptr, &clen, &csz, nullptr);
 
-        std::ofstream out(dest, std::ios::binary);
+        std::ofstream out(dest.c_str(), std::ios::binary);
         if (out) {
             DWORD downloaded = 0, av = 0;
             char buf[65536];
             while (WinHttpQueryDataAvailable(hr, &av) && av > 0) {
-                DWORD chunk = min(av, (DWORD)sizeof buf), rd = 0;
+                DWORD chunk = std::min(av, (DWORD)sizeof(buf));
+                DWORD rd = 0;
                 if (!WinHttpReadData(hr, buf, chunk, &rd)) break;
                 out.write(buf, rd);
                 downloaded += rd;
@@ -182,7 +182,7 @@ static bool SpawnUpdateScript(const std::wstring& zip, const std::wstring& dir,
     GetTempPathW(MAX_PATH, tmp);
     std::wstring script = std::wstring(tmp) + L"wexyron_upd.ps1";
 
-    std::wofstream f(script);
+    std::wofstream f(script.c_str());
     if (!f) return false;
     f << L"$g='" << dir << L"'\n"
       << L"$z='" << zip << L"'\n"
