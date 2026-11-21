@@ -39,9 +39,35 @@
 
 class LocalBotHost;
 
+/// One human player in an open pre-match setup (from the server's lobby state).
+struct LobbyPlayerView {
+    uint32_t id = 0;
+    std::string name;
+    uint8_t team = 0;
+    bool ready = false;
+};
+
+/// State of one map's pre-match setup, mirrored from the server. The map
+/// selection lists these as joinable matches and the setup screen renders the
+/// roster from it.
+struct LobbyView {
+    std::string mapName;
+    int gameMode = 0;
+    int matchFormat = 0;
+    int botPool = 0;
+    int botsTeamA = 0;
+    int botsTeamB = 0;
+    int botAccuracy = 0;
+    int botMaxAccuracy = 100;
+    int readyCount = 0;
+    std::vector<LobbyPlayerView> players;
+
+    bool empty() const { return players.empty(); }
+};
+
 /**
  * @brief Main game class managing the application lifecycle
- * 
+ *
  * Handles window creation, input processing, game loop,
  * rendering, and game state management.
  */
@@ -740,8 +766,10 @@ private:
     void refreshServerRows();
     /// Poll LAN discovery and type into the IP/port row (SERVER_CONNECT).
     void processServerConnectTextInput();
-    /// Open the map selection screen.
+    /// Open the map selection screen (and rebuild its open-lobby rows).
     void openMapSelection();
+    /// Rebuild the map selection rows without resetting the menu selection.
+    void refreshMapSelectionRows();
     /// Draw the connect-to-server screen (framework view + text fields).
     void renderServerConnect();
 
@@ -750,9 +778,20 @@ private:
     void openTeamSetup();
     /// Rebuild the setup rows (bot pool / values may have changed).
     void refreshTeamSetupRows();
-    /// Push the local setup choices (team, bots, accuracy, format) to a
-    /// connected server. No-op in single player.
-    void sendLobbySetup(bool freshMatch = false);
+    /// Push the current setup (map, team, bots, accuracy, ready) to a connected
+    /// server. `publishLobby` false only updates the match settings; it is used
+    /// after the server started the match so the client does not rejoin.
+    void sendLobbySetup(bool freshMatch = false, bool publishLobby = true);
+    /// Leave the open pre-match setup (back to map selection / disconnect).
+    void leaveLobby();
+    /// Server published the roster / ready state of one map's setup.
+    void handleLobbyState(const LobbyStatePacket& packet);
+    /// Every player in our setup pressed READY: start the agreed match.
+    void handleLobbyStart(const LobbyStartPacket& packet);
+    /// Find the mirrored setup for a map file, or null when there is none.
+    const LobbyView* findLobby(const std::string& mapFile) const;
+    /// Local player's roster name (Discord username, or "playerX").
+    std::string playerDisplayName() const;
     /// Start the pending map with the current setup.
     void beginMatch();
     /// Bot counts for the current mode. Deathmatch has one shared pool, so
@@ -919,6 +958,9 @@ private:
     int serverBotPool_ = 0;       ///< bots the server has available
     int serverBotMaxAccuracy_ = 100;
     bool lobbyDirty_ = false;     ///< rows need a refresh after a server state
+    bool lobbyReady_ = false;     ///< local READY toggle in the setup screen
+    /// Every open map setup published by the server (map file -> roster).
+    std::unordered_map<std::string, LobbyView> lobbyViews_;
     /// Single-player bot host (null in multiplayer / when bots are off).
     std::unique_ptr<LocalBotHost> localBots_;
     bool localBotsPending_ = false; ///< start after the requested map loads
@@ -941,6 +983,10 @@ private:
     static constexpr float eyeHeight   = 1.6f;   ///< standing camera / eye above the feet
     static constexpr float bodyWidth   = 0.8f;   ///< body box width and depth
     static constexpr float bodyHeight  = 1.8f;   ///< standing body box height
+    static constexpr float crouchBodyHeight = 1.2f;
+    static constexpr float proneBodyHeight  = 0.55f;
+    static constexpr float crouchEyeHeight  = 1.05f;
+    static constexpr float proneEyeHeight   = 0.35f;
 
     /// The local player's stance changes the body box, the eye height and the
     /// movement speed. Sneak is held (CTRL), lie/crawl (C) is a toggle.
@@ -958,6 +1004,9 @@ private:
     float currentEyeHeight() const;
     float currentBodyHeight() const;
     float currentBodyCenterHeight() const;
+    /// Dimensions for a networked actor's advertised stance (0/1/2).
+    static float bodyHeightForStance(uint8_t stance);
+    static float eyeHeightForStance(uint8_t stance);
     /// True when a body of `height` fits at `feet` (used to stand up).
     bool bodyFitsHeight(const glm::vec3& feet, float height) const;
     /// True when the local player may stand up here (no low ceiling).
@@ -1035,6 +1084,7 @@ private:
         bool isDead;
         bool active;
         uint8_t team = 0; ///< server-assigned team (0 = Team A, 1 = Team B)
+        uint8_t stance = 0; ///< 0 standing, 1 crouching, 2 prone
         humanoid::Anim anim; ///< walk / air / flinch / shooting animation
     };
     static const int MAX_REMOTE_PLAYERS = 16;
@@ -1086,6 +1136,24 @@ private:
                                                          const glm::vec3& feet,
                                                          float radius,
                                                          float height = bodyHeight);
+
+    /// Stance-aware body box in the actor's local frame. Standing / crouching
+    /// use a centred upright box; prone lies forward from the feet, matching
+    /// the rotated model.
+    static void stanceBodyLocalBox(uint8_t stance, glm::vec3& boxMin,
+                                   glm::vec3& boxMax);
+    static glm::vec3 worldToBodyLocal(const glm::vec3& point, const glm::vec3& feet,
+                                      float yawDeg);
+    static glm::vec3 bodyLocalToWorld(const glm::vec3& local, const glm::vec3& feet,
+                                      float yawDeg);
+    /// Distance from `point` to a ranged player's stance-aware body box.
+    static float distanceToStanceBody(const glm::vec3& point, const glm::vec3& feet,
+                                      float yawDeg, uint8_t stance);
+    /// Swept shot against the stance-aware, yaw-oriented remote body box.
+    static ProjectileSweepHit sweepProjectileAgainstStanceBody(
+        const glm::vec3& from, const glm::vec3& to, const glm::vec3& feet,
+        float yawDeg, float radius, uint8_t stance);
+
     /// Start of a projectile's current frame segment: its last checked
     /// position (seeded with the spawn position on creation).
     glm::vec3 projectileSegmentStart(const Projectile& projectile) const;

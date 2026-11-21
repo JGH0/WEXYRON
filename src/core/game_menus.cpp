@@ -50,34 +50,66 @@ std::vector<std::string> buildAccuracyOptions(int max) {
     return options;
 }
 
-/// Name shown for the local player in the match roster. Discord Rich Presence
-/// provides the username; without a connection the placeholder stays "playerX".
-std::string localPlayerName() {
-    const std::string discordName = discord_presence::username();
-    return discordName.empty() ? std::string("playerX") : discordName;
+std::string lobbyPlayerLabel(const LobbyPlayerView& player) {
+    return player.name + (player.ready ? "  READY" : "  WAITING");
 }
 
 /// Append the two-column team roster (Team A on the left, Team B on the
-/// right). The local player always occupies the first slot of their own team;
-/// the remaining slots are the bots assigned to that side.
-void appendTeamRoster(menu::Page& page, int botsTeamA, int botsTeamB, int playerTeam) {
-    const std::string playerName = localPlayerName();
-    const int teamACount = std::max(0, botsTeamA) + (playerTeam == 0 ? 1 : 0);
-    const int teamBCount = std::max(0, botsTeamB) + (playerTeam == 1 ? 1 : 0);
+/// right). Human players come from the server lobby so every client sees the
+/// same names and ready flags; bots fill the remaining slots of each side.
+void appendTeamRoster(menu::Page& page, const LobbyView* lobby,
+                      const std::string& localName, uint32_t selfId,
+                      bool localReady, bool showReady, int playerTeam,
+                      int botsTeamA, int botsTeamB) {
+    std::vector<std::string> teamA;
+    std::vector<std::string> teamB;
 
-    auto memberName = [&](int team, int slot) {
-        const bool playerHere = (team == playerTeam);
-        if (playerHere && slot == 0) return playerName;
-        const int botSlot = slot - (playerHere ? 1 : 0);
-        return std::string("BOT ") + std::to_string(botSlot + 1);
-    };
+    bool localListed = false;
+    if (lobby) {
+        for (const LobbyPlayerView& player : lobby->players) {
+            if (player.id == selfId) localListed = true;
+            (player.team == 0 ? teamA : teamB).push_back(lobbyPlayerLabel(player));
+        }
+    }
+    if (!localListed) {
+        const std::string label = localName +
+            (showReady ? (localReady ? "  READY" : "  WAITING") : std::string());
+        if (playerTeam == 0) teamA.insert(teamA.begin(), label);
+        else                 teamB.insert(teamB.begin(), label);
+    }
+
+    for (int i = 0; i < botsTeamA; ++i) {
+        teamA.push_back("BOT " + std::to_string(i + 1));
+    }
+    for (int i = 0; i < botsTeamB; ++i) {
+        teamB.push_back("BOT " + std::to_string(i + 1));
+    }
 
     page.add(menu::separator("TEAMS"));
     page.add(menu::info("TEAM A", "TEAM B"));
-    const int rows = std::max(teamACount, teamBCount);
-    for (int slot = 0; slot < rows; ++slot) {
-        page.add(menu::info(slot < teamACount ? memberName(0, slot) : std::string(),
-                            slot < teamBCount ? memberName(1, slot) : std::string()));
+    const size_t rows = std::max(teamA.size(), teamB.size());
+    for (size_t slot = 0; slot < rows; ++slot) {
+        page.add(menu::info(slot < teamA.size() ? teamA[slot] : std::string(),
+                            slot < teamB.size() ? teamB[slot] : std::string()));
+    }
+}
+
+/// Deathmatch has no sides: show every human in the setup in one list.
+void appendLobbyPlayers(menu::Page& page, const LobbyView* lobby,
+                        const std::string& localName, uint32_t selfId,
+                        bool localReady, bool showReady) {
+    page.add(menu::separator("PLAYERS"));
+    bool localListed = false;
+    if (lobby) {
+        for (const LobbyPlayerView& player : lobby->players) {
+            if (player.id == selfId) localListed = true;
+            page.add(menu::info(player.name, player.ready ? "READY" : "WAITING"));
+        }
+    }
+    if (!localListed) {
+        page.add(menu::info(localName,
+                            showReady ? (localReady ? "READY" : "WAITING")
+                                      : std::string()));
     }
 }
 } // namespace
@@ -259,25 +291,115 @@ void Game::resetBindingsToDefaults() {
 // Map selection
 // ---------------------------------------------------------------------------
 
-void Game::openMapSelection() {
-    menu::Page page("SELECT MAP", "CHOOSE A MAP AND A GAME MODE");
-    if (mapDisplayNames.empty()) {
-        page.add(menu::info("MAPS", "NONE FOUND", "No .map files in assets/maps"));
-    }
-    page.add(menu::separator("MAPS"));
-    for (size_t i = 0; i < mapDisplayNames.size(); ++i) {
-        std::string label = mapDisplayNames[i];
-        if (isConnectedToServer() && i < mapPlayerCounts.size() && mapPlayerCounts[i] > 0) {
-            label += "   [" + std::to_string(mapPlayerCounts[i]) + "]";
-        }
-        page.add(menu::action(label, [this, i]() {
-            mapSelection = static_cast<int>(i);
-            startSelectedMap(mapFiles[i]);
-        }, "Play this map"));
-    }
+std::string Game::playerDisplayName() const {
+    const std::string discordName = discord_presence::username();
+    return discordName.empty() ? std::string("playerX") : discordName;
+}
 
+void Game::openMapSelection() {
+    // Leaving the setup screen ends our lobby membership; the map list then
+    // shows the setups other players are waiting in.
+    leaveLobby();
+    menu::Page blank("SELECT MAP", "CHOOSE A MAP AND A GAME MODE");
+    openMenuView(mapMenu_, std::move(blank));
+    mapMenu_.legend = {{"UP/DOWN", "MAP"}, {"LEFT/RIGHT", "CHANGE"},
+                       {"ENTER", "PLAY"}, {"ESC", "LEAVE"}};
+    mapMenu_.onClose = [this]() { closeMenuToGame(); };
+    refreshMapSelectionRows();
+}
+
+void Game::refreshMapSelectionRows() {
     static const char* const kModeNames[] = {"DEATHMATCH", "TEAM DEATHMATCH", "BOMB DEFUSAL"};
     static const char* const kFormatNames[] = {"FREE PLAY", "NORMAL", "SWIFT"};
+
+    menu::Page page("SELECT MAP", "CHOOSE A MAP AND A GAME MODE");
+    const int previousSelection = mapMenu_.stack.selection();
+
+    // Open match setups come first: they are the "join a friend" entries.
+    page.add(menu::separator("OPEN MATCH SETUPS"));
+    bool anyLobby = false;
+    for (size_t i = 0; i < mapFiles.size(); ++i) {
+        const LobbyView* lobby = findLobby(mapFiles[i]);
+        if (!lobby || lobby->empty()) continue;
+        anyLobby = true;
+        const int mode = std::max(0, std::min(2, lobby->gameMode));
+        const int format = std::max(0, std::min(2, lobby->matchFormat));
+        const int botsA = lobby->botsTeamA;
+        const int botsB = lobby->botsTeamB;
+        const int ready = lobby->readyCount;
+        const int total = static_cast<int>(lobby->players.size());
+        const std::string mapFile = mapFiles[i];
+        page.add(menu::action(mapDisplayNames[i], [this, i, mapFile, mode, format,
+                                                  botsA, botsB]() {
+            currentGameMode = static_cast<GameMode>(mode);
+            matchFormat_ = static_cast<MatchFormat>(format);
+            botSetupTeamA_ = botsA;
+            botSetupTeamB_ = botsB;
+            botSetupBots_ = botsA + botsB;
+            mapSelection = static_cast<int>(i);
+            startSelectedMap(mapFile);
+        }, "Join this open match setup"));
+        page.rows.back().value = std::string(kModeNames[mode]) + "   " +
+                                 std::to_string(ready) + "/" + std::to_string(total) +
+                                 " READY";
+        std::string teamA;
+        std::string teamB;
+        std::string everyone;
+        for (const LobbyPlayerView& player : lobby->players) {
+            const std::string item = player.name + (player.ready ? "*" : "");
+            if (lobby->gameMode >= 1) {
+                std::string& target = (player.team == 0) ? teamA : teamB;
+                if (!target.empty()) target += "  ";
+                target += item;
+            }
+            everyone += (everyone.empty() ? "" : ", ") + item;
+        }
+        if (lobby->gameMode >= 1) {
+            page.rows.back().help = "Team A: " + (teamA.empty() ? std::string("-") : teamA) +
+                                    "   |   Team B: " + (teamB.empty() ? std::string("-") : teamB) +
+                                    "   (* = ready)";
+        } else {
+            page.rows.back().help = "Players: " + everyone + "   (* = ready)";
+        }
+    }
+    if (!anyLobby) {
+        page.add(menu::info("NO OPEN MATCH SETUPS", "",
+                            "Pick a map below to create one for other players"));
+    }
+
+    page.add(menu::separator("MAPS"));
+    for (size_t i = 0; i < mapDisplayNames.size(); ++i) {
+        const LobbyView* lobby = findLobby(mapFiles[i]);
+        const bool hasLobby = lobby && !lobby->empty();
+        const int mode = hasLobby ? std::max(0, std::min(2, lobby->gameMode))
+                                  : static_cast<int>(currentGameMode);
+        const int format = hasLobby ? std::max(0, std::min(2, lobby->matchFormat))
+                                    : static_cast<int>(matchFormat_);
+        const int botsA = hasLobby ? lobby->botsTeamA : botSetupTeamA_;
+        const int botsB = hasLobby ? lobby->botsTeamB : botSetupTeamB_;
+        const std::string mapFile = mapFiles[i];
+        page.add(menu::action(mapDisplayNames[i], [this, i, mapFile, hasLobby,
+                                                  mode, format, botsA, botsB]() {
+            if (hasLobby) {
+                currentGameMode = static_cast<GameMode>(mode);
+                matchFormat_ = static_cast<MatchFormat>(format);
+                botSetupTeamA_ = botsA;
+                botSetupTeamB_ = botsB;
+                botSetupBots_ = botsA + botsB;
+            }
+            mapSelection = static_cast<int>(i);
+            startSelectedMap(mapFile);
+        }, hasLobby ? "Join the open setup on this map"
+                    : "Create a match setup on this map"));
+        if (hasLobby) {
+            page.rows.back().value = "SETUP " + std::to_string(lobby->readyCount) + "/" +
+                                     std::to_string(lobby->players.size()) + " READY";
+        } else if (isConnectedToServer() && i < mapPlayerCounts.size() &&
+                   mapPlayerCounts[i] > 0) {
+            page.rows.back().value = std::to_string(mapPlayerCounts[i]) + " PLAYING";
+        }
+    }
+
     page.add(menu::separator("GAME MODE"));
     page.add(menu::cycle("MODE", {kModeNames[0], kModeNames[1], kModeNames[2]},
                          static_cast<int>(currentGameMode),
@@ -296,10 +418,8 @@ void Game::openMapSelection() {
                          },
                          "FREE PLAY, NORMAL or SWIFT match length"));
 
-    openMenuView(mapMenu_, std::move(page));
-    mapMenu_.legend = {{"UP/DOWN", "MAP"}, {"LEFT/RIGHT", "CHANGE"},
-                       {"ENTER", "PLAY"}, {"ESC", "LEAVE"}};
-    mapMenu_.onClose = [this]() { closeMenuToGame(); };
+    menu::replaceCurrent(mapMenu_, std::move(page));
+    if (previousSelection >= 0) mapMenu_.stack.setSelection(previousSelection);
 }
 
 // ---------------------------------------------------------------------------
@@ -310,6 +430,7 @@ void Game::startSelectedMap(const std::string& mapFile) {
     // Choosing a map opens the pre-match team / bot setup. The map is only
     // loaded and the match started from that screen (see beginMatch()).
     pendingMapFile_ = mapFile;
+    lobbyReady_ = false;
     openTeamSetup();
     gameState = TEAM_SETUP;
 }
@@ -325,7 +446,8 @@ void Game::startMatchNow(const std::string& mapFile) {
         networkClient->sendMapChange(mapFile);
         // After the map change the server sees the new map name, so a fresh
         // lobby request resets that map's scoreboard (not the previous one).
-        sendLobbySetup(true);
+        // publishLobby is false: the server already started this match.
+        sendLobbySetup(true, false);
         // A fresh bomb match needs an explicit first round on the server; an
         // ongoing match would otherwise still be waiting for a round start.
         if (currentGameMode == BOMB_DEFUSAL) {
@@ -343,6 +465,7 @@ void Game::startMatchNow(const std::string& mapFile) {
             remotePlayers[i].pitch          = 0.0f;
             remotePlayers[i].health         = 0.0f;
             remotePlayers[i].isDead         = true;
+            remotePlayers[i].stance         = 0;
         }
         playerCount = 1;
     }
@@ -378,21 +501,49 @@ void Game::refreshTeamSetupRows() {
     static const char* const kModeNames[] = {"DEATHMATCH", "TEAM DEATHMATCH", "BOMB DEFUSAL"};
     static const char* const kFormatNames[] = {"FREE PLAY", "NORMAL", "SWIFT"};
 
+    const bool online = isConnectedToServer();
     const bool teamMode = matchUsesTeamScore();
     const std::string mapLabel = pendingMapFile_.empty()
         ? std::string("SELECT A MAP")
         : formatMapDisplayName(pendingMapFile_);
-    menu::Page page("MATCH SETUP", mapLabel);
+    const std::string subtitle = mapLabel + "   " +
+        kModeNames[static_cast<int>(currentGameMode) % 3] + "   " +
+        kFormatNames[static_cast<int>(matchFormat_) % 3];
+    menu::Page page("MATCH SETUP", subtitle);
     const int previousSelection = teamMenu_.stack.selection();
 
-    page.add(menu::info("MAP", mapLabel));
-    page.add(menu::info("MODE", kModeNames[static_cast<int>(currentGameMode) % 3]));
-    page.add(menu::info("MATCH", kFormatNames[static_cast<int>(matchFormat_) % 3]));
+    const LobbyView* lobby = online ? findLobby(pendingMapFile_) : nullptr;
+    const uint32_t selfId = networkClient ? networkClient->getClientId() : 0;
+    const std::string localName = playerDisplayName();
+
+    // The ready control lives at the top so it never scrolls out of reach.
+    page.add(menu::separator("LOBBY"));
+    if (online) {
+        const int humans = lobby ? static_cast<int>(lobby->players.size()) : 1;
+        const int ready = lobby ? lobby->readyCount : (lobbyReady_ ? 1 : 0);
+        page.add(menu::info("PLAYERS", std::to_string(ready) + "/" +
+                                        std::to_string(humans) + " READY",
+                            "Every player in this setup must press READY"));
+        menu::Row readyRow = menu::toggle("READY", lobbyReady_,
+            [this](bool on) {
+                lobbyReady_ = on;
+                sendLobbySetup();
+                refreshTeamSetupRows();
+            },
+            "Press READY when the setup is final");
+        readyRow.onText = "READY";
+        readyRow.offText = "WAITING";
+        readyRow.value = lobbyReady_ ? "READY" : "WAITING";
+        page.add(std::move(readyRow));
+    } else {
+        page.add(menu::action("START MATCH", [this]() { beginMatch(); },
+                              "Load the map and start playing"));
+    }
 
     if (teamMode) {
         // Keep the displayed roster and the counters in sync before building
         // either. Deathmatch has no sides, so only the team modes show this.
-        if (isConnectedToServer()) {
+        if (online) {
             const int pool = std::max(0, serverBotPool_);
             botSetupTeamA_ = std::max(0, std::min(botSetupTeamA_, pool));
             botSetupTeamB_ = std::max(0, std::min(botSetupTeamB_, pool - botSetupTeamA_));
@@ -403,20 +554,24 @@ void Game::refreshTeamSetupRows() {
         }
         botSetupBots_ = botSetupTeamA_ + botSetupTeamB_;
 
-        appendTeamRoster(page, botSetupTeamA_, botSetupTeamB_, playerTeam & 1);
+        appendTeamRoster(page, lobby, localName, selfId, lobbyReady_, online,
+                         playerTeam & 1, botSetupTeamA_, botSetupTeamB_);
 
         page.add(menu::separator("YOUR TEAM"));
         page.add(menu::cycle("TEAM", {"TEAM A", "TEAM B"}, playerTeam & 1,
                              [this](int index) {
                                  playerTeam = index & 1;
+                                 lobbyReady_ = false;
                                  sendLobbySetup();
                                  refreshTeamSetupRows();
                              },
                              "Switch sides before the match starts"));
+    } else {
+        appendLobbyPlayers(page, lobby, localName, selfId, lobbyReady_, online);
     }
 
     page.add(menu::separator("BOTS"));
-    if (isConnectedToServer()) {
+    if (online) {
         const int pool = std::max(0, serverBotPool_);
         page.add(menu::info("SERVER BOT POOL", std::to_string(pool)));
         if (teamMode) {
@@ -426,6 +581,7 @@ void Game::refreshTeamSetupRows() {
                                      // Never allocate more than the server owns.
                                      botSetupTeamB_ = std::min(botSetupTeamB_, pool - index);
                                      botSetupBots_ = botSetupTeamA_ + botSetupTeamB_;
+                                     lobbyReady_ = false;
                                      sendLobbySetup();
                                      refreshTeamSetupRows();
                                  },
@@ -435,6 +591,7 @@ void Game::refreshTeamSetupRows() {
                                      botSetupTeamB_ = index;
                                      botSetupTeamA_ = std::min(botSetupTeamA_, pool - index);
                                      botSetupBots_ = botSetupTeamA_ + botSetupTeamB_;
+                                     lobbyReady_ = false;
                                      sendLobbySetup();
                                      refreshTeamSetupRows();
                                  },
@@ -444,6 +601,7 @@ void Game::refreshTeamSetupRows() {
             page.add(menu::cycle("BOTS", buildCountOptions(pool), botSetupBots_,
                                  [this](int index) {
                                      botSetupBots_ = index;
+                                     lobbyReady_ = false;
                                      sendLobbySetup();
                                  },
                                  "Bots in this deathmatch"));
@@ -457,6 +615,7 @@ void Game::refreshTeamSetupRows() {
                              [this, maxAccuracy](int index) {
                                  botSetupAccuracy_ = (index + 1) * 10;
                                  (void)maxAccuracy;
+                                 lobbyReady_ = false;
                                  sendLobbySetup();
                              },
                              "Bots cannot exceed the server's accuracy setting"));
@@ -489,31 +648,55 @@ void Game::refreshTeamSetupRows() {
     }
 
     page.add(menu::separator("ACTIONS"));
-    page.add(menu::action("START MATCH", [this]() { beginMatch(); },
-                          "Load the map and start playing"));
     page.add(menu::action("BACK", [this]() {
         openMapSelection();
         gameState = MAP_SELECTION;
     }, "Return to map selection"));
 
+    teamMenu_.legend.clear();
+    teamMenu_.legend.push_back({"UP/DOWN", "SELECT"});
+    teamMenu_.legend.push_back({"LEFT/RIGHT", "CHANGE"});
+    teamMenu_.legend.push_back({"ENTER", online ? "READY" : "START"});
+    teamMenu_.legend.push_back({"ESC", "BACK"});
+
     menu::replaceCurrent(teamMenu_, std::move(page));
     if (previousSelection >= 0) teamMenu_.stack.setSelection(previousSelection);
 }
 
-void Game::sendLobbySetup(bool freshMatch) {
+void Game::sendLobbySetup(bool freshMatch, bool publishLobby) {
     if (!networkClient || !networkClient->isConnected()) return;
+
+    // Keep the roster name current even if Discord connected after the session
+    // was established.
+    networkClient->setPlayerName(playerDisplayName());
     networkClient->sendLobbySetup(
         static_cast<uint8_t>(playerTeam & 1),
         static_cast<uint8_t>(setupBotsTeamA()),
         static_cast<uint8_t>(setupBotsTeamB()),
         static_cast<uint8_t>(std::max(0, std::min(100, botSetupAccuracy_))),
-        static_cast<uint8_t>(matchFormat_), freshMatch);
+        static_cast<uint8_t>(matchFormat_), freshMatch, pendingMapFile_,
+        static_cast<uint8_t>(currentGameMode),
+        publishLobby && lobbyReady_, publishLobby);
+}
+
+void Game::leaveLobby() {
+    if (lobbyReady_) lobbyReady_ = false;
+    if (!networkClient || !networkClient->isConnected()) return;
+    sendLobbySetup(false, false);
 }
 
 void Game::beginMatch() {
+    if (isConnectedToServer()) {
+        // Online matches start through the lobby: every player must press
+        // READY, then the server tells all of them to load the map together.
+        lobbyReady_ = !lobbyReady_;
+        sendLobbySetup();
+        refreshTeamSetupRows();
+        return;
+    }
+
     sendLobbySetup();
-    const bool offline = !isConnectedToServer();
-    localBotsPending_ = offline && (setupBotsTeamA() > 0 || setupBotsTeamB() > 0);
+    localBotsPending_ = (setupBotsTeamA() > 0 || setupBotsTeamB() > 0);
     if (!localBotsPending_) stopLocalBots();
     startMatchNow(pendingMapFile_);
 }

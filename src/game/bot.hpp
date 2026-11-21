@@ -309,8 +309,9 @@ private:
     float randomRange(float lo, float hi);
 };
 
-/// Distance from `point` to the upright body box standing at `feet`.
-float distanceToBody(const glm::vec3& point, const glm::vec3& feet);
+/// Distance from `point` to a body box standing at `feet` with `height`.
+float distanceToBody(const glm::vec3& point, const glm::vec3& feet,
+                     float height = 1.8f);
 
 } // namespace bots
 

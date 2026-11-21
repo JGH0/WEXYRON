@@ -604,7 +604,9 @@ void ServerBotManager::detonate(const ServerProjectile& projectile, NetworkServe
         if (std::string(victim->mapName) != projectile.mapName) continue;
         if (gameMode >= 1 && !config_.friendlyFire && victim->team == owner->team) continue;
 
-        const float distance = bots::distanceToBody(projectile.position, victim->position);
+        const float distance = bots::distanceToBody(
+            projectile.position, victim->position,
+            stanceBodyHeight(victim->stance));
         if (distance >= kGrenadeRadius) continue;
 
         // Explosions have no distance falloff.

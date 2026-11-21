@@ -1295,9 +1295,9 @@ void Bot::update(float dt, const World& world, std::vector<Action>& actions) {
     updateVertical(dt, world.map);
 }
 
-float distanceToBody(const glm::vec3& point, const glm::vec3& feet) {
+float distanceToBody(const glm::vec3& point, const glm::vec3& feet, float height) {
     const glm::vec3 mn(feet.x - kBodyHalfWidth, feet.y, feet.z - kBodyHalfWidth);
-    const glm::vec3 mx(feet.x + kBodyHalfWidth, feet.y + kBodyHeight, feet.z + kBodyHalfWidth);
+    const glm::vec3 mx(feet.x + kBodyHalfWidth, feet.y + height, feet.z + kBodyHalfWidth);
     const glm::vec3 closest(clampf(point.x, mn.x, mx.x),
                             clampf(point.y, mn.y, mx.y),
                             clampf(point.z, mn.z, mx.z));

@@ -63,8 +63,9 @@ enum PacketType : uint8_t {
     PACKET_BOMB_INTERACT = 20,     // Client asking the server to plant / defuse
     PACKET_BOMB_STATE = 21,        // Server-authoritative bomb state for one map
     PACKET_LOBBY_SETUP = 22,       // Client -> server team / bot allocation
-    PACKET_LOBBY_STATE = 23,       // Server -> clients available bots / limits
-    PACKET_MATCH_STATE = 24        // Server -> clients team kill scores
+    PACKET_LOBBY_STATE = 23,       // Server -> clients open match setup / rosters
+    PACKET_MATCH_STATE = 24,       // Server -> clients team kill scores
+    PACKET_LOBBY_START = 25        // Server -> lobby players: match is starting
 };
 
 /// Client action in BombInteractPacket.
@@ -91,6 +92,20 @@ enum RejectReason : uint8_t {
 
 /// Size of the machine GUID sent with the handshake (hex, no NUL needed).
 const size_t MACHINE_ID_LENGTH = 32;
+
+/// Player / map names in lobby packets (NUL-terminated when shorter).
+const size_t LOBBY_NAME_LENGTH = 32;
+/// Highest number of human players described by one lobby packet.
+const size_t MAX_LOBBY_PLAYERS = 16;
+
+/// Body height for a networked stance byte (0 standing, 1 crouching, 2 prone).
+inline float stanceBodyHeight(uint8_t stance) {
+    switch (stance) {
+        case 1: return 1.2f;
+        case 2: return 0.55f;
+        default: return 1.8f;
+    }
+}
 
 #pragma pack(push, 1)
 
@@ -143,6 +158,9 @@ struct PlayerInputPacket {
     uint8_t gameMode;
     /// MatchFormat (0 = free play, 1 = normal, 2 = swift).
     uint8_t matchFormat;
+    /// Stance (0 = standing, 1 = crouching, 2 = prone) for the remote model
+    /// and the remote hit box.
+    uint8_t stance;
 };
 
 // Player state from server
@@ -155,6 +173,7 @@ struct PlayerStatePacket {
     float health;
     bool isDead;
     uint8_t team;                  ///< 0 = Team A, 1 = Team B
+    uint8_t stance;                ///< 0 standing, 1 crouching, 2 prone
 };
 
 /// A hit one client scored on another player (client -> server -> victim and
@@ -186,18 +205,56 @@ struct LobbySetupPacket {
     uint8_t botsTeamB;         ///< bots requested on Team B
     uint8_t botAccuracy;       ///< percent (0..100)
     uint8_t matchFormat;       ///< 0 free play, 1 normal, 2 swift
+    uint8_t gameMode;          ///< 0 deathmatch, 1 team, 2 bomb
+    uint8_t ready;             ///< 1 = this player is ready to start
     uint8_t freshMatch;        ///< 1 = start a fresh scoreboard on this map
+    uint8_t inLobby;           ///< 1 = join/update the map's match setup
+    char mapName[LOBBY_NAME_LENGTH];    ///< map selected in the setup screen
+    char playerName[LOBBY_NAME_LENGTH]; ///< name shown in the lobby roster
 };
 
-/// Authoritative lobby limits / allocation, broadcast by the server.
+/// One human player in an open match setup.
+struct LobbyPlayerEntry {
+    uint32_t id;
+    uint8_t team;              ///< 0 = Team A, 1 = Team B
+    uint8_t ready;             ///< 1 = pressed READY
+    char name[LOBBY_NAME_LENGTH];
+};
+
+/// Authoritative state of one map's open match setup, sent to every client so
+/// the map selection can list joinable lobbies and the setup screen can show
+/// the full roster (including other humans).
 struct LobbyStatePacket {
     PacketHeader header;
+    char mapName[LOBBY_NAME_LENGTH];
+    uint8_t gameMode;
+    uint8_t matchFormat;
     uint8_t botPool;           ///< total bots available on the server
     uint8_t botsTeamA;         ///< currently assigned to Team A
     uint8_t botsTeamB;         ///< currently assigned to Team B
     uint8_t botAccuracy;       ///< current configured accuracy (percent)
     uint8_t botMaxAccuracy;    ///< configured maximum accuracy (percent)
-    uint8_t matchFormat;       ///< last requested match format
+    uint8_t playerCount;       ///< humans currently in this lobby
+    uint8_t readyCount;        ///< humans that pressed READY
+    LobbyPlayerEntry players[MAX_LOBBY_PLAYERS];
+};
+
+/// Sent to every member of a lobby when all of them are ready. The server has
+/// already applied the bot split; each client uses the entry for its own id to
+/// learn its team, then loads the map locally.
+struct LobbyStartPacket {
+    PacketHeader header;
+    char mapName[LOBBY_NAME_LENGTH];
+    uint8_t gameMode;
+    uint8_t matchFormat;
+    uint8_t botsTeamA;
+    uint8_t botsTeamB;
+    uint8_t botAccuracy;
+    uint8_t playerCount;
+    struct Entry {
+        uint32_t id;
+        uint8_t team;
+    } players[MAX_LOBBY_PLAYERS];
 };
 
 /// Authoritative team scores for team deathmatch (kill counters).
@@ -337,7 +394,7 @@ public:
     double secondsSinceLastReceive() const;
     
     // Send player input to server
-    void sendPlayerInput(float moveX, float moveZ, float yaw, float pitch, bool jump, bool shoot, uint8_t weaponId, float posX, float posY, float posZ, bool alive = true, uint8_t gameMode = 0, uint8_t matchFormat = 0);
+    void sendPlayerInput(float moveX, float moveZ, float yaw, float pitch, bool jump, bool shoot, uint8_t weaponId, float posX, float posY, float posZ, bool alive = true, uint8_t gameMode = 0, uint8_t matchFormat = 0, uint8_t stance = 0);
     
     // Receive packets from server - call every frame
     void update();
@@ -355,18 +412,27 @@ public:
     std::function<void(const MapPlayerCountPacket&)> onMapPlayerCount;
     /// Authoritative bomb state for the map the client is on.
     std::function<void(const BombStatePacket&)> onBombState;
-    /// Server's bot pool / limits and current allocation.
+    /// Server's bot pool / limits and the current roster for one map lobby.
     std::function<void(const LobbyStatePacket&)> onLobbyState;
+    /// The server started the match for the lobby this client is in.
+    std::function<void(const LobbyStartPacket&)> onLobbyStart;
     /// Authoritative team kill scores (team deathmatch).
     std::function<void(const MatchStatePacket&)> onMatchState;
 
     // Send map change request to server
     void sendMapChange(const std::string& mapName);
 
-    /// Send the pre-match team / bot setup to the server.
+    /// Name published in the lobby roster (usually the Discord username).
+    void setPlayerName(const std::string& name) { playerName_ = name; }
+
+    /// Send the pre-match team / bot setup to the server. `inLobby` false
+    /// leaves the map's match setup (used when going back or after a start).
     void sendLobbySetup(uint8_t team, uint8_t botsTeamA, uint8_t botsTeamB,
                         uint8_t botAccuracy, uint8_t matchFormat,
-                        bool freshMatch = false);
+                        bool freshMatch = false,
+                        const std::string& mapName = std::string(),
+                        uint8_t gameMode = 0, bool ready = false,
+                        bool inLobby = true);
 
     /// Tell the server a new bomb defusal round started. Bots are revived
     /// together with the human players and the bomb is reset.
@@ -405,6 +471,7 @@ private:
     double handshakeStart = 0.0;   ///< time the current attempt started
     double lastReceive = 0.0;      ///< time of the last packet from the server
     std::string machineId_;        ///< resolved machine id (see getMachineId)
+    std::string playerName_ = "playerX"; ///< roster name sent with the lobby
     int rejectReason_ = 0;         ///< RejectReason of the last refusal
     /// Retransmission interval for an unanswered CONNECT (seconds). The
     /// handshake must survive a lost UDP packet, but must not flood.
@@ -449,7 +516,19 @@ struct ServerPlayer {
     uint8_t team = 0;     ///< 0 = Team A, 1 = Team B (assigned on connect)
     uint8_t gameMode = 0; ///< last game mode the client reported
     uint8_t matchFormat = 0; ///< last match format the client reported
+    uint8_t stance = 0;   ///< 0 standing, 1 crouching, 2 prone
     bool isBot = false;   ///< server-controlled player (no socket / timeout)
+
+    // Pre-match lobby (separate from the map the player is currently in).
+    char playerName[LOBBY_NAME_LENGTH] = {};
+    char lobbyMapName[LOBBY_NAME_LENGTH] = {};
+    bool inLobby = false;
+    bool lobbyReady = false;
+    uint8_t lobbyGameMode = 0;
+    uint8_t lobbyMatchFormat = 0;
+    uint8_t lobbyBotsTeamA = 0;
+    uint8_t lobbyBotsTeamB = 0;
+    uint8_t lobbyBotAccuracy = 0;
 };
 
 class NetworkServer {
@@ -487,6 +566,9 @@ public:
 
     /// Send raw packet data to every connected human (not bots).
     void broadcastPacket(const void* data, size_t size, uint32_t excludeId = 0);
+
+    /// Send raw packet data to one human player (used by lobby start packets).
+    bool sendToPlayer(uint32_t id, const void* data, size_t size);
 
     // Change player's map
     void setPlayerMap(uint32_t playerId, const std::string& mapName);

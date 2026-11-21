@@ -101,26 +101,96 @@ glm::vec3 Game::projectileSegmentStart(const Projectile& projectile) const {
 // (Map::boxOverlapsBlock), so this costs the same as the old point test.
 // ---------------------------------------------------------------------------
 
-float Game::currentEyeHeight() const {
-    switch (stance_) {
-        case STANCE_CROUCHING: return 1.05f;
-        case STANCE_PRONE:     return 0.35f;
-        case STANCE_STANDING:
-        default:               return eyeHeight;
+float Game::bodyHeightForStance(uint8_t stance) {
+    switch (stance) {
+        case 1:  return crouchBodyHeight;
+        case 2:  return proneBodyHeight;
+        default: return bodyHeight;
     }
 }
 
-float Game::currentBodyHeight() const {
-    switch (stance_) {
-        case STANCE_CROUCHING: return 1.2f;
-        case STANCE_PRONE:     return 0.55f;
-        case STANCE_STANDING:
-        default:               return bodyHeight;
+float Game::eyeHeightForStance(uint8_t stance) {
+    switch (stance) {
+        case 1:  return crouchEyeHeight;
+        case 2:  return proneEyeHeight;
+        default: return eyeHeight;
     }
+}
+
+float Game::currentEyeHeight() const {
+    return eyeHeightForStance(static_cast<uint8_t>(stance_));
+}
+
+float Game::currentBodyHeight() const {
+    return bodyHeightForStance(static_cast<uint8_t>(stance_));
 }
 
 float Game::currentBodyCenterHeight() const {
     return currentBodyHeight() * 0.5f;
+}
+
+void Game::stanceBodyLocalBox(uint8_t stance, glm::vec3& boxMin, glm::vec3& boxMax) {
+    const float half = bodyWidth * 0.5f;
+    boxMin = glm::vec3(-half, 0.0f, -half);
+    if (stance == 2) {
+        // A prone body is rotated forward around the feet by the renderer, so
+        // its hit box extends along local +Z instead of upwards.
+        boxMax = glm::vec3(half, proneBodyHeight, bodyHeight);
+    } else {
+        boxMax = glm::vec3(half, bodyHeightForStance(stance), half);
+    }
+}
+
+glm::vec3 Game::worldToBodyLocal(const glm::vec3& point, const glm::vec3& feet,
+                                 float yawDeg) {
+    const float yaw = glm::radians(yawDeg);
+    const float cy = std::cos(yaw);
+    const float sy = std::sin(yaw);
+    const glm::vec3 d = point - feet;
+    return glm::vec3(d.x * (-sy) + d.z * cy, d.y,
+                     d.x * cy + d.z * sy);
+}
+
+glm::vec3 Game::bodyLocalToWorld(const glm::vec3& local, const glm::vec3& feet,
+                                 float yawDeg) {
+    const float yaw = glm::radians(yawDeg);
+    const float cy = std::cos(yaw);
+    const float sy = std::sin(yaw);
+    return feet + glm::vec3(local.x * (-sy) + local.z * cy, local.y,
+                            local.x * cy + local.z * sy);
+}
+
+float Game::distanceToStanceBody(const glm::vec3& point, const glm::vec3& feet,
+                                 float yawDeg, uint8_t stance) {
+    glm::vec3 boxMin, boxMax;
+    stanceBodyLocalBox(stance, boxMin, boxMax);
+    const glm::vec3 local = worldToBodyLocal(point, feet, yawDeg);
+    const glm::vec3 d = glm::max(glm::max(boxMin - local, local - boxMax),
+                                 glm::vec3(0.0f));
+    return glm::length(d);
+}
+
+Game::ProjectileSweepHit Game::sweepProjectileAgainstStanceBody(
+    const glm::vec3& from, const glm::vec3& to, const glm::vec3& feet,
+    float yawDeg, float radius, uint8_t stance) {
+    ProjectileSweepHit result;
+
+    glm::vec3 boxMin, boxMax;
+    stanceBodyLocalBox(stance, boxMin, boxMax);
+    const glm::vec3 margin(radius, radius, radius);
+    const spatialkit::AABB body{toSpatial(boxMin - margin),
+                                toSpatial(boxMax + margin)};
+
+    const glm::vec3 localFrom = worldToBodyLocal(from, feet, yawDeg);
+    const glm::vec3 localTo = worldToBodyLocal(to, feet, yawDeg);
+    const spatialkit::RayHit hit =
+        spatialkit::intersectSegmentAABB(toSpatial(localFrom), toSpatial(localTo), body);
+    if (!hit.hit) return result;
+
+    result.hit = true;
+    result.t = hit.t;
+    result.point = bodyLocalToWorld(toGlm(hit.point), feet, yawDeg);
+    return result;
 }
 
 bool Game::bodyFitsHeight(const glm::vec3& feet, float height) const {
@@ -495,7 +565,8 @@ void Game::dieLocally() {
                                        static_cast<uint8_t>(currentWeapon),
                                        eye.x, eye.y, eye.z, false,
                                        static_cast<uint8_t>(currentGameMode),
-                                       static_cast<uint8_t>(matchFormat_));
+                                       static_cast<uint8_t>(matchFormat_),
+                                       static_cast<uint8_t>(stance_));
     }
     std::cout << "Player defeated!" << std::endl;
 }
@@ -1257,7 +1328,8 @@ void Game::createSimpleExplosion(glm::vec3 position, const Projectile* source) {
     // Damage the local player if the blast reaches the body. No falloff: a hit
     // always deals the same explosion damage (only the hit zone is ignored,
     // because an explosion has no "head shot").
-    const float playerDistance = distanceToBody(position, playerPos, currentBodyHeight());
+    const float playerDistance = distanceToStanceBody(
+        position, playerPos, camera.Yaw, static_cast<uint8_t>(stance_));
     if (playerDistance < explosionRadius) {
         applyPlayerDamage(explosionDamage_);
         damageEffectTime = std::max(damageEffectTime, 1.5f); // Longer screen effect
@@ -1754,8 +1826,9 @@ bool Game::checkProjectilePlayerBody(Projectile& projectile) {
     // packet comes from the shooter via the server. Sweep the step so a fast
     // relayed bullet cannot fly through us between two frames.
     const glm::vec3 from = projectileSegmentStart(projectile);
-    const ProjectileSweepHit hit = sweepProjectileAgainstBody(
-        from, projectile.position, playerPos, bodyHitSlack, currentBodyHeight());
+    const ProjectileSweepHit hit = sweepProjectileAgainstStanceBody(
+        from, projectile.position, playerPos, camera.Yaw, bodyHitSlack,
+        static_cast<uint8_t>(stance_));
     if (!hit.hit) return false;
 
     projectile.position = hit.point;
@@ -1792,9 +1865,10 @@ void Game::checkPlayerPlayerCollision() {
     for (int i = 0; i < MAX_REMOTE_PLAYERS; i++) {
         if (!remotePlayers[i].active || remotePlayers[i].isDead) continue;
         
-        const float distance = distanceToBody(
+        const float distance = distanceToStanceBody(
             playerPos + glm::vec3(0.0f, currentBodyCenterHeight(), 0.0f),
-            remotePlayers[i].position);
+            remotePlayers[i].position, remotePlayers[i].yaw,
+            remotePlayers[i].stance);
         if (distance < 0.5f) {
             // Measured over time: next frame drains the accumulated budget,
             // so a 60 fps game does not take 60 hits at the same spot.
@@ -1833,10 +1907,11 @@ bool Game::checkProjectileRemoteCollision(Projectile& projectile) {
         if (!remote.active || remote.isDead) continue;
         if (networkClient && remote.id == networkClient->getClientId()) continue; // never shoot ourselves
 
-        // Remote positions travel as feet positions (eye = feet + eyeHeight).
-        // Hit detection uses the very box the remote player is drawn with.
-        const ProjectileSweepHit hit = sweepProjectileAgainstBody(
-            from, projectile.position, remote.position, bodyHitSlack);
+        // Remote positions travel as feet positions. The box follows the
+        // remote player's stance (standing / crouching / prone) and facing.
+        const ProjectileSweepHit hit = sweepProjectileAgainstStanceBody(
+            from, projectile.position, remote.position, remote.yaw,
+            bodyHitSlack, remote.stance);
         if (!hit.hit) continue;
         if (!best.hit || hit.t < best.t) {
             best = hit;
@@ -1864,7 +1939,8 @@ bool Game::checkProjectileRemoteCollision(Projectile& projectile) {
     // applied by the shooter, so the server and the victim receive the
     // final damage exactly as resolved here.
     const humanoid::HitZone zone =
-        humanoid::hitZone(best.point, nearest->position, nearest->yaw);
+        humanoid::hitZone(best.point, nearest->position, nearest->yaw,
+                          nearest->stance);
     const float damage = humanoid::projectileBaseDamage(projectile.type) *
                          humanoid::damageMultiplier(zone);
 
@@ -1914,8 +1990,10 @@ void Game::checkExplosionRemoteCollision(const glm::vec3& position, float radius
         if (remote.id == networkClient->getClientId()) continue;
 
         // Blasts are measured to the body box (feet position, any height
-        // within the body), so a grenade at the enemy's feet always connects.
-        float distance = distanceToBody(position, remote.position);
+        // within the stance), so a grenade at the enemy's feet always connects
+        // and lying behind cover is harder to hit.
+        float distance = distanceToStanceBody(position, remote.position,
+                                              remote.yaw, remote.stance);
         if (distance >= radius) continue;
 
         // Explosions do not fall off with distance: any body the blast reaches
@@ -2059,14 +2137,17 @@ void Game::renderRemotePlayers() {
         const float healthPct = remote.isDead
                                     ? 0.0f
                                     : glm::clamp(remote.health / 100.0f, 0.0f, 1.0f);
+        const uint8_t renderStance = remote.isDead ? 0 : remote.stance;
         if (playerModel_ && remoteModelAnims[i].valid()) {
             posePlayerInstance(remoteModelAnims[i], remote.anim);
             renderer.submitModel(playerModel_.get(), &remoteModelAnims[i],
-                                 humanoid::rootTransform(remote.renderPosition, remote.yaw),
+                                 humanoid::rootTransform(remote.renderPosition, remote.yaw,
+                                                         renderStance),
                                  color);
         } else {
             humanoid::render(renderer, remote.renderPosition, remote.yaw, color,
-                             healthPct, remote.anim, remote.pitch, !remote.isDead);
+                             healthPct, remote.anim, remote.pitch, !remote.isDead,
+                             renderStance);
         }
     }
 }
@@ -2573,6 +2654,7 @@ void Game::updateLocalBots(float deltaTime) {
         remotePlayers[i].isDead   = view.isDead;
         remotePlayers[i].active   = true;
         remotePlayers[i].team     = view.team;
+        remotePlayers[i].stance   = 0;   // bot AI never crouches or goes prone
         if (view.shooting) remotePlayers[i].anim.shoot = 1.0f;
     }
 

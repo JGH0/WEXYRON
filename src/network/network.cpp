@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -343,7 +344,8 @@ void NetworkClient::disconnect() {
 
 void NetworkClient::sendPlayerInput(float moveX, float moveZ, float yaw, float pitch,
                                      bool jump, bool shoot, uint8_t weaponId, float posX, float posY, float posZ,
-                                     bool alive, uint8_t gameMode, uint8_t matchFormat) {
+                                     bool alive, uint8_t gameMode, uint8_t matchFormat,
+                                     uint8_t stance) {
     if (!connected) return;
 
     PlayerInputPacket packet;
@@ -367,6 +369,7 @@ void NetworkClient::sendPlayerInput(float moveX, float moveZ, float yaw, float p
     packet.alive = alive;
     packet.gameMode = gameMode;
     packet.matchFormat = matchFormat;
+    packet.stance = stance;
 
     sendPacket(&packet, sizeof(packet));
 }
@@ -466,7 +469,8 @@ void NetworkClient::sendRoundStart(uint8_t gameMode, uint8_t attackingTeam,
 
 void NetworkClient::sendLobbySetup(uint8_t team, uint8_t botsTeamA, uint8_t botsTeamB,
                                    uint8_t botAccuracy, uint8_t matchFormat,
-                                   bool freshMatch) {
+                                   bool freshMatch, const std::string& mapName,
+                                   uint8_t gameMode, bool ready, bool inLobby) {
     if (!connected) return;
 
     LobbySetupPacket packet{};
@@ -481,7 +485,14 @@ void NetworkClient::sendLobbySetup(uint8_t team, uint8_t botsTeamA, uint8_t bots
     packet.botsTeamB = botsTeamB;
     packet.botAccuracy = botAccuracy;
     packet.matchFormat = matchFormat;
+    packet.gameMode = gameMode;
+    packet.ready = ready ? 1 : 0;
     packet.freshMatch = freshMatch ? 1 : 0;
+    packet.inLobby = inLobby ? 1 : 0;
+    std::strncpy(packet.mapName, mapName.c_str(), sizeof(packet.mapName) - 1);
+    packet.mapName[sizeof(packet.mapName) - 1] = '\0';
+    std::strncpy(packet.playerName, playerName_.c_str(), sizeof(packet.playerName) - 1);
+    packet.playerName[sizeof(packet.playerName) - 1] = '\0';
     sendPacket(&packet, sizeof(packet));
 }
 
@@ -628,6 +639,12 @@ void NetworkClient::update() {
             case PACKET_LOBBY_STATE:
                 if (connected && received >= sizeof(LobbyStatePacket) && onLobbyState) {
                     onLobbyState(*(LobbyStatePacket*)buffer);
+                }
+                break;
+
+            case PACKET_LOBBY_START:
+                if (connected && received >= sizeof(LobbyStartPacket) && onLobbyStart) {
+                    onLobbyStart(*(LobbyStartPacket*)buffer);
                 }
                 break;
 
@@ -936,6 +953,11 @@ void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_
             std::strncpy(player.machineId, machineId, MACHINE_ID_LENGTH - 1);
             player.machineId[MACHINE_ID_LENGTH - 1] = '\0';
             strcpy(player.mapName, "simple.map"); // Default map
+            std::snprintf(player.playerName, sizeof(player.playerName),
+                          "player%u", newId);
+            player.lobbyMapName[0] = '\0';
+            player.inLobby = false;
+            player.lobbyReady = false;
 
             // Balance the two teams: the new player joins the smaller one, so
             // two clients start on opposite sides of a team map. The newly
@@ -1105,6 +1127,24 @@ void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_
             if (!player || !player->active || player->isBot) break;
             player->team = static_cast<uint8_t>(setup->team & 1u);
             player->matchFormat = setup->matchFormat;
+            player->gameMode = setup->gameMode;
+            player->inLobby = setup->inLobby != 0;
+            player->lobbyReady = player->inLobby && setup->ready != 0;
+            player->lobbyGameMode = setup->gameMode;
+            player->lobbyMatchFormat = setup->matchFormat;
+            player->lobbyBotsTeamA = setup->botsTeamA;
+            player->lobbyBotsTeamB = setup->botsTeamB;
+            player->lobbyBotAccuracy = setup->botAccuracy;
+            if (setup->mapName[0] != '\0') {
+                std::strncpy(player->lobbyMapName, setup->mapName,
+                             sizeof(player->lobbyMapName) - 1);
+                player->lobbyMapName[sizeof(player->lobbyMapName) - 1] = '\0';
+            }
+            if (setup->playerName[0] != '\0') {
+                std::strncpy(player->playerName, setup->playerName,
+                             sizeof(player->playerName) - 1);
+                player->playerName[sizeof(player->playerName) - 1] = '\0';
+            }
             if (onLobbySetup) onLobbySetup(player->id, *setup);
             break;
         }
@@ -1129,6 +1169,11 @@ void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_
             if (players.find(id) != players.end()) {
                 std::string newMap(mapChange->mapName);
                 std::string oldMap(players[id].mapName);
+
+                // Starting the map ends the pre-match lobby membership. The
+                // server's periodic lobby broadcast clears the row for others.
+                players[id].inLobby = false;
+                players[id].lobbyReady = false;
 
                 // Update player's map
                 strncpy(players[id].mapName, newMap.c_str(), sizeof(players[id].mapName) - 1);
@@ -1191,7 +1236,9 @@ void NetworkServer::broadcastPlayerState(uint32_t playerId, const glm::vec3& pos
     packet.pitch = pitch;
     packet.health = health;
     packet.isDead = isDead;
-    packet.team = (players.find(playerId) != players.end()) ? players[playerId].team : 0;
+    auto stateIt = players.find(playerId);
+    packet.team = (stateIt != players.end()) ? stateIt->second.team : 0;
+    packet.stance = (stateIt != players.end()) ? stateIt->second.stance : 0;
 
     // Only broadcast to players on the same map
     if (players.find(playerId) != players.end()) {
@@ -1257,6 +1304,13 @@ void NetworkServer::broadcastPacket(const void* data, size_t size, uint32_t excl
             sendPacket(data, size, pair.second.address);
         }
     }
+}
+
+bool NetworkServer::sendToPlayer(uint32_t id, const void* data, size_t size) {
+    auto it = players.find(id);
+    if (it == players.end() || !it->second.active || it->second.isBot) return false;
+    sendPacket(data, size, it->second.address);
+    return true;
 }
 
 void NetworkServer::sendReject(const sockaddr_in& to, uint8_t reason, uint8_t limit) {
@@ -1326,7 +1380,9 @@ void NetworkServer::broadcastPlayerStateToMap(uint32_t playerId, const std::stri
     packet.pitch = pitch;
     packet.health = health;
     packet.isDead = isDead;
-    packet.team = (players.find(playerId) != players.end()) ? players[playerId].team : 0;
+    auto stateIt = players.find(playerId);
+    packet.team = (stateIt != players.end()) ? stateIt->second.team : 0;
+    packet.stance = (stateIt != players.end()) ? stateIt->second.stance : 0;
 
     // Damage and respawn outcomes must also reach the player they describe
     // (otherwise the victim never learns it died). Ordinary position updates

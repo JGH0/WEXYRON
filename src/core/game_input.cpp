@@ -243,9 +243,13 @@ void Game::processMenuInput() {
     lastMenuRow = selected;
     lastHoverRow = hoverRow;
 
-    if (gameState == TEAM_SETUP && lobbyDirty_) {
+    if (lobbyDirty_) {
         lobbyDirty_ = false;
-        refreshTeamSetupRows();
+        if (gameState == TEAM_SETUP) {
+            refreshTeamSetupRows();
+        } else if (gameState == MAP_SELECTION) {
+            refreshMapSelectionRows();
+        }
     }
 
     if (gameState == SERVER_CONNECT) {

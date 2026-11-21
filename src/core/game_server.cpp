@@ -99,6 +99,7 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
                     remotePlayers[i].isDead   = packet.isDead;
                     remotePlayers[i].active   = true;
                     remotePlayers[i].team     = packet.team;
+                    remotePlayers[i].stance   = packet.stance <= 2 ? packet.stance : 0;
                     // A health drop caused by anyone's shot flinches the body.
                     if (!isNew && packet.health < oldHealth - 0.5f) {
                         remotePlayers[i].anim.damage = 1.0f;
@@ -129,6 +130,7 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
                 remotePlayers[i].health         = 100.0f;
                 remotePlayers[i].isDead         = false;
                 remotePlayers[i].team           = packet.team;
+                remotePlayers[i].stance         = 0;
                 return;
             }
         }
@@ -147,6 +149,7 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
                 remotePlayers[i].isDead         = false;
                 remotePlayers[i].active         = true;
                 remotePlayers[i].team           = packet.team;
+                remotePlayers[i].stance         = 0;
                 remotePlayers[i].anim           = humanoid::Anim{};
                 playerCount++; // Update player count
                 break;
@@ -196,9 +199,11 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
     };
 
     networkClient->onLobbyState = [this](const LobbyStatePacket& packet) {
-        applyLobbyState(static_cast<uint8_t>(playerTeam), packet.botPool,
-                        packet.botsTeamA, packet.botsTeamB, packet.botAccuracy,
-                        packet.botMaxAccuracy, packet.matchFormat);
+        handleLobbyState(packet);
+    };
+
+    networkClient->onLobbyStart = [this](const LobbyStartPacket& packet) {
+        handleLobbyStart(packet);
     };
 
     networkClient->onMatchState = [this](const MatchStatePacket& packet) {
@@ -344,6 +349,8 @@ void Game::disconnectFromServer() {
     }
     multiplayerMode = false;
     playerCount = 0;
+    lobbyReady_ = false;
+    lobbyViews_.clear();
     serverRoundEnded = false;
     roundWinner = -1;
     roundEndReason = ROUND_END_NONE;
@@ -368,6 +375,92 @@ void Game::disconnectFromServer() {
     for (size_t i = 0; i < mapPlayerCounts.size(); ++i) {
         mapPlayerCounts[i] = 0;
     }
+}
+
+const LobbyView* Game::findLobby(const std::string& mapFile) const {
+    auto it = lobbyViews_.find(mapFile);
+    return it == lobbyViews_.end() ? nullptr : &it->second;
+}
+
+void Game::handleLobbyState(const LobbyStatePacket& packet) {
+    const std::string mapName = packet.mapName[0] != '\0'
+                                    ? std::string(packet.mapName)
+                                    : std::string("simple.map");
+
+    LobbyView view;
+    view.mapName = mapName;
+    view.gameMode = std::min<int>(2, packet.gameMode);
+    view.matchFormat = std::min<int>(2, packet.matchFormat);
+    view.botPool = packet.botPool;
+    view.botsTeamA = packet.botsTeamA;
+    view.botsTeamB = packet.botsTeamB;
+    view.botAccuracy = packet.botAccuracy;
+    view.botMaxAccuracy = packet.botMaxAccuracy > 0 ? packet.botMaxAccuracy : 100;
+    view.players.reserve(std::min<size_t>(packet.playerCount, MAX_LOBBY_PLAYERS));
+    for (size_t i = 0; i < packet.playerCount && i < MAX_LOBBY_PLAYERS; ++i) {
+        const LobbyPlayerEntry& entry = packet.players[i];
+        LobbyPlayerView player;
+        player.id = entry.id;
+        player.name = entry.name;
+        if (player.name.empty()) player.name = "player" + std::to_string(entry.id);
+        player.team = static_cast<uint8_t>(entry.team & 1u);
+        player.ready = entry.ready != 0;
+        if (player.ready) ++view.readyCount;
+        view.players.push_back(std::move(player));
+    }
+
+    if (view.players.empty()) lobbyViews_.erase(mapName);
+    else                      lobbyViews_[mapName] = std::move(view);
+
+    // The server is authoritative for our own ready flag as well.
+    if (networkClient) {
+        const uint32_t selfId = networkClient->getClientId();
+        const LobbyView* stored = findLobby(mapName);
+        if (stored) {
+            for (const LobbyPlayerView& player : stored->players) {
+                if (player.id == selfId) {
+                    lobbyReady_ = player.ready;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (gameState == TEAM_SETUP && mapName == pendingMapFile_) {
+        applyLobbyState(static_cast<uint8_t>(playerTeam), packet.botPool,
+                        packet.botsTeamA, packet.botsTeamB, packet.botAccuracy,
+                        packet.botMaxAccuracy, packet.matchFormat);
+    }
+    lobbyDirty_ = true;
+}
+
+void Game::handleLobbyStart(const LobbyStartPacket& packet) {
+    if (gameState != TEAM_SETUP || !networkClient) return;
+
+    const std::string mapName = packet.mapName[0] != '\0'
+                                    ? std::string(packet.mapName)
+                                    : pendingMapFile_;
+    if (!pendingMapFile_.empty() && mapName != pendingMapFile_) return;
+
+    const uint32_t selfId = networkClient->getClientId();
+    for (size_t i = 0; i < packet.playerCount && i < MAX_LOBBY_PLAYERS; ++i) {
+        if (packet.players[i].id == selfId) {
+            playerTeam = packet.players[i].team & 1u;
+            break;
+        }
+    }
+
+    currentGameMode = static_cast<GameMode>(std::min<int>(2, packet.gameMode));
+    matchFormat_ = static_cast<MatchFormat>(std::min<int>(2, packet.matchFormat));
+    botSetupTeamA_ = packet.botsTeamA;
+    botSetupTeamB_ = packet.botsTeamB;
+    botSetupBots_ = botSetupTeamA_ + botSetupTeamB_;
+    if (packet.botAccuracy > 0) botSetupAccuracy_ = packet.botAccuracy;
+    lobbyReady_ = false;
+    pendingMapFile_ = mapName;
+
+    std::cout << "[Lobby] All players ready - starting " << mapName << std::endl;
+    startMatchNow(mapName);
 }
 
 bool Game::isConnectingToServer() const {

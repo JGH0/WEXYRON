@@ -394,7 +394,8 @@ void ServerBombManager::explode(MapState& state, const std::string& mapName,
         for (ServerPlayer* victim : server.getPlayers()) {
             if (!victim->active || victim->isDead) continue;
             if (!sameMap(*victim, mapName)) continue;
-            const float distance = bots::distanceToBody(state.position, victim->position);
+            const float distance = bots::distanceToBody(
+                state.position, victim->position, stanceBodyHeight(victim->stance));
             if (distance >= radius) continue;
             // No distance falloff: any body inside the blast radius takes the
             // same damage. Weapon id 0 = the unclamped (100) damage path in

@@ -119,10 +119,12 @@ struct Anim {
     }
 };
 
-/// Classify a world-space hit point against a body standing at `feet` and
-/// facing `yawDeg` (same yaw the camera/player uses).
+/// Classify a world-space hit point against a body at `feet` and facing
+/// `yawDeg` (same yaw the camera/player uses). `stance` is 0 standing,
+/// 1 crouching, 2 prone; the head/hip thresholds follow the same body height
+/// the renderer and hit box use.
 inline HitZone hitZone(const glm::vec3& point, const glm::vec3& feet,
-                       float yawDeg) {
+                       float yawDeg, uint8_t stance = 0) {
     const glm::vec3 d = point - feet;
     const float yaw = glm::radians(yawDeg);
     const float cy = std::cos(yaw);
@@ -131,7 +133,17 @@ inline HitZone hitZone(const glm::vec3& point, const glm::vec3& feet,
     const float localX = d.x * (-sy) + d.z * cy;
     const float localZ = d.x * cy + d.z * sy;
 
-    if (d.y >= kHeadMinY) {
+    if (stance == 2) {
+        // The prone body lies forward from the feet: head at the far end, legs
+        // near the feet, arms outside the torso line.
+        if (localZ > 1.30f && std::abs(localX) <= 0.20f) return HitZone::Head;
+        if (localZ < 0.85f) return HitZone::Limb;
+        if (std::abs(localX) > kArmHalfX) return HitZone::Limb;
+        return HitZone::Body;
+    }
+
+    const float heightScale = (stance == 1) ? (1.2f / kBodyHeight) : 1.0f;
+    if (d.y >= kHeadMinY * heightScale) {
         // Only the actual head box is a head shot; shoulder-height hits at the
         // sides of the wide body box stay body hits.
         if (std::abs(localX) <= 0.20f && std::abs(localZ) <= 0.20f) {
@@ -141,9 +153,24 @@ inline HitZone hitZone(const glm::vec3& point, const glm::vec3& feet,
     }
 
     // Legs/feet below the hip, arms outside the torso.
-    if (d.y < kHipY) return HitZone::Limb;
+    if (d.y < kHipY * heightScale) return HitZone::Limb;
     if (std::abs(localX) > kArmHalfX) return HitZone::Limb;
     return HitZone::Body;
+}
+
+/// Local transform that turns an upright model into the requested stance.
+/// Crouching compresses the model to the crouch body height; prone rotates it
+/// forward around the feet and lifts it just clear of the floor. The hit box
+/// in Game::stanceBodyLocalBox uses the same dimensions.
+inline glm::mat4 stanceTransform(uint8_t stance) {
+    glm::mat4 m(1.0f);
+    if (stance == 1) {
+        m = glm::scale(m, glm::vec3(1.0f, 1.2f / kBodyHeight, 1.0f));
+    } else if (stance == 2) {
+        m = glm::translate(m, glm::vec3(0.0f, 0.20f, 0.0f));
+        m = glm::rotate(m, glm::radians(88.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+    }
+    return m;
 }
 
 /// Root matrix for an actor whose feet are at `feet` and that faces `yawDeg`
@@ -153,7 +180,8 @@ inline HitZone hitZone(const glm::vec3& point, const glm::vec3& feet,
 /// the triangle winding of a glTF mesh, so back-face culling removes the
 /// front faces and the model looks inside-out. The old per-face box renderer
 /// corrected its own winding, which is why this was harmless before.
-inline glm::mat4 rootTransform(const glm::vec3& feet, float yawDeg) {
+inline glm::mat4 rootTransform(const glm::vec3& feet, float yawDeg,
+                               uint8_t stance = 0) {
     const float yaw = glm::radians(yawDeg);
     const float cy = std::cos(yaw);
     const float sy = std::sin(yaw);
@@ -165,7 +193,7 @@ inline glm::mat4 rootTransform(const glm::vec3& feet, float yawDeg) {
     root[1] = glm::vec4(0.0f, 1.0f, 0.0f, 0.0f);
     root[2] = glm::vec4(forward, 0.0f);
     root[3] = glm::vec4(feet, 1.0f);
-    return root;
+    return root * stanceTransform(stance);
 }
 
 /// Draw one blocky humanoid.
@@ -178,7 +206,8 @@ inline glm::mat4 rootTransform(const glm::vec3& feet, float yawDeg) {
 /// @param armed      draw a simple gun in the right hand
 inline void render(Renderer& renderer, const glm::vec3& feet, float yawDeg,
                    const glm::vec3& baseColor, float healthPct,
-                   const Anim& anim, float pitchDeg = 0.0f, bool armed = true) {
+                   const Anim& anim, float pitchDeg = 0.0f, bool armed = true,
+                   uint8_t stance = 0) {
     using glm::mat4;
     using glm::vec3;
     using glm::vec4;
@@ -206,6 +235,9 @@ inline void render(Renderer& renderer, const glm::vec3& feet, float yawDeg,
         const float fall = death * (2.0f - death);   // ease out
         root = glm::rotate(root, glm::radians(-82.0f * fall), vec3(1, 0, 0));
         root[3].y += 0.10f * fall;
+    } else {
+        // Crouch / prone pose. Dead bodies use the collapse animation instead.
+        root = root * stanceTransform(stance);
     }
 
     // Push a box in a parent's local space. `rot` is applied around the box

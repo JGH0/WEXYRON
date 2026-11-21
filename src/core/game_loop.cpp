@@ -162,7 +162,8 @@ void Game::update(float deltaTime) {
                                        eyePos.x, eyePos.y, eyePos.z,
                                        alive,
                                        static_cast<uint8_t>(currentGameMode),
-                                       static_cast<uint8_t>(matchFormat_));
+                                       static_cast<uint8_t>(matchFormat_),
+                                       static_cast<uint8_t>(stance_));
     }
 
     // Update round end timer (delay before next round)

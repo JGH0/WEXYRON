@@ -13,6 +13,8 @@
 #include <sstream>
 #include <algorithm>
 #include <map>
+#include <set>
+#include <cstring>
 #include <cmath>
 #include "../src/network/network.hpp"
 #include "../src/network/server_config.hpp"
@@ -225,31 +227,146 @@ int main(int argc, char* argv[]) {
     server.setMaxPlayersPerMachine(maxPlayersPerMachine);
     if (timeout > 0.0f) server.setTimeoutSeconds(timeout);
 
-    // Lobby state (bot pool + current allocation) is useful to every client
-    // before a match starts. The server is authoritative for both the pool
-    // and the configured accuracy ceiling.
-    auto broadcastLobbyState = [&server, &botManager, botAccuracy]() {
-        LobbyStatePacket state{};
-        state.header.magic = PACKET_MAGIC;
-        state.header.type = PACKET_LOBBY_STATE;
-        state.header.sequence = 0;
-        state.header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count();
-        state.header.clientId = 0;
-        state.botPool = static_cast<uint8_t>(botManager.poolSize());
-        state.botsTeamA = static_cast<uint8_t>(botManager.assignedTeamA());
-        state.botsTeamB = static_cast<uint8_t>(botManager.assignedTeamB());
-        state.botAccuracy = static_cast<uint8_t>(std::lround(botManager.currentAccuracy() * 100.0f));
-        state.botMaxAccuracy = static_cast<uint8_t>(std::lround(botAccuracy * 100.0f));
-        state.matchFormat = 0;
-        server.broadcastPacket(&state, sizeof(state));
+    // ── Pre-match lobbies ────────────────────────────────────────────────────
+    // A lobby is the match setup for one map: the humans in it, their teams,
+    // their ready flags and the bot allocation. Every client receives the
+    // state of every open lobby, so map selection can list joinable setups.
+    auto collectLobbies = [&server]() {
+        std::map<std::string, std::vector<ServerPlayer*>> byMap;
+        for (ServerPlayer* player : server.getPlayers()) {
+            if (player->isBot || !player->inLobby) continue;
+            const std::string map = player->lobbyMapName[0] != '\0'
+                                        ? std::string(player->lobbyMapName)
+                                        : std::string(player->mapName);
+            byMap[map].push_back(player);
+        }
+        return byMap;
+    };
+
+    std::set<std::string> knownLobbyMaps;
+    auto broadcastLobbyStates = [&server, &botManager, botAccuracy, &knownLobbyMaps,
+                                 &collectLobbies]() {
+        const auto byMap = collectLobbies();
+        std::set<std::string> mapsToSend;
+        for (const auto& entry : byMap) mapsToSend.insert(entry.first);
+        // Also clear a lobby that just became empty on every client.
+        for (const std::string& map : knownLobbyMaps) mapsToSend.insert(map);
+
+        for (const std::string& map : mapsToSend) {
+            LobbyStatePacket state{};
+            state.header.magic = PACKET_MAGIC;
+            state.header.type = PACKET_LOBBY_STATE;
+            state.header.sequence = 0;
+            state.header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            state.header.clientId = 0;
+            std::strncpy(state.mapName, map.c_str(), sizeof(state.mapName) - 1);
+            state.mapName[sizeof(state.mapName) - 1] = '\0';
+            state.botPool = static_cast<uint8_t>(botManager.poolSize());
+            state.botsTeamA = static_cast<uint8_t>(botManager.assignedTeamA());
+            state.botsTeamB = static_cast<uint8_t>(botManager.assignedTeamB());
+            state.botAccuracy = static_cast<uint8_t>(std::lround(botManager.currentAccuracy() * 100.0f));
+            state.botMaxAccuracy = static_cast<uint8_t>(std::lround(botAccuracy * 100.0f));
+
+            auto it = byMap.find(map);
+            if (it != byMap.end()) {
+                std::vector<ServerPlayer*> members = it->second;
+                std::sort(members.begin(), members.end(),
+                          [](const ServerPlayer* a, const ServerPlayer* b) {
+                              if ((a->team & 1u) != (b->team & 1u)) return (a->team & 1u) < (b->team & 1u);
+                              return a->id < b->id;
+                          });
+                state.gameMode = members.front()->lobbyGameMode;
+                state.matchFormat = members.front()->lobbyMatchFormat;
+                state.playerCount = static_cast<uint8_t>(
+                    std::min(members.size(), MAX_LOBBY_PLAYERS));
+                for (size_t i = 0; i < members.size() && i < MAX_LOBBY_PLAYERS; ++i) {
+                    LobbyPlayerEntry& entry = state.players[i];
+                    entry.id = members[i]->id;
+                    entry.team = static_cast<uint8_t>(members[i]->team & 1u);
+                    entry.ready = members[i]->lobbyReady ? 1 : 0;
+                    std::strncpy(entry.name, members[i]->playerName,
+                                 sizeof(entry.name) - 1);
+                    entry.name[sizeof(entry.name) - 1] = '\0';
+                    if (entry.ready) ++state.readyCount;
+                }
+            }
+            server.broadcastPacket(&state, sizeof(state));
+        }
+
+        knownLobbyMaps.clear();
+        for (const auto& entry : byMap) knownLobbyMaps.insert(entry.first);
+    };
+
+    // Once every member of a map lobby pressed READY, tell those clients to
+    // start. The packet is repeated until they leave the lobby, so a lost UDP
+    // datagram cannot strand a ready lobby forever.
+    std::map<std::string, std::chrono::steady_clock::time_point> lastLobbyStart;
+    auto startReadyLobbies = [&server, &botManager, &collectLobbies, &lastLobbyStart]() {
+        const auto byMap = collectLobbies();
+        const auto now = std::chrono::steady_clock::now();
+
+        for (const auto& entry : byMap) {
+            const std::string& map = entry.first;
+            const std::vector<ServerPlayer*>& members = entry.second;
+            if (members.empty()) continue;
+
+            bool allReady = true;
+            for (const ServerPlayer* player : members) {
+                if (!player->lobbyReady) { allReady = false; break; }
+            }
+            if (!allReady) {
+                lastLobbyStart.erase(map);
+                continue;
+            }
+
+            auto last = lastLobbyStart.find(map);
+            if (last != lastLobbyStart.end() &&
+                now - last->second < std::chrono::milliseconds(750)) {
+                continue;
+            }
+            lastLobbyStart[map] = now;
+
+            LobbyStartPacket start{};
+            start.header.magic = PACKET_MAGIC;
+            start.header.type = PACKET_LOBBY_START;
+            start.header.sequence = 0;
+            start.header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+                now.time_since_epoch()).count();
+            start.header.clientId = 0;
+            std::strncpy(start.mapName, map.c_str(), sizeof(start.mapName) - 1);
+            start.mapName[sizeof(start.mapName) - 1] = '\0';
+            start.gameMode = members.front()->lobbyGameMode;
+            start.matchFormat = members.front()->lobbyMatchFormat;
+            start.botsTeamA = static_cast<uint8_t>(botManager.assignedTeamA());
+            start.botsTeamB = static_cast<uint8_t>(botManager.assignedTeamB());
+            start.botAccuracy = static_cast<uint8_t>(
+                std::lround(botManager.currentAccuracy() * 100.0f));
+            start.playerCount = static_cast<uint8_t>(
+                std::min(members.size(), MAX_LOBBY_PLAYERS));
+            for (size_t i = 0; i < members.size() && i < MAX_LOBBY_PLAYERS; ++i) {
+                start.players[i].id = members[i]->id;
+                start.players[i].team = static_cast<uint8_t>(members[i]->team & 1u);
+            }
+            for (const ServerPlayer* player : members) {
+                server.sendToPlayer(player->id, &start, sizeof(start));
+            }
+            std::cout << "[Lobby] Starting " << map << " with " << members.size()
+                      << " player(s)" << std::endl;
+        }
+
+        // Forget throttles for lobbies that closed.
+        for (auto it = lastLobbyStart.begin(); it != lastLobbyStart.end();) {
+            if (byMap.find(it->first) == byMap.end()) it = lastLobbyStart.erase(it);
+            else ++it;
+        }
     };
 
     // Set up callbacks
     // The server has no map geometry, so it never invents spawn positions:
     // the client (which knows the map) spawns, and its first input tells the
     // server where that is.
-    server.onPlayerConnect = [&server, &broadcastLobbyState](uint32_t id) {
+    server.onPlayerConnect = [&server, &broadcastLobbyStates](uint32_t id) {
         if (ServerPlayer* player = server.getPlayer(id)) {
             for (ServerPlayer* other : server.getPlayers()) {
                 if (other->id != id) {
@@ -258,12 +375,16 @@ int main(int argc, char* argv[]) {
                 }
             }
         }
-        broadcastLobbyState();
+        broadcastLobbyStates();
         std::cout << "[Server] Player " << id << " connected (" << server.getCurrentPlayerCount() << "/" << server.getMaxPlayers() << ")" << std::endl;
     };
 
-    server.onPlayerDisconnect = [&server, &bombManager](uint32_t id) {
+    server.onPlayerDisconnect = [&server, &bombManager, &broadcastLobbyStates](uint32_t id) {
         bombManager.onPlayerDisconnected(id);
+        // The callback runs before the player record is erased; hide it from
+        // the lobby roster we are about to broadcast.
+        if (ServerPlayer* player = server.getPlayer(id)) player->inLobby = false;
+        broadcastLobbyStates();
         std::cout << "[Server] " << (server.isBot(id) ? "Bot " : "Player ")
                   << id << " disconnected (" << server.getCurrentPlayerCount() << "/"
                   << server.getMaxPlayers() << ")" << std::endl;
@@ -278,6 +399,7 @@ int main(int argc, char* argv[]) {
         // player in spectator mode until that client starts the next round.
         player->gameMode = input.gameMode;
         player->matchFormat = input.matchFormat;
+        player->stance = input.stance <= 2 ? input.stance : 0;
 
         // A client that reports itself dead/spectating does not move its body.
         // If the server did not know yet (a lost damage packet, a fall, a
@@ -312,9 +434,13 @@ int main(int argc, char* argv[]) {
         // Use client position from input packet (client-authoritative movement).
         // The client reports its position AT EYE LEVEL (camera height); the
         // server keeps feet positions (spawns and broadcasts use them), or it
-        // would spawn projectiles 1.6 units above every victim's head.
-        constexpr float kEyeHeight = 1.6f;
-        float feetY = input.posY - kEyeHeight;
+        // would spawn projectiles above every victim's head. The eye offset
+        // follows the stance, so a crouching / prone player's feet stay on the
+        // floor and the remote hit box starts at the right height.
+        const float eyeHeight = input.stance == 1 ? 1.05f
+                              : input.stance == 2 ? 0.35f
+                                                  : 1.6f;
+        float feetY = input.posY - eyeHeight;
         // Stay inside the playable volume (a stray packet must not send a
         // player under the map, where it can never be hit again).
         feetY = std::min(18.0f, std::max(-10.0f, feetY));
@@ -509,11 +635,17 @@ int main(int argc, char* argv[]) {
 
     // Pre-match setup: apply team / bot allocation and tell everyone the new
     // limits. Accuracy is clamped to the server's configured maximum.
-    server.onLobbySetup = [&server, &botManager, &broadcastLobbyState,
-                           &teamKills, &broadcastMatchState, botAccuracy](
-                              uint32_t playerId, const LobbySetupPacket& setup) {
-        botManager.applyTeamSetup(server, setup.botsTeamA, setup.botsTeamB,
-                                  std::min(setup.botAccuracy / 100.0f, botAccuracy));
+    server.onLobbySetup = [&server, &botManager, &broadcastLobbyStates,
+                           &startReadyLobbies, &teamKills, &broadcastMatchState,
+                           botAccuracy](uint32_t playerId,
+                                        const LobbySetupPacket& setup) {
+        // A player merely leaving a lobby must not overwrite the bot split of
+        // the setup they were looking at. Fresh-match packets still carry the
+        // authoritative values used when the map starts.
+        if (setup.inLobby != 0 || setup.freshMatch != 0) {
+            botManager.applyTeamSetup(server, setup.botsTeamA, setup.botsTeamB,
+                                      std::min(setup.botAccuracy / 100.0f, botAccuracy));
+        }
         // Echo the new team back to the client (and the other players on the
         // map): PlayerState is where the client learns its authoritative team.
         if (ServerPlayer* player = server.getPlayer(playerId)) {
@@ -525,11 +657,13 @@ int main(int argc, char* argv[]) {
                 playerId, player->mapName, player->position, player->velocity,
                 player->yaw, player->pitch, player->health, player->isDead, true);
         }
-        broadcastLobbyState();
+        broadcastLobbyStates();
+        startReadyLobbies();
     };
 
     // Main server loop
     auto lastTime = std::chrono::steady_clock::now();
+    auto lastLobbyBroadcast = lastTime;
     std::map<uint32_t, std::chrono::steady_clock::time_point> deadSince;
     
     while (server.isRunning()) {
@@ -545,6 +679,15 @@ int main(int argc, char* argv[]) {
         }
         
         server.update(deltaTime);
+
+        // Lobby rosters are refreshed twice a second so clients that open map
+        // selection always see the current setups (and a lost UDP update is
+        // repaired). The same tick starts any lobby whose members are all ready.
+        if (std::chrono::duration<float>(now - lastLobbyBroadcast).count() >= 0.5f) {
+            lastLobbyBroadcast = now;
+            startReadyLobbies();
+            broadcastLobbyStates();
+        }
 
         // The bomb is authoritative: advance plant/defuse timers, explode /
         // defuse, and broadcast the new state before the bots make decisions
