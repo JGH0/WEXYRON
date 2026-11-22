@@ -114,6 +114,23 @@ and glTF draws into a `FramePacket` and hands it to an `IRenderBackend`
   `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib` so GLFW finds the loader.
 - **Validation:** `CUBE_VULKAN_VALIDATION=1` enables the Khronos validation
   layer (Vulkan SDK) and NVRHI's validation; messages go to stderr.
+- **Frame generation inputs (Vulkan):** the scene pass writes HUD-less colour,
+  motion vectors (UV units, previous - current; previous camera, model
+  matrices and bone palettes) and depth for the whole image (the viewmodel
+  uses the depth range [0, 1e-4] instead of a depth clear). The HUD is its
+  own premultiplied layer; a composite pass puts it on top. The game reports
+  camera cuts (`Renderer::markCameraCut`) for map changes, respawns and
+  teleports. `render_capture_test motion` checks the vectors by reprojection.
+- **AMD FSR frame generation (Vulkan, Windows):** VIDEO > FRAME GENERATION >
+  MODE = AMD FSR (or AUTO). Needs `python tools/fetch_sdks.py` (the SDK licence
+  forbids committing its files; the build picks them up and copies the DLLs
+  next to the game). FSR replaces the swapchain (`fsr_vulkan.cpp`), presents
+  real and generated frames from its own queues and composes the HUD onto
+  every frame. It generates one frame per rendered frame (2X).
+  `render_capture_test framegen fsr` checks that about two frames are shown
+  per rendered frame, across a resize and an off/on switch. Known: FSR SDK
+  2.4 leaves 29 of its own Vulkan objects at device destruction (exit only),
+  and 3 more each time FSR is switched off and on.
 - **Parity check:** `render_capture_test capture <dir>` with each backend, then
   `render_capture_test compare <gl-dir> <vk-dir> 1.0`. Glyph edges can differ
   by one pixel (half-pixel rounding differs between the APIs); everything else

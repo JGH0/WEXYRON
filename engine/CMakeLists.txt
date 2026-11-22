@@ -15,6 +15,7 @@ add_library(cube_engine STATIC
     src/backends/gl/gl_backend.cpp
     src/backends/nvrhi/nvrhi_backend.cpp
     src/backends/nvrhi/vulkan_device.cpp
+    src/backends/nvrhi/fsr_vulkan.cpp
     src/shader.cpp
     src/texture.cpp
     ${CMAKE_SOURCE_DIR}/glad.c
@@ -70,6 +71,15 @@ if(CUBE_WITH_VULKAN)
     target_link_libraries(cube_engine PUBLIC nvrhi_vk nvrhi Vulkan::Headers)
     target_compile_definitions(cube_engine PUBLIC CUBE_WITH_VULKAN)
     message(STATUS "Cube Engine: Vulkan backend enabled (NVRHI)")
+
+    # AMD FSR frame generation: SDK files from tools/fetch_sdks.py (Windows).
+    set(CUBE_FSR_KIT "${CMAKE_SOURCE_DIR}/third_party/sdks/fidelityfx/Kits/FidelityFX")
+    if(WIN32 AND EXISTS "${CUBE_FSR_KIT}/api/include/ffx_api.h")
+        target_compile_definitions(cube_engine PRIVATE CUBE_WITH_FSR)
+        target_include_directories(cube_engine PRIVATE "${CUBE_FSR_KIT}/api/include"
+                                                       "${CUBE_FSR_KIT}/framegeneration/include")
+        message(STATUS "Cube Engine: AMD FSR frame generation enabled")
+    endif()
 else()
     message(STATUS "Cube Engine: Vulkan backend disabled (run 'git submodule update --init')")
 endif()

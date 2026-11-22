@@ -15,11 +15,25 @@
 #include "engine/render_backend.hpp"
 
 #include <nvrhi/nvrhi.h>
+#include <glm/glm.hpp>
 
 #include <cstdint>
 #include <memory>
 
 struct GLFWwindow;
+
+/// One rendered frame's inputs for vendor frame generation.
+struct FrameGenFrame {
+    nvrhi::ICommandList* commandList = nullptr;   ///< open; inputs already in shader-read state
+    nvrhi::ITexture* depth = nullptr;             ///< D32, whole image
+    nvrhi::ITexture* motion = nullptr;            ///< RG16F, UV units, previous - current
+    nvrhi::ITexture* ui = nullptr;                ///< RGBA8 premultiplied HUD (render-target state)
+    uint32_t width = 0, height = 0;
+    float frameTimeMs = 16.6f;
+    bool reset = false;                           ///< camera cut
+    float cameraNear = 0.1f, cameraFar = 100.0f, fovY = 1.0f;   ///< radians
+    glm::vec3 position{0.0f}, up{0.0f, 1.0f, 0.0f}, right{1.0f, 0.0f, 0.0f}, forward{0.0f, 0.0f, -1.0f};
+};
 
 class NvrhiDeviceManager {
 public:
@@ -52,6 +66,15 @@ public:
     virtual uint64_t swapchainGeneration() const = 0;
 
     virtual RenderBackendInfo describe() const = 0;
+
+    // ── Vendor frame generation (lives with the swapchain) ──────────────────
+    virtual void setFrameGeneration(const FrameGenSettings& settings) { (void)settings; }
+    virtual FrameGenStatus frameGenerationStatus() const { return FrameGenStatus{}; }
+    /// True while a frame-generation swapchain composes the HUD itself: the
+    /// back buffer then gets the HUD-less scene and the HUD goes in `ui`.
+    virtual bool frameGenerationComposesUi() const { return false; }
+    /// Record frame generation for this frame (only when the above is true).
+    virtual void recordFrameGeneration(const FrameGenFrame& frame) { (void)frame; }
 };
 
 /// Vulkan device manager. Uses the Vulkan loader through GLFW, so the game has

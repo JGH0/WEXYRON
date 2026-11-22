@@ -116,6 +116,29 @@ struct CapturedImage {
     std::vector<float> motion;
 };
 
+/// Frame generation technology requested by the game.
+enum class FrameGenTech { Off, Auto, FSR, DLSS, XeSS };
+
+/// What the player picked on the FRAME GENERATION page.
+struct FrameGenSettings {
+    FrameGenTech tech = FrameGenTech::Off;
+    /// Generated frames per rendered frame (1 = 2X, 2 = 3X, 3 = 4X).
+    int generatedFrames = 1;
+    /// Reflex / Anti-Lag 2 / XeLL where the technology supports it.
+    bool lowLatency = true;
+};
+
+/// What actually runs, for the menu.
+struct FrameGenStatus {
+    /// e.g. "AMD FSR 2X"; empty when no frame generation is running.
+    std::string active;
+    /// Why it is not running, or a note about it (e.g. a lower multiplier).
+    std::string note;
+    /// Frames shown since the swapchain was created (rendered + generated);
+    /// 0 when the backend cannot tell.
+    uint64_t presentedFrames = 0;
+};
+
 /// Device information for logs (adapter, API version, vendor).
 struct RenderBackendInfo {
     std::string api;       ///< "OpenGL", "Vulkan", "Direct3D 12"
@@ -142,6 +165,12 @@ public:
     virtual void present() = 0;
     /// Wait for vertical blank when presenting (true) or present immediately.
     virtual void setVsync(bool enabled) = 0;
+
+    /// Frame generation request; backends that cannot do it ignore it.
+    virtual void setFrameGeneration(const FrameGenSettings& settings) { (void)settings; }
+    virtual FrameGenStatus frameGenerationStatus() const {
+        return FrameGenStatus{"", "Needs the Vulkan renderer (VIDEO > RENDERER)"};
+    }
 
     /// Read back the next frame drawn by renderFrame (before it is presented).
     virtual void requestCapture() = 0;

@@ -100,6 +100,35 @@ License: MIT
 
 See <https://docs.mesa3d.org/license.html>.
 
+## NVRHI
+
+Location: `third_party/nvrhi/` (git submodule, NVIDIA-RTX/NVRHI)
+License: MIT
+
+Copyright (c) 2014-2021, NVIDIA CORPORATION. See `third_party/nvrhi/LICENSE.txt`.
+
+## Vulkan-Headers
+
+Location: `third_party/vulkan-headers/` (git submodule, KhronosGroup/Vulkan-Headers)
+License: Apache-2.0 OR MIT
+
+Copyright 2015-2023 The Khronos Group Inc. See `third_party/vulkan-headers/LICENSE.md`.
+
+## AMD FidelityFX / FSR SDK (frame generation, Windows)
+
+Files: `amd_fidelityfx_loader_vk.dll`, `amd_fidelityfx_framegeneration_vk.dll`
+(fetched by `tools/fetch_sdks.py` from GPUOpen-LibrariesAndSDKs/FidelityFX-SDK
+v2.4.0; not stored in this repository)
+License: AMD FidelityFX SDK licence (redistribution in binary form only)
+
+Copyright (C) Advanced Micro Devices, Inc. All rights reserved. The licence
+permits installing, reproducing and distributing the software in binary form
+only, prohibits reverse engineering, decompilation and disassembly, and
+provides the software "AS IS" without warranty of any kind; AMD and its
+licensors are not liable for any damages arising from its use. The complete
+licence text, including all disclaimers, ships next to the DLLs as
+`AMD_FidelityFX_LICENSE.md`.
+
 ## MinGW-w64 runtime libraries
 
 Location: `libgcc_s_seh-1.dll`, `libstdc++-6.dll`, `libwinpthread-1.dll` in

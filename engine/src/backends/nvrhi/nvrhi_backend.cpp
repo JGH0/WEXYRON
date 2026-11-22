@@ -47,6 +47,7 @@ bool vulkanBackendCompiledIn() { return false; }
 #include <glm/gtc/type_ptr.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <iostream>
 #include <memory>
@@ -193,6 +194,12 @@ public:
         frameStarted_ = false;
     }
     void setVsync(bool enabled) override { if (manager_) manager_->setVsync(enabled); }
+    void setFrameGeneration(const FrameGenSettings& settings) override {
+        if (manager_) manager_->setFrameGeneration(settings);
+    }
+    FrameGenStatus frameGenerationStatus() const override {
+        return manager_ ? manager_->frameGenerationStatus() : FrameGenStatus{};
+    }
     void requestCapture() override { captureRequested_ = true; }
     bool takeCapture(CapturedImage& out) override {
         if (!captureReady_) return false;
@@ -761,8 +768,14 @@ void NvrhiRenderBackend::renderFrame(const FramePacket& frame) {
         }
     }
 
-    // ── Composite HUD over scene into the back buffer ──
-    {
+    // ── Back buffer ──
+    // With vendor frame generation the swapchain composes the HUD onto real
+    // and generated frames, so it gets the HUD-less scene (same format).
+    const bool vendorComposesUi = manager_->frameGenerationComposesUi();
+    if (vendorComposesUi) {
+        cl_->copyTexture(manager_->backBuffer(), nvrhi::TextureSlice(), sceneColor_, nvrhi::TextureSlice());
+    } else {
+        // Composite HUD over scene.
         nvrhi::GraphicsState state;
         state.pipeline = composite_;
         state.framebuffer = backFramebuffer_;
@@ -771,6 +784,37 @@ void NvrhiRenderBackend::renderFrame(const FramePacket& frame) {
         state.bindings = {compositeSet_};
         cl_->setGraphicsState(state);
         cl_->draw(nvrhi::DrawArguments().setVertexCount(3));
+    }
+
+    // ── Vendor frame generation inputs ──
+    if (vendorComposesUi) {
+        cl_->setTextureState(depth_, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
+        cl_->setTextureState(motion_, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
+        cl_->commitBarriers();
+
+        FrameGenFrame fg;
+        fg.commandList = cl_;
+        fg.depth = depth_;
+        fg.motion = motion_;
+        fg.ui = ui_;
+        fg.width = manager_->width();
+        fg.height = manager_->height();
+        fg.frameTimeMs = frame.frameTime > 0.0f ? frame.frameTime * 1000.0f : 16.6f;
+        fg.reset = cut || !frame.has3D;
+        // GL-style perspective: P[1][1] = 1/tan(fov/2); near/far from P[2][2], P[3][2].
+        const glm::mat4& P = frame.worldProjection;
+        if (frame.has3D && P[1][1] != 0.0f) {
+            fg.fovY = 2.0f * std::atan(1.0f / P[1][1]);
+            fg.cameraNear = P[3][2] / (P[2][2] - 1.0f);
+            fg.cameraFar = P[3][2] / (P[2][2] + 1.0f);
+        }
+        const glm::mat4 cameraToWorld = glm::inverse(frame.worldView);
+        fg.position = glm::vec3(cameraToWorld[3]);
+        fg.right = glm::normalize(glm::vec3(cameraToWorld[0]));
+        fg.up = glm::normalize(glm::vec3(cameraToWorld[1]));
+        fg.forward = -glm::normalize(glm::vec3(cameraToWorld[2]));
+        manager_->recordFrameGeneration(fg);
+        cl_->clearState();   // the vendor code bound its own pipelines
     }
 
     // History for the next frame (glTF instances not drawn this frame drop out).

@@ -143,6 +143,9 @@ public:
     void present();
     /// Vsync preference; kept until the backend exists, then applied.
     void setVsync(bool enabled);
+    /// Frame generation request; kept until the backend exists, then applied.
+    void setFrameGeneration(const FrameGenSettings& settings);
+    FrameGenStatus frameGenerationStatus() const;
     /// The camera jumps this frame (map change, respawn, teleport): motion
     /// vectors and frame generation must not blend across it. Switching from a
     /// menu to 3D is detected automatically.
@@ -291,6 +294,7 @@ private:
 
     int viewportX_ = 0, viewportY_ = 0, viewportW_ = 800, viewportH_ = 600;
     bool vsync_ = true;
+    FrameGenSettings frameGen_;
     bool backendInitialized_ = false;
     bool cameraCutPending_ = true;   ///< the first 3D frame has no history
     bool lastFrameHad3D_ = false;

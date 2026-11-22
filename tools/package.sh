@@ -139,6 +139,17 @@ EOF
         cp "$ROOT/README.md" "$STAGE/README.md"
         cp "$ROOT/LICENSE" "$ROOT/THIRD_PARTY_NOTICES.md" "$STAGE/"
 
+        # AMD FSR frame generation (tools/fetch_sdks.py), with its licence:
+        # the SDK licence requires the notice and disclaimers to ship along.
+        FSR_KIT="$ROOT/third_party/sdks/fidelityfx/Kits/FidelityFX"
+        if [ -f "$FSR_KIT/signedbin/amd_fidelityfx_loader_vk.dll" ]; then
+            cp "$FSR_KIT/signedbin/amd_fidelityfx_loader_vk.dll" \
+               "$FSR_KIT/signedbin/amd_fidelityfx_framegeneration_vk.dll" "$STAGE/"
+            cp "$FSR_KIT/docs/license.md" "$STAGE/AMD_FidelityFX_LICENSE.md"
+        else
+            echo "note: AMD FSR not fetched (tools/fetch_sdks.py) - zip ships without FSR frame generation" >&2
+        fi
+
         # MinGW runtime + glfw DLLs, taken from the sysroot next to the
         # compiler that built the exe (MSYS2 or mingw-w64). CI exports
         # MINGW_DLL_DIR; locally we derive it from the cross compiler.

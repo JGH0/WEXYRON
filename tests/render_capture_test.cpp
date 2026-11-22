@@ -290,6 +290,93 @@ int motionCheck() {
     return ok ? 0 : 1;
 }
 
+// Frame generation: switch it on (CUBE_RENDER_API=vulkan), render the arena
+// and check that the swapchain shows about two frames per rendered frame.
+int frameGenCheck(const std::string& techName) {
+    useFreshSettingsFile();
+    Game game(800, 600);
+    game.init();
+    // Through the game setting, as the menu does.
+    game.gameSettings().frameGen = techName == "dlss" ? settings::FRAMEGEN_DLSS
+                                 : techName == "xess" ? settings::FRAMEGEN_XESS
+                                 : techName == "auto" ? settings::FRAMEGEN_AUTO : settings::FRAMEGEN_FSR;
+    game.gameSettings().vsync = false;
+    game.applySettingsForTest();
+    if (!game.debugStartMapForTest("arena.map")) return 1;
+    game.debugStartLocalBotsForTest("arena.map");
+    const glm::vec3 dims = game.debugCurrentMap()->getDimensions();
+    const glm::vec3 eye(-dims.x * 0.45f, std::max(4.0f, dims.y * 0.8f), -dims.z * 0.45f);
+
+    float yaw = 30.0f;
+    auto frame = [&] {
+        yaw += 0.25f;                      // keep the camera moving
+        game.debugStepForTest(1, 1.0f / 120.0f);
+        game.debugSetViewForTest(eye, yaw, -25.0f);
+        game.render();
+    };
+    for (int i = 0; i < 120; ++i) frame();   // swapchain switch + warm-up
+    const FrameGenStatus before = game.debugRenderer().frameGenerationStatus();
+    const int frames = 600;
+    const auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < frames; ++i) frame();
+    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    const FrameGenStatus after = game.debugRenderer().frameGenerationStatus();
+
+    const double presented = static_cast<double>(after.presentedFrames - before.presentedFrames);
+    const double ratio = presented / frames;
+    std::printf("framegen %s: active='%s' note='%s'\n", techName.c_str(), after.active.c_str(), after.note.c_str());
+    std::printf("framegen: %d rendered, %.0f presented (x%.2f), %.0f rendered fps, %.0f shown fps\n",
+                frames, presented, ratio, frames / seconds, presented / seconds);
+    bool ok = !after.active.empty() && ratio > 1.6;
+
+    // Resizing rebuilds the frame generation swapchain: it must keep going.
+    const char* resizesEnv = std::getenv("FRAMEGEN_RESIZES");
+    const int resizes = resizesEnv ? std::atoi(resizesEnv) : 1;
+    for (int cycle = 0; cycle < resizes; ++cycle) {
+        glfwSetWindowSize(game.windowHandle(), cycle % 2 ? 800 : 1024, cycle % 2 ? 600 : 640);
+        for (int i = 0; i < 30; ++i) {
+            glfwPollEvents();
+            frame();
+        }
+    }
+    const FrameGenStatus resized0 = game.debugRenderer().frameGenerationStatus();
+    for (int i = 0; i < 60; ++i) frame();
+    const FrameGenStatus resized1 = game.debugRenderer().frameGenerationStatus();
+    const double resizedRatio = static_cast<double>(resized1.presentedFrames - resized0.presentedFrames) / 60.0;
+    std::printf("framegen after %d resize(s): active='%s' x%.2f\n", resizes, resized1.active.c_str(), resizedRatio);
+    ok = ok && !resized1.active.empty() && resizedRatio > 1.6;
+
+    // Off and on again from the settings (as the menu does): the swapchain is
+    // swapped twice and generation must come back.
+    const int chosen = game.gameSettings().frameGen;
+    game.gameSettings().frameGen = settings::FRAMEGEN_OFF;
+    game.applySettingsForTest();
+    for (int i = 0; i < 30; ++i) frame();
+    const bool offOk = game.debugRenderer().frameGenerationStatus().active.empty();
+    game.gameSettings().frameGen = chosen;
+    game.applySettingsForTest();
+    for (int i = 0; i < 30; ++i) frame();
+    const FrameGenStatus again0 = game.debugRenderer().frameGenerationStatus();
+    for (int i = 0; i < 60; ++i) frame();
+    const FrameGenStatus again1 = game.debugRenderer().frameGenerationStatus();
+    const double againRatio = static_cast<double>(again1.presentedFrames - again0.presentedFrames) / 60.0;
+    std::printf("framegen off: %s, on again: active='%s' x%.2f\n", offOk ? "ok" : "still active",
+                again1.active.c_str(), againRatio);
+    ok = ok && offOk && againRatio > 1.6;
+
+    // Optional: keep running for a screenshot of what reaches the screen.
+    if (const char* hold = std::getenv("FRAMEGEN_HOLD_SECONDS")) {
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(std::atoi(hold));
+        while (std::chrono::steady_clock::now() < until) {
+            glfwPollEvents();
+            frame();
+        }
+    }
+    std::printf(ok ? "FRAMEGEN: OK\n" : "FRAMEGEN: FAIL\n");
+    game.cleanup();
+    return ok ? 0 : 1;
+}
+
 // Average frame time with vsync off: arena overview with bots, 600 frames.
 int bench() {
     useFreshSettingsFile();
@@ -322,10 +409,12 @@ int main(int argc, char** argv) {
     if (mode == "capture" && argc > 2) return capture(argv[2]);
     if (mode == "bench") return bench();
     if (mode == "motion") return motionCheck();
+    if (mode == "framegen") return frameGenCheck(argc > 2 ? argv[2] : "fsr");
     if (mode == "compare" && argc > 3) return compare(argv[2], argv[3], argc > 4 ? std::atof(argv[4]) : 0.5);
     std::printf("usage: render_capture_test capture <outdir>\n"
                 "       render_capture_test compare <refdir> <outdir> [maxMeanDiff]\n"
                 "       render_capture_test bench\n"
-                "       render_capture_test motion\n");
+                "       render_capture_test motion\n"
+                "       render_capture_test framegen [fsr|dlss|xess|auto]\n");
     return 2;
 }

@@ -289,6 +289,21 @@ void Game::openSettingsGroup(const std::string& group) {
                             {"LEFT/RIGHT", "ADJUST"}, {"ESC", "BACK"}};
 }
 
+void Game::refreshFrameGenStatus() {
+    // A MODE change takes effect with the next frame (FSR swaps the
+    // swapchain), so the ACTIVE row is refreshed every frame while visible.
+    menu::Page* page = settingsMenu_.stack.current();
+    if (!page || page->title != settings::kFrameGenGroup) return;
+    const FrameGenStatus status = renderer.frameGenerationStatus();
+    std::string active = status.active.empty() ? std::string("OFF") : status.active;
+    for (char& c : active) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    for (menu::Row& row : page->rows) {
+        if (row.kind != menu::RowKind::Info || row.label != "ACTIVE") continue;
+        row.value = active;
+        row.help = status.note.empty() ? std::string("Frame generation running now") : status.note;
+    }
+}
+
 void Game::openControlsSettings() {
     // Built fresh on every open: bindings may have changed since.
     menu::Page controls = menu::buildControlsPage(settingDefs_, [this]() { saveSettings(); });
@@ -308,11 +323,10 @@ void Game::openFrameGenSettings() {
     const std::string api = activeRenderApiName(renderer);
     page.add(menu::separator("STATUS"));
     page.add(menu::info("RENDERER", api, "Graphics API the game is running on"));
-    page.add(menu::info("ACTIVE", "NOT YET",
-                        api == "OPENGL" ? "Needs the Vulkan renderer (VIDEO > RENDERER) and a later update"
-                                        : "Frame generation arrives in a later update"));
+    page.add(menu::info("ACTIVE", "", ""));   // filled by refreshFrameGenStatus()
 
     menu::push(settingsMenu_, std::move(page));
+    refreshFrameGenStatus();
     settingsMenu_.legend = {{"UP/DOWN", "SELECT"}, {"LEFT/RIGHT", "ADJUST"}, {"ESC", "BACK"}};
 }
 
@@ -818,6 +832,22 @@ void Game::applySettings() {
     vsyncEnabled = gameSettings_.vsync;
     setPerformanceLevel(gameSettings_.performance);
     renderer.setVsync(vsyncEnabled);
+
+    // Frame generation (FRAME GENERATION page); the renderer decides what can
+    // run and reports it back (see openFrameGenSettings).
+    {
+        FrameGenSettings fg;
+        switch (gameSettings_.frameGen) {
+            case settings::FRAMEGEN_AUTO: fg.tech = FrameGenTech::Auto; break;
+            case settings::FRAMEGEN_FSR:  fg.tech = FrameGenTech::FSR;  break;
+            case settings::FRAMEGEN_DLSS: fg.tech = FrameGenTech::DLSS; break;
+            case settings::FRAMEGEN_XESS: fg.tech = FrameGenTech::XeSS; break;
+            default:                      fg.tech = FrameGenTech::Off;  break;
+        }
+        fg.generatedFrames = gameSettings_.frameGenOutput + 1;
+        fg.lowLatency = gameSettings_.frameGenLowLatency;
+        renderer.setFrameGeneration(fg);
+    }
 
     // Infinite ammo is read from the game member by the gameplay code, and
     // mirrored into every weapon (their own canShoot()/shoot() check is what

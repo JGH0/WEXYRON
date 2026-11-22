@@ -19,6 +19,7 @@ void Game::update(float deltaTime) {
 
     // Live settings: pick up edits to assets/settings.cfg without a restart.
     pollSettingsFile();
+    refreshFrameGenStatus();
 
     // Network session: runs in every state, so the handshake completes while
     // the connect screen is open (the status there must turn CONNECTED) and a

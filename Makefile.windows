@@ -30,6 +30,18 @@ NVRHI_SOURCES = $(filter-out %/dxgi-format.cpp,$(wildcard $(NVRHI_DIR)/src/commo
                 $(NVRHI_DIR)/src/vulkan/*.cpp $(NVRHI_DIR)/src/validation/*.cpp))
 endif
 NVRHI_OBJECTS = $(patsubst $(NVRHI_DIR)/src/%.cpp,$(BUILD_DIR)/nvrhi/%.o,$(NVRHI_SOURCES))
+
+# -- AMD FSR frame generation (Vulkan, Windows) --------------------------------
+# SDK files come from `python tools/fetch_sdks.py` (third_party/sdks/, not in
+# git: the licence forbids committing them). Without them FSR is reported as
+# not installed; the game builds and runs as usual.
+FSR_KIT = third_party/sdks/fidelityfx/Kits/FidelityFX
+ifneq ($(and $(NVRHI_SOURCES),$(wildcard $(FSR_KIT)/api/include/ffx_api.h)),)
+CXXFLAGS += -DCUBE_WITH_FSR -I$(FSR_KIT)/api/include -I$(FSR_KIT)/framegeneration/include
+FSR_DLLS = $(FSR_KIT)/signedbin/amd_fidelityfx_loader_vk.dll $(FSR_KIT)/signedbin/amd_fidelityfx_framegeneration_vk.dll
+else
+FSR_DLLS =
+endif
 # Third-party code: optimised, warnings off (not ours to fix).
 NVRHI_CXXFLAGS = -std=c++17 -O2 -w -I$(NVRHI_DIR)/include -I$(VULKAN_HEADERS_DIR)/include \
                  -DNVRHI_WITH_AFTERMATH=0 -DVK_USE_PLATFORM_WIN32_KHR
@@ -64,7 +76,7 @@ GAME_BOT_SOURCES = $(GAME_DIR)/bot.cpp
 LOCAL_BOT_SOURCES = $(GAME_DIR)/local_bots.cpp
 SERVER_BOT_SOURCES = $(NETWORK_DIR)/server_bots.cpp $(NETWORK_DIR)/server_bomb.cpp
 UI_SOURCES = $(UI_DIR)/menu_core.cpp $(UI_DIR)/menu_draw.cpp $(UI_DIR)/menu_input.cpp $(UI_DIR)/menu_pages.cpp
-ENGINE_LIB_SOURCES = $(ENGINE_SRC_DIR)/audio_manager.cpp $(ENGINE_SRC_DIR)/camera.cpp $(ENGINE_SRC_DIR)/gltf_model.cpp $(ENGINE_SRC_DIR)/map.cpp $(ENGINE_SRC_DIR)/map_loader.cpp $(ENGINE_SRC_DIR)/renderer.cpp $(ENGINE_SRC_DIR)/render_window.cpp $(ENGINE_SRC_DIR)/backends/gl/gl_backend.cpp $(ENGINE_SRC_DIR)/backends/nvrhi/nvrhi_backend.cpp $(ENGINE_SRC_DIR)/backends/nvrhi/vulkan_device.cpp $(ENGINE_SRC_DIR)/shader.cpp $(ENGINE_SRC_DIR)/texture.cpp
+ENGINE_LIB_SOURCES = $(ENGINE_SRC_DIR)/audio_manager.cpp $(ENGINE_SRC_DIR)/camera.cpp $(ENGINE_SRC_DIR)/gltf_model.cpp $(ENGINE_SRC_DIR)/map.cpp $(ENGINE_SRC_DIR)/map_loader.cpp $(ENGINE_SRC_DIR)/renderer.cpp $(ENGINE_SRC_DIR)/render_window.cpp $(ENGINE_SRC_DIR)/backends/gl/gl_backend.cpp $(ENGINE_SRC_DIR)/backends/nvrhi/nvrhi_backend.cpp $(ENGINE_SRC_DIR)/backends/nvrhi/vulkan_device.cpp $(ENGINE_SRC_DIR)/backends/nvrhi/fsr_vulkan.cpp $(ENGINE_SRC_DIR)/shader.cpp $(ENGINE_SRC_DIR)/texture.cpp
 MINIAUDIO_SOURCES = third_party/miniaudio/miniaudio.c
 MAIN_SOURCES = $(SRC_DIR)/main.cpp
 SERVER_SOURCES = server_main.cpp $(NETWORK_SOURCES) $(GAME_BOT_SOURCES) $(SERVER_BOT_SOURCES)
@@ -258,6 +270,8 @@ stage-runtime:
 		if [ -z "$$found" ] && [ -f ".mingw-dlls/$$dll" ]; then cp -f ".mingw-dlls/$$dll" $(BIN_DIR)/; found=".mingw-dlls/$$dll"; fi; \
 		if [ -z "$$found" ]; then echo "stage-runtime: warning: $$dll not found in toolchain or .mingw-dlls (run pacman -S mingw-w64-ucrt-x86_64-glfw)" >&2; fi; \
 	done
+	@for dll in $(FSR_DLLS); do cp -f "$$dll" $(BIN_DIR)/; done
+	@if [ -n "$(FSR_DLLS)" ]; then cp -f $(FSR_KIT)/docs/license.md $(BIN_DIR)/AMD_FidelityFX_LICENSE.md; fi
 	@if [ -f mesa-deps/x64/opengl32.dll ]; then \
 		cp -f mesa-deps/x64/libgallium_wgl.dll mesa-deps/x64/libdlclose-skip.dll $(BIN_DIR)/ 2>/dev/null || true; \
 		cp -f mesa-deps/x64/opengl32.dll $(BIN_DIR)/opengl32_sw.dll; \

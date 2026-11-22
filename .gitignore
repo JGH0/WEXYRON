@@ -22,3 +22,6 @@ dist/
 
 # Crash/startup log written by the Windows build
 game-log.txt
+
+# Vendor SDK files fetched by tools/fetch_sdks.py (licences forbid committing them)
+third_party/sdks/

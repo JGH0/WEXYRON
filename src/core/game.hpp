@@ -778,6 +778,8 @@ private:
     void openControlsSettings();
     /// FRAME GENERATION sub-screen (opened from VIDEO).
     void openFrameGenSettings();
+    /// Update that page's ACTIVE row from the renderer (every frame).
+    void refreshFrameGenStatus();
     /// Apply + save after a row changed, with a feedback blip.
     void onSettingRowChanged();
     /// Restore the default key bindings (controls page "RESET BINDINGS").

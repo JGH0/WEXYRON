@@ -90,7 +90,18 @@ void Renderer::init(GLFWwindow* window) {
     }
     backendInitialized_ = true;
     backend_->setVsync(vsync_);
+    backend_->setFrameGeneration(frameGen_);
     refreshTextures(nullptr);
+}
+
+void Renderer::setFrameGeneration(const FrameGenSettings& settings) {
+    frameGen_ = settings;
+    if (backend_) backend_->setFrameGeneration(settings);
+}
+
+FrameGenStatus Renderer::frameGenerationStatus() const {
+    if (!backend_) return FrameGenStatus{"", "Renderer not started"};
+    return backend_->frameGenerationStatus();
 }
 
 void Renderer::present() {
