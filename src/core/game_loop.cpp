@@ -35,6 +35,14 @@ void Game::update(float deltaTime) {
     updateScope(deltaTime);
     updateSniperBolt(deltaTime);
 
+    // Spawn protection counts down in real time, including while a menu is
+    // open (by the time the player is back in the round it has usually run
+    // out, exactly like on the server).
+    if (spawnProtectionTimer_ > 0.0f) {
+        spawnProtectionTimer_ -= deltaTime;
+        if (spawnProtectionTimer_ < 0.0f) spawnProtectionTimer_ = 0.0f;
+    }
+
     if (gameState == PLAYING) {
         // Deathmatch and team deathmatch have no round cycle; the HUD shows
         // elapsed match time. Bomb defusal advances its own clock in updateBomb().
@@ -123,11 +131,14 @@ void Game::update(float deltaTime) {
     // Tell the server every frame whether we are alive or dead/spectating.
     // This runs in DEAD too, so a lost damage packet cannot leave a client
     // dead locally while the server still believes it is alive (or the other
-    // way round): the next input corrects it. Menu states are not gameplay:
-    // they must not report a living player as dead.
+    // way round): the next input corrects it. A menu over a running match also
+    // reports itself (inMenu): the server keeps the player in the match but
+    // holds any respawn until the player is back in the round. A plain menu
+    // (no match in progress) is still not sent as a dead player.
+    const bool matchMenu = isInMatchMenu();
     if (networkClient && networkClient->isConnected() &&
-        (gameState == PLAYING || gameState == DEAD)) {
-        const bool alive = (gameState == PLAYING) && !isDead && !spectatorMode;
+        (gameState == PLAYING || gameState == DEAD || matchMenu)) {
+        const bool alive = !matchMenu && (gameState == PLAYING) && !isDead && !spectatorMode;
         const bool roundFrozen =
             matchOver_ || (roundEndTimer > 0.0f && currentGameMode == BOMB_DEFUSAL);
         const bool interacting = isPlanting || isDefusing;
@@ -164,7 +175,8 @@ void Game::update(float deltaTime) {
                                        alive,
                                        static_cast<uint8_t>(currentGameMode),
                                        static_cast<uint8_t>(matchFormat_),
-                                       static_cast<uint8_t>(stance_));
+                                       static_cast<uint8_t>(stance_),
+                                       matchMenu);
     }
 
     // Update round end timer (delay before next round)
@@ -272,15 +284,15 @@ void Game::render() {
                 } else if (projectiles[i].type == 3) {
                     // Shotgun pellet
                     model = glm::scale(model, glm::vec3(0.08f, 0.08f, 0.08f));
-                    renderer.drawCube(model, glm::vec3(1.0f, 0.5f, 0.0f)); // Orange for shotgun pellets
+                    renderer.drawCube(model, glm::vec3(1.0f, 0.5f, 0.0f));
                 } else if (projectiles[i].type == 4) {
-                    // Sniper round: small and pale blue, like a tracer.
+                    // Sniper round
                     model = glm::scale(model, glm::vec3(0.07f, 0.07f, 0.07f));
                     renderer.drawCube(model, glm::vec3(0.55f, 0.80f, 1.0f));
                 } else {
-                    // Pistol bullet
+                    // Pistol bullet: a compact round, not a streaking beam.
                     model = glm::scale(model, glm::vec3(0.1f, 0.1f, 0.1f));
-                    renderer.drawCube(model, glm::vec3(1.0f, 1.0f, 0.0f)); // Yellow for pistol bullets
+                    renderer.drawCube(model, glm::vec3(1.0f, 1.0f, 0.0f));
                 }
             }
         }

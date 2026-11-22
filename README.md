@@ -6,6 +6,9 @@ A multiplayer-enabled 3D first-person shooter game built with OpenGL and C++.
 
 ## Features
 
+Feature requests are welcome! If there is something you would like to see in
+the game, open an issue describing the idea and how it would improve gameplay.
+
 ### Single Player
 - 3D first-person shooter gameplay
 - Multiple weapons (Pistol, Shotgun, Sniper, Grenade, Flashbang)
@@ -23,13 +26,12 @@ A multiplayer-enabled 3D first-person shooter game built with OpenGL and C++.
 - Pre-match team and bot setup screen
 - Single-player bots with configurable count, teams and accuracy
 
-### Local Multiplayer (NEW!)
+### Local Multiplayer
 - **LAN Discovery**: Automatic server discovery on local network
 - **Multiple Connection Types**:
   - WiFi network (same router)
   - Ethernet cable connection
   - Direct cable-to-cable connection
-  - Mobile hotspot
 - **Real-time multiplayer**: Up to 16 players
 - **Server-side bots**: Configurable count and accuracy, all game modes
 - **Server-authoritative**: Fair gameplay with server-side physics
@@ -78,7 +80,7 @@ make clean && make
 
 ### Start Multiplayer Game
 
-#### Method 1: Automatic LAN Discovery (Recommended)
+#### Method 1: Automatic LAN Discovery
 1. **Start Server**:
    - **Windows**: `run_server.bat` or `build\bin\server.exe`
    - **Linux/macOS**: `./build/bin/server`
@@ -120,6 +122,7 @@ make clean && make
 - **4**: Grenade
 - **5**: Flashbang
 - **G**: Toggle Grenade/Flashbang
+- **I**: Inspect the held weapon (animation; cancelled by firing)
 
 The sniper is bolt-action: selecting it racks the bolt first, and each shot
 must be cycled before the next round can be fired.
@@ -143,27 +146,6 @@ mouse button). Bindings and the other settings are saved to
 - Settings are stored in `assets/settings.cfg` (created with the defaults on
   first launch); see [MENUS.md](MENUS.md) for the menu framework and how to add
   a setting or a screen
-
-## Discord Rich Presence
-
-While Discord is running, WEXYRON shows your current activity (main menu, map
-editor, game mode and map). It uses the local Discord IPC connection and the
-public Application ID in `src/core/brand.hpp`; **no bot token or client secret
-is needed or shipped**. Rich Presence can be switched off under
-**Settings → INTERFACE → DISCORD STATUS**.
-
-To customize the application card:
-
-1. Open <https://discord.com/developers/applications> and select the WEXYRON
-   application (`1573411705831161957`).
-2. Set the application name to **WEXYRON**.
-3. Under **Rich Presence → Art Assets**, upload these image keys:
-   - `logo` (large image)
-   - `menu`, `editor`, `deathmatch`, `team`, `bomb` (small images)
-4. Restart the game after uploading assets.
-
-If Discord is closed, the integration silently retries in the background.
-See [`docs/DISCORD.md`](docs/DISCORD.md) for setup, asset keys and Linux notes.
 
 ## Multiplayer Setup
 
@@ -201,7 +183,7 @@ sudo ufw disable
 
 ### Performance
 - Supports up to 8 concurrent players
-- 60 FPS gameplay on modern hardware
+- 60+ FPS gameplay on modern hardware
 - Low network latency (< 50ms recommended)
 
 ## Building from Source
@@ -312,9 +294,6 @@ wexyron/
 
 ## Contributing
 
-Feature requests are welcome! If there is something you would like to see in
-the game, open an issue describing the idea and how it would improve gameplay.
-
 1. Fork the repository
 2. Create feature branch
 3. Test multiplayer functionality
@@ -331,8 +310,6 @@ It bundles third-party libraries with their own permissive licenses; see
 
 - **Windows Setup**: See `WINDOWS_SETUP.md` for detailed Windows installation and troubleshooting
 - **Multiplayer Setup**: See `MULTIPLAYER_GUIDE.md` for detailed multiplayer instructions
-- **VS Code Configuration**: Use the provided `.vscode/` configurations for Windows development
-
 ## Audio
 
 Sound is file-based: everything lives in `assets/audio/` and is loaded at
@@ -341,27 +318,9 @@ vendored in `third_party/miniaudio`).
 
 ```
 assets/audio/effects/*.wav   pistol_fire, shotgun_fire, explosion, footsteps, ...
-assets/audio/music/*.wav     menu, game (looping)
+assets/audio/music/*.wav     menu, game
 ```
-
-- 3D positional audio: every effect is attenuated and panned from the camera.
-- Menu music in the menus, match music while playing, with cross-fades.
-- `MASTER VOLUME`, `MUSIC VOLUME` and `EFFECTS VOLUME` in Settings > Audio apply
-  immediately (they are also saved in `assets/settings.cfg`).
-- No sound device (e.g. a headless machine) is not an error: the game runs
-  silently and picks up a device that appears later.
-
-The shipped WAV files are synthesized by `tools/generate_sounds.py` (Python 3 +
-numpy/scipy), so they can be regenerated or tweaked:
-
-```
-python3 tools/generate_sounds.py           # writes assets/audio/**
-python3 tools/generate_sounds.py --check   # verify the files exist
-```
-
-To use your own recordings, replace the files (`.wav`, `.ogg`, `.flac` or
-`.mp3` are accepted) keeping the file names, or drop new ones in
-`assets/audio/effects/` and play them with `playSoundEffect("name", position)`.
+You can edit assets file as you want if you want to have an other ingame Sound.
 
 ### Tests
 
@@ -376,24 +335,9 @@ CUBE_MENU_TEST="menu:main;dump" xvfb-run -a ./build/bin/game  # game still boots
 `audio_test` also opens the real device when one exists; on CI without sound it
 still checks decoding and the volume buses.
 
-### Projectile hit detection
-
-Bullets are fast enough to cross a whole player body between two frames. The
-gameplay hit test therefore sweeps the frame segment (previous checked position
--> current position) through the target's body box with
-`spatialkit::intersectSegmentAABB()` instead of testing only the end point.
-The body is fattened by the old `bodyHitSlack`, so grazing shots still connect;
-the nearest hit along the segment wins, and the projectile is moved to the
-contact point so sounds and impacts happen where the shot landed. See
-`Game::sweepProjectileAgainstBody()` in `src/core/game_gameplay.cpp`.
-
-Increasing `camera.Front * 120.0f` (pistol) or the shotgun pellet speed in
-`src/core/game_gameplay.cpp` is now safe: the swept test has no per-frame
-distance limit as long as `projectilePrevPos` is tracked.
-
 ### Engine library
 
 The reusable rendering, map, camera, audio and thread-pool code lives in
 `engine/` and builds as the `cube_engine` library. The game links it from
 `src/`. See [`engine/README.md`](engine/README.md) for the boundary rules and
-the smoke test. The earlier `src/engine/` prototype has been removed.
+the smoke test.

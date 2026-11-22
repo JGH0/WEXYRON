@@ -897,6 +897,13 @@ void Bot::fireAt(const Target& target, float distance, std::vector<Action>& acti
     right = glm::normalize(right);
     const glm::vec3 up2 = glm::normalize(glm::cross(right, base));
 
+    // Visual projectile origin: the weapon muzzle, not the eyes. The AI still
+    // aims from the eye, but spawning the visible tracer/bullet at eye height
+    // made bot shots look like they appeared in mid-air next to the gun.
+    const float barrelLength = useShotgun ? 0.55f : 0.45f;
+    const glm::vec3 muzzle = position_ + glm::vec3(0.0f, 1.32f, 0.0f) +
+                             right * 0.22f + base * barrelLength;
+
     auto directionWithSpread = [&](bool hit) {
         const float missBoost = hit ? 0.25f : 1.0f;
         const float maxAngle = glm::radians((0.4f + (1.0f - accuracy_) * 9.0f) * missBoost);
@@ -914,7 +921,7 @@ void Bot::fireAt(const Target& target, float distance, std::vector<Action>& acti
             const bool hit = random01() < hitChance;
             Action action;
             action.type = Action::FireBullet;
-            action.origin = eye;
+            action.origin = muzzle;
             action.velocity = directionWithSpread(hit) * 110.0f;
             action.lifetime = 1.0f;
             action.projectileType = 3;
@@ -930,7 +937,7 @@ void Bot::fireAt(const Target& target, float distance, std::vector<Action>& acti
         const bool hit = random01() < hitChance;
         Action action;
         action.type = Action::FireBullet;
-        action.origin = eye;
+        action.origin = muzzle;
         action.velocity = directionWithSpread(hit) * 150.0f;
         action.lifetime = 3.0f;
         action.projectileType = 0;

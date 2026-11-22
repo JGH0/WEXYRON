@@ -14,6 +14,10 @@
 
 namespace {
 constexpr float kStateBroadcastInterval = 0.1f; // 10 Hz, plus every change
+/// Time between a finished round and the server starting the next one. The
+/// server owns this now: clients no longer have to drive the round start
+/// (a lost round-start packet used to strand them in spectator mode).
+constexpr float kRoundIntermission = 3.0f;
 constexpr uint8_t kNoTeam = 255;
 
 float horizontalDistance(const glm::vec3& a, const glm::vec3& b) {
@@ -108,6 +112,8 @@ void ServerBombManager::resetRound(MapState& state, int gameMode, int attackingT
     state.roundActive = true;
     state.attackingTeam = static_cast<uint8_t>(attackingTeam & 1);
     state.roundTimeLeft = config_.roundTime;
+    state.roundAge = 0.0f;
+    state.intermission = 0.0f;
     state.roundEnded = false;
     state.roundWinner = 255;
     state.roundEndReason = ROUND_END_NONE;
@@ -135,6 +141,9 @@ void ServerBombManager::observePlayers(NetworkServer& server) {
             state.gameMode = 0;
             state.matchFormat = 0;
             state.roundsPlayed = 0;
+            state.teamWins[0] = state.teamWins[1] = 0;
+            state.matchOver = false;
+            state.intermission = 0.0f;
             state.roundActive = false;
             resetBomb(state);
             state.broadcastTimer = 0.0f;
@@ -157,6 +166,9 @@ void ServerBombManager::observePlayers(NetworkServer& server) {
             // mode for a frame must not restart a live round, though.
             if (state.gameMode != 2 && !state.roundActive) {
                 state.roundsPlayed = 0;
+                state.teamWins[0] = state.teamWins[1] = 0;
+                state.matchOver = false;
+                state.intermission = 0.0f;
                 resetRound(state, mode, state.attackingTeam, player->matchFormat);
                 state.broadcastTimer = 0.0f;
             }
@@ -166,6 +178,9 @@ void ServerBombManager::observePlayers(NetworkServer& server) {
             state.gameMode = 0;
             state.matchFormat = 0;
             state.roundsPlayed = 0;
+            state.teamWins[0] = state.teamWins[1] = 0;
+            state.matchOver = false;
+            state.intermission = 0.0f;
             state.roundActive = false;
             state.roundEnded = false;
             state.roundWinner = 255;
@@ -184,7 +199,23 @@ void ServerBombManager::onRoundStart(const std::string& mapName, int gameMode,
                                      bool freshMatch) {
     if (!server_ || gameMode != 2) return;
     MapState& state = stateFor(mapName);
-    if (freshMatch) state.roundsPlayed = 0;
+    if (freshMatch) {
+        state.roundsPlayed = 0;
+        state.teamWins[0] = state.teamWins[1] = 0;
+        state.matchOver = false;
+    }
+    // After the match has been won, only an explicit fresh match may start
+    // another round (a late round-start packet must not revive it).
+    if (state.matchOver && !freshMatch) return;
+    // A client that still drives round starts (older build) may send this
+    // just after the server already started the same round. Treat it as a
+    // request for the current state, not a reset (a duplicate reset respawned
+    // everyone a second time and skipped a round id).
+    if (!freshMatch && state.roundActive && !state.roundEnded &&
+        state.roundAge < 2.0f) {
+        broadcastState(mapName, state, *server_);
+        return;
+    }
     resetRound(state, gameMode, attackingTeam, matchFormat);
     broadcastState(mapName, state, *server_);
 }
@@ -309,6 +340,9 @@ void ServerBombManager::finishRound(MapState& state, int winner, RoundEndReason 
     // round-by-round swap; normal switches once after round 12, swift once
     // after round 6. The first team to 13 / 7 round wins takes the match.
     ++state.roundsPlayed;
+    if (state.roundWinner == 0 || state.roundWinner == 1) {
+        ++state.teamWins[state.roundWinner];
+    }
     const int played = state.roundsPlayed;
     bool swapSides = true;
     if (state.matchFormat == 1) {
@@ -319,6 +353,18 @@ void ServerBombManager::finishRound(MapState& state, int winner, RoundEndReason 
     if (swapSides) {
         state.attackingTeam = static_cast<uint8_t>((state.attackingTeam + 1) & 1);
     }
+
+    // Match length: first to 13 (normal) / 7 (swift) round wins. Free play
+    // keeps going. The server needs this so its automatic next round does not
+    // restart a finished match.
+    const int target = state.matchFormat == 1 ? 13
+                     : state.matchFormat == 2 ? 7
+                                              : 0;
+    if (target > 0 &&
+        (state.teamWins[0] >= target || state.teamWins[1] >= target)) {
+        state.matchOver = true;
+    }
+    state.intermission = state.matchOver ? 0.0f : kRoundIntermission;
 
     const char* reasonText = "round over";
     switch (reason) {
@@ -436,6 +482,7 @@ void ServerBombManager::update(float deltaTime, NetworkServer& server) {
         if (state.gameMode != 2) continue;
 
         state.broadcastTimer -= deltaTime;
+        if (state.roundActive) state.roundAge += deltaTime;
 
         if (humansOnline) {
             // Round clock runs only until the bomb is planted; after that the
@@ -523,6 +570,22 @@ void ServerBombManager::update(float deltaTime, NetworkServer& server) {
 
             // Elimination / round-time win conditions (CS-style).
             checkRoundOutcome(state, mapName, server);
+
+            // Next round: the server owns the intermission. Clients only
+            // follow the broadcast, so a lost round-start packet can no
+            // longer leave someone stuck as a spectator for the whole round.
+            if (state.roundEnded && !state.roundActive && !state.matchOver) {
+                state.intermission -= deltaTime;
+                if (state.intermission <= 0.0f) {
+                    resetRound(state, state.gameMode, state.attackingTeam,
+                               state.matchFormat);
+                    if (onRoundRestart) onRoundRestart(mapName, state.gameMode);
+                    state.dirty = true;
+                    std::cout << "[Round] Next round on " << mapName
+                              << " (team wins " << state.teamWins[0] << ":"
+                              << state.teamWins[1] << ")" << std::endl;
+                }
+            }
         }
 
         if (state.dirty || state.broadcastTimer <= 0.0f) {
@@ -596,6 +659,8 @@ ServerBombManager::Snapshot ServerBombManager::snapshot(const std::string& mapNa
                           ? std::max(0.0f, config_.explodeTime - state.plantedTime)
                           : 0.0f;
     result.roundTimeLeft = state.roundTimeLeft;
+    result.roundAge = state.roundAge;
+    result.matchOver = state.matchOver;
     result.plantProgress = state.plantProgress;
     result.defuseProgress = state.defuseProgress;
     return result;

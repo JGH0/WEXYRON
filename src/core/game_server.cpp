@@ -80,11 +80,32 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
             // isDead the player dies where they stand (after a hit), and the
             // respawned state it sends a few seconds later brings them back.
             if (packet.isDead || packet.health <= 0.0f) {
+                // The server is authoritative on death. Do not ignore this
+                // because of the local spawn-protection timer: if the server
+                // considers us dead, staying alive locally would freeze our
+                // body on everyone else's screen (and the server would never
+                // accept our movement again until the next round).
                 if (playerHealth > 0.0f) playerHealth = 0.0f;
                 if (!isDead) dieLocally();
             } else if (isDead) {
-                // The server put us back on our feet (respawn).
-                respawnLocally();
+                // The server put us back on our feet (respawn). In a menu the
+                // player keeps browsing; the respawn waits for the return to
+                // the round (see resumeGameFromMenu).
+                if (isInMatchMenu()) {
+                    respawnPending_ = true;
+                    if (bombDefusalMode) {
+                        // A revival in bomb defusal belongs to a new round;
+                        // its BombState carries the actual reset.
+                        pendingRoundStart_ = true;
+                        pendingRoundStartFromServer_ = true;
+                    }
+                } else if (bombDefusalMode) {
+                    // Round-based: the new BombState performs the reset. Doing
+                    // it here as well was the second respawn after a round.
+                    respawnPending_ = true;
+                } else {
+                    respawnLocally();
+                }
             } else {
                 // The server's health is authoritative. Do not subtract the
                 // damage we reported to *other* players here: those books
@@ -125,6 +146,7 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
                     remotePlayers[i].active   = true;
                     remotePlayers[i].team     = packet.team;
                     remotePlayers[i].stance   = packet.stance <= 2 ? packet.stance : 0;
+                    remotePlayers[i].weaponId = packet.weaponId < 5 ? packet.weaponId : 0;
                     remotePlayers[i].stateSequence = packet.header.sequence;
                     // A health drop caused by anyone's shot flinches the body.
                     if (!isNew && packet.health < oldHealth - 0.5f) {
@@ -157,6 +179,7 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
                 remotePlayers[i].isDead         = false;
                 remotePlayers[i].team           = packet.team;
                 remotePlayers[i].stance         = 0;
+                remotePlayers[i].weaponId       = 0;
                 remotePlayers[i].stateSequence  = 0;
                 return;
             }
@@ -177,6 +200,7 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
                 remotePlayers[i].active         = true;
                 remotePlayers[i].team           = packet.team;
                 remotePlayers[i].stance         = 0;
+                remotePlayers[i].weaponId       = 0;
                 remotePlayers[i].stateSequence  = 0;
                 remotePlayers[i].anim           = humanoid::Anim{};
                 playerCount++; // Update player count
@@ -217,11 +241,23 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
                 packet.projectileType // Use the projectile type from the packet
             );
             // Show the owner firing: their next body frame raises both arms.
+            // A shotgun reports one packet per pellet; only the first one in a
+            // burst should restart the pose and play the shot sound.
             for (int i = 0; i < MAX_REMOTE_PLAYERS; ++i) {
-                if (remotePlayers[i].active && remotePlayers[i].id == packet.ownerId) {
-                    remotePlayers[i].anim.shoot = 1.0f;
-                    break;
+                if (!remotePlayers[i].active || remotePlayers[i].id != packet.ownerId) continue;
+                const bool newShot = remotePlayers[i].anim.shoot < 0.5f;
+                remotePlayers[i].anim.shoot = 1.0f;
+                if (newShot && (packet.projectileType == 0 ||
+                                packet.projectileType == 3 ||
+                                packet.projectileType == 4)) {
+                    const char* sound = packet.projectileType == 3 ? "shotgun_fire"
+                                      : packet.projectileType == 4 ? "sniper_fire"
+                                                                   : "pistol_fire";
+                    playSoundEffect(
+                        sound,
+                        glm::vec3(packet.posX, packet.posY, packet.posZ), 0.8f);
                 }
+                break;
             }
         }
     };
@@ -244,13 +280,19 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
 
     networkClient->onBombState = [this](const BombStatePacket& packet) {
         if (!bombDefusalMode) return;
+        // A map is still loading: packets from the map we are leaving must not
+        // reconfigure (or respawn onto) the current one. The next state after
+        // installMap() is the fresh map's first round.
+        if (mapLoader_.isLoading()) return;
 
         // Ignore packets from an older round. UDP can deliver a delayed
         // "round ended" datagram after the client already started the next
         // round, which used to end that fresh round immediately (the next
         // round appeared twice in a row).
         if (packet.roundId < serverBombRoundId_) return;
-        if (packet.roundId != serverBombRoundId_) {
+        const uint32_t previousRoundId = serverBombRoundId_;
+        const bool roundChanged = packet.roundId != previousRoundId;
+        if (roundChanged) {
             serverBombRoundId_ = packet.roundId;
             serverRoundEnded = false;
             roundWinner = -1;
@@ -324,6 +366,22 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
         // the same packet that ended this one. Apply it *after* endRound()
         // (which swaps locally) so the two do not cancel each other out.
         if (packet.attackingTeam <= 1) attackingTeam = packet.attackingTeam;
+
+        // The server started the next round by itself. Take the new life now;
+        // this is also the recovery path for a client that missed the round
+        // result and would otherwise stay a spectator forever. The very first
+        // round after loading a map is already covered by resetGame(), so it
+        // is not treated as a transition (previousRoundId == 0).
+        if (roundChanged && previousRoundId != 0 &&
+            packet.roundActive != 0 && packet.roundEnded == 0 && !matchOver_) {
+            if (isInMatchMenu()) {
+                // Leave the menu alone; the reset happens on return.
+                pendingRoundStart_ = true;
+                pendingRoundStartFromServer_ = true;
+            } else {
+                beginServerRound();
+            }
+        }
     };
 
     networkClient->onMapPlayerCount = [this](const MapPlayerCountPacket& packet) {

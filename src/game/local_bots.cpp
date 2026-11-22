@@ -20,6 +20,7 @@ struct LocalBotHost::Runtime {
     float health = 100.0f;
     bool dead = false;
     bool shooting = false;
+    uint8_t weaponId = 0;
 };
 
 LocalBotHost::LocalBotHost() = default;
@@ -173,6 +174,13 @@ void LocalBotHost::tick(float deltaTime, const glm::vec3& playerFeet, int player
             }
 
             actor.shooting = true;
+            switch (action.projectileType) {
+                case 3:  actor.weaponId = 1; break;   // shotgun
+                case 4:  actor.weaponId = 2; break;   // sniper
+                case 1:  actor.weaponId = 3; break;   // grenade
+                case 2:  actor.weaponId = 4; break;   // flashbang
+                default: actor.weaponId = 0; break;   // pistol
+            }
             if (onShot) {
                 onShot(action.origin, action.velocity, action.projectileType);
             }
@@ -255,6 +263,7 @@ std::vector<LocalBotHost::View> LocalBotHost::views() const {
         view.health = runtime->health;
         view.isDead = runtime->dead;
         view.shooting = runtime->shooting;
+        view.weaponId = runtime->weaponId;
         result.push_back(view);
     }
     return result;

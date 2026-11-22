@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cstddef>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -346,7 +347,7 @@ void NetworkClient::disconnect() {
 void NetworkClient::sendPlayerInput(float moveX, float moveZ, float yaw, float pitch,
                                      bool jump, bool shoot, uint8_t weaponId, float posX, float posY, float posZ,
                                      bool alive, uint8_t gameMode, uint8_t matchFormat,
-                                     uint8_t stance) {
+                                     uint8_t stance, bool inMenu) {
     if (!connected) return;
 
     PlayerInputPacket packet;
@@ -371,6 +372,7 @@ void NetworkClient::sendPlayerInput(float moveX, float moveZ, float yaw, float p
     packet.gameMode = gameMode;
     packet.matchFormat = matchFormat;
     packet.stance = stance;
+    packet.inMenu = inMenu ? 1 : 0;
 
     sendPacket(&packet, sizeof(packet));
 }
@@ -1021,19 +1023,25 @@ void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_
         }
         
         case PACKET_PLAYER_INPUT: {
-            if (size < sizeof(PlayerInputPacket)) return;
-            
-            PlayerInputPacket* input = (PlayerInputPacket*)data;
-            uint32_t id = input->header.clientId;
-            
+            // Accept an input from a client built before the trailing inMenu
+            // flag existed too: a mixed-version LAN match must not turn into
+            // one-way movement (the newer server would silently drop every
+            // input from the older client and freeze its body at spawn).
+            constexpr size_t kLegacyInputSize = offsetof(PlayerInputPacket, inMenu);
+            if (size < kLegacyInputSize) return;
+
+            PlayerInputPacket input{};
+            std::memcpy(&input, data, std::min(size, sizeof(input)));
+            const uint32_t id = input.header.clientId;
+
             if (players.find(id) != players.end()) {
                 ServerPlayer& player = players[id];
-                player.lastInputSequence = input->header.sequence;
+                player.lastInputSequence = input.header.sequence;
                 player.inputIdle = 0.0f;
-                
+
                 // Notify game logic
                 if (onPlayerInput) {
-                    onPlayerInput(id, *input);
+                    onPlayerInput(id, input);
                 }
             }
             break;
@@ -1181,9 +1189,11 @@ void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_
                 players[id].inLobby = false;
                 players[id].lobbyReady = false;
 
-                // Update player's map
+                // Update player's map. A new map is a new spawn: one second of
+                // protection so nobody is shot while the map is still coming up.
                 strncpy(players[id].mapName, newMap.c_str(), sizeof(players[id].mapName) - 1);
                 players[id].mapName[sizeof(players[id].mapName) - 1] = '\0';
+                players[id].spawnProtection = 1.0f;
 
                 std::cout << "Player " << id << " changed map from " << oldMap << " to " << newMap << std::endl;
 
@@ -1245,6 +1255,7 @@ void NetworkServer::broadcastPlayerState(uint32_t playerId, const glm::vec3& pos
     auto stateIt = players.find(playerId);
     packet.team = (stateIt != players.end()) ? stateIt->second.team : 0;
     packet.stance = (stateIt != players.end()) ? stateIt->second.stance : 0;
+    packet.weaponId = (stateIt != players.end()) ? (stateIt->second.weaponId % 5) : 0;
     if (stateIt != players.end()) {
         packet.header.sequence = ++stateIt->second.stateSequence;
     }
@@ -1392,6 +1403,7 @@ void NetworkServer::broadcastPlayerStateToMap(uint32_t playerId, const std::stri
     auto stateIt = players.find(playerId);
     packet.team = (stateIt != players.end()) ? stateIt->second.team : 0;
     packet.stance = (stateIt != players.end()) ? stateIt->second.stance : 0;
+    packet.weaponId = (stateIt != players.end()) ? (stateIt->second.weaponId % 5) : 0;
     if (stateIt != players.end()) {
         packet.header.sequence = ++stateIt->second.stateSequence;
     }

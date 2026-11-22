@@ -177,10 +177,7 @@ void Game::openMainMenu() {
     // resume) and from the game itself (the first row resumes it).
     const bool resumable = gameInProgress_;
     page.add(menu::action(resumable ? "RESUME GAME" : "PLAY GAME", [this]() {
-        inp.resetNavKeys();
-        menuJustEntered = true;
-        gameState = PLAYING;
-        capturePlayCursor(true);
+        resumeGameFromMenu();
     }, resumable ? "Back to the match" : "Start a match on the selected map"));
 
     page.add(menu::action("MAP SELECTION", [this]() {
@@ -525,6 +522,7 @@ void Game::resetBindingsToDefaults() {
     gameSettings_.bindProne    = defaults.bindProne;
     gameSettings_.bindShoot    = defaults.bindShoot;
     gameSettings_.bindScope    = defaults.bindScope;
+    gameSettings_.bindInspect  = defaults.bindInspect;
     gameSettings_.bindWeapon1  = defaults.bindWeapon1;
     gameSettings_.bindWeapon2  = defaults.bindWeapon2;
     gameSettings_.bindWeapon3  = defaults.bindWeapon3;
@@ -1072,6 +1070,7 @@ void Game::applySettings() {
     keyBindings.weaponSlot[3] = gameSettings_.bindWeapon4;
     keyBindings.weaponSlot[4] = gameSettings_.bindWeapon5;
     keyBindings.grenade  = gameSettings_.bindGrenade;
+    keyBindings.inspect  = gameSettings_.bindInspect;
     keyBindings.use      = gameSettings_.bindUse;
     keyBindings.unstuck  = gameSettings_.bindUnstuck;
     keyBindings.menu     = gameSettings_.bindMenu;

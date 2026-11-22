@@ -222,6 +222,21 @@ int main(int argc, char* argv[]) {
     ServerBombManager bombManager;   // authoritative bomb state (per map)
     ServerBotManager botManager;     // server-controlled players (pool)
     g_server = &server;
+
+    // A new bomb round revives every human on that map. Their clients learn
+    // the new round from the BombState broadcast and reset locally; keeping
+    // this state-only avoids a second "alive" packet racing that reset (which
+    // looked like being respawned twice).
+    auto reviveHumansOnMap = [&server](const std::string& mapName) {
+        for (ServerPlayer* player : server.getPlayers()) {
+            if (!player->active || player->isBot) continue;
+            if (mapName != std::string(player->mapName)) continue;
+            player->isDead = false;
+            player->health = 100.0f;
+            player->velocity = glm::vec3(0.0f);
+            player->spawnProtection = 1.0f;
+        }
+    };
     server.setServerName(serverName);
     server.setMaxPlayers(maxPlayers);
     server.setMaxPlayersPerMachine(maxPlayersPerMachine);
@@ -368,6 +383,7 @@ int main(int argc, char* argv[]) {
     // server where that is.
     server.onPlayerConnect = [&server, &broadcastLobbyStates](uint32_t id) {
         if (ServerPlayer* player = server.getPlayer(id)) {
+            player->spawnProtection = 1.0f;
             for (ServerPlayer* other : server.getPlayers()) {
                 if (other->id != id) {
                     player->position = other->position;
@@ -390,7 +406,7 @@ int main(int argc, char* argv[]) {
                   << server.getMaxPlayers() << ")" << std::endl;
     };
     
-    server.onPlayerInput = [&server](uint32_t id, const PlayerInputPacket& input) {
+    server.onPlayerInput = [&server, &bombManager](uint32_t id, const PlayerInputPacket& input) {
         // Process player input on server (authoritative)
         ServerPlayer* player = server.getPlayer(id);
         if (!player) return;
@@ -400,6 +416,21 @@ int main(int argc, char* argv[]) {
         player->gameMode = input.gameMode;
         player->matchFormat = input.matchFormat;
         player->stance = input.stance <= 2 ? input.stance : 0;
+        player->weaponId = input.weaponId % 5;
+
+        // The client is on a menu page over a running match. Keep its player
+        // record (and its body on the map) exactly as it is: no movement, no
+        // death adoption, and the respawn loop below holds any respawn until
+        // the client is back in the round.
+        const bool returnedFromMenu = player->inMenu && input.inMenu == 0;
+        player->inMenu = input.inMenu != 0;
+        if (player->inMenu) return;
+        // The client may have died while browsing (and respawned locally just
+        // now, possibly after the server already brought it back). A short
+        // protection on the way out prevents an instant death on return.
+        if (returnedFromMenu) {
+            player->spawnProtection = std::max(player->spawnProtection, 1.0f);
+        }
 
         // A client that reports itself dead/spectating does not move its body.
         // If the server did not know yet (a lost damage packet, a fall, a
@@ -408,6 +439,22 @@ int main(int argc, char* argv[]) {
         // back through the normal path.
         if (!input.alive) {
             if (!player->isDead) {
+                // Right after a respawn the client may still be sending the
+                // death from its previous life (the respawn state is on its
+                // way). Adopting that made the player die again in a loop.
+                // Keep it alive and resend the respawned state so the client
+                // can catch up.
+                if (player->spawnProtection > 0.0f) {
+                    // Bomb clients reset from the new-round BombState, so
+                    // they must not also receive an alive state (that raced
+                    // the reset and respawned them twice).
+                    if (player->gameMode != 2) {
+                        server.broadcastPlayerStateToMap(
+                            player->id, player->mapName, player->position, player->velocity,
+                            player->yaw, player->pitch, player->health, player->isDead, true);
+                    }
+                    return;
+                }
                 player->isDead = true;
                 player->health = 0.0f;
                 player->velocity = glm::vec3(0.0f);
@@ -418,13 +465,32 @@ int main(int argc, char* argv[]) {
             return;
         }
 
-        // The client came back to life: either the server respawned it, or a
-        // bomb defusal client started a new round locally. Make the server
-        // match, then let it move again from the next input.
+        // The client came back to life. In a round-based mode a dead player
+        // only comes back when the next round starts: a stale alive input in
+        // the middle of a round (or after its result) must not respawn them.
+        // The server revives the players itself when it starts the next round,
+        // and the repeated BombState broadcast carries that reset to clients.
+        if (player->isDead && player->gameMode == 2) {
+            const ServerBombManager::Snapshot bomb = bombManager.snapshot(player->mapName);
+            if (bomb.valid && (bomb.roundEnded || bomb.roundActive)) {
+                player->velocity = glm::vec3(0.0f);
+                // Self-heal a client that still thinks it is alive: send the
+                // authoritative death so it enters spectator instead of
+                // walking around with a body everyone else sees frozen.
+                server.broadcastPlayerStateToMap(
+                    player->id, player->mapName, player->position, player->velocity,
+                    player->yaw, player->pitch, 0.0f, true, true);
+                return;
+            }
+        }
+
+        // Make the server match, then let it move again from the next input.
+        // A fresh respawn grants one second of spawn protection.
         if (player->isDead) {
             player->isDead = false;
             player->health = 100.0f;
             player->velocity = glm::vec3(0.0f);
+            player->spawnProtection = 1.0f;
             server.broadcastPlayerStateToMap(
                 player->id, player->mapName, player->position, player->velocity,
                 player->yaw, player->pitch, player->health, player->isDead, true);
@@ -523,6 +589,8 @@ int main(int argc, char* argv[]) {
                                  float damage, uint8_t weaponId) {
         ServerPlayer* victim = server.getPlayer(victimId);
         if (!victim || victim->isDead) return;
+        // Spawn protection: ignore every hit during the first second of a life.
+        if (victim->spawnProtection > 0.0f) return;
 
         // A sniper body shot (100) is lethal; its headshot (200) is capped at
         // 160. Grenade blasts stay lethal but are not stacked.
@@ -615,12 +683,14 @@ int main(int argc, char* argv[]) {
                                                const ProjectileSpawnPacket& packet) {
         botManager.onProjectileSpawned(ownerId, packet);
     };
-    server.onRoundStarted = [&botManager, &bombManager](const std::string& mapName,
-                                                        int gameMode, int attackingTeam,
-                                                        int matchFormat,
-                                                        bool freshMatch) {
+    server.onRoundStarted = [&botManager, &bombManager,
+                             &reviveHumansOnMap](const std::string& mapName,
+                                                 int gameMode, int attackingTeam,
+                                                 int matchFormat,
+                                                 bool freshMatch) {
         bombManager.onRoundStart(mapName, gameMode, attackingTeam, matchFormat,
                                  freshMatch);
+        reviveHumansOnMap(mapName);
         botManager.startRound(mapName, gameMode);
     };
 
@@ -632,6 +702,14 @@ int main(int argc, char* argv[]) {
         botConfig.friendlyFire = friendlyFire;
         botManager.init(server, botConfig);
     }
+
+    // Server-owned round transitions: revive the humans on that map and let
+    // the bots start the new round too. Clients follow the BombState packet.
+    bombManager.onRoundRestart = [&botManager, &reviveHumansOnMap](
+                                     const std::string& mapName, int gameMode) {
+        reviveHumansOnMap(mapName);
+        botManager.startRound(mapName, gameMode);
+    };
 
     // Pre-match setup: apply team / bot allocation and tell everyone the new
     // limits. Accuracy is clamped to the server's configured maximum.
@@ -671,10 +749,14 @@ int main(int argc, char* argv[]) {
         float deltaTime = std::chrono::duration<float>(now - lastTime).count();
         lastTime = now;
         
-        // Update all player cooldowns
+        // Update all player cooldowns and spawn protection
         for (auto* player : server.getPlayers()) {
             if (player->shootCooldown > 0.0f) {
                 player->shootCooldown -= deltaTime;
+            }
+            if (player->spawnProtection > 0.0f) {
+                player->spawnProtection -= deltaTime;
+                if (player->spawnProtection < 0.0f) player->spawnProtection = 0.0f;
             }
         }
         
@@ -709,6 +791,11 @@ int main(int argc, char* argv[]) {
                 continue;
             }
 
+            // The player is browsing a menu over the match: keep the body in
+            // the game but do not respawn until the client is back in the
+            // round (it reports inMenu=0 again).
+            if (player->inMenu) continue;
+
             const bool roundBased = player->gameMode == 2;
             if (roundBased) continue;
 
@@ -725,6 +812,7 @@ int main(int argc, char* argv[]) {
             player->velocity = glm::vec3(0.0f);
             player->health = 100.0f;
             player->isDead = false;
+            player->spawnProtection = 1.0f;
             deadSince.erase(player->id);
 
             std::cout << "[Server] Player " << player->id << " respawned" << std::endl;

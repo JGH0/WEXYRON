@@ -679,6 +679,7 @@ private:
         // Gameplay specific
         bool gameplayGPressed  = false;
         bool gameplayPronePressed = false;
+        bool gameplayInspectPressed = false;
         bool gameplayWeaponPressed[5] = {false, false, false, false, false}; // indices 0-4
 
         InputState() {
@@ -713,6 +714,7 @@ private:
             shapeResetPressed = false;
             gameplayGPressed = false;
             gameplayPronePressed = false;
+            gameplayInspectPressed = false;
             for (int i = 0; i < 5; i++) gameplayWeaponPressed[i] = false;
         }
     } inp;
@@ -743,6 +745,7 @@ private:
         int scopeButton;  ///< mouse button for scoping (-1 when bound to a key)
         int weaponSlot[5];///< select pistol/shotgun/sniper/grenade/flashbang
         int grenade;
+        int inspect;      ///< play the weapon inspect animation
         int use;          ///< plant / defuse
         int unstuck;
     } keyBindings;
@@ -881,6 +884,8 @@ private:
         bool active;
         bool alive;
         float yaw = 0.0f;               ///< facing direction (camera convention)
+        float pitch = 0.0f;             ///< aim pitch (weapon points at the player)
+        uint8_t weaponId = 0;           ///< held weapon (WeaponType index)
         float deathTimer = 0.0f;        ///< > 0: dead but still collapsing on screen
         humanoid::Anim anim;            ///< walk / flinch / attack animation
     };
@@ -998,6 +1003,11 @@ private:
     float weaponSwitch_ = 0.0f;      ///< 0..1 lower-the-gun switch animation
     float weaponSwayX_ = 0.0f;       ///< smoothed mouse-look sway
     float weaponSwayY_ = 0.0f;
+    /// Seconds left in the "inspect weapon" viewmodel animation (0 = idle).
+    /// Pressing the inspect binding starts it; shooting or switching weapons
+    /// cancels it so it never delays gameplay.
+    float weaponInspect_ = 0.0f;
+    static constexpr float kWeaponInspectDuration = 2.4f;
     float lastViewYaw_ = 0.0f;       ///< previous frame's look direction
     float lastViewPitch_ = 0.0f;
 
@@ -1111,6 +1121,7 @@ private:
         bool active;
         uint8_t team = 0; ///< server-assigned team (0 = Team A, 1 = Team B)
         uint8_t stance = 0; ///< 0 standing, 1 crouching, 2 prone
+        uint8_t weaponId = 0; ///< held weapon (WeaponType index), from the server
         uint32_t stateSequence = 0; ///< newest applied PlayerState sequence
         humanoid::Anim anim; ///< walk / air / flinch / shooting animation
     };
@@ -1151,6 +1162,7 @@ private:
     int playerLowerLegRNode_ = -1;
     int playerFootLNode_ = -1;
     int playerFootRNode_ = -1;
+    int playerHandRNode_ = -1;  ///< right hand (the held weapon is anchored here)
 
     /// Upright body box of a player at `feet` (feet = bottom centre).
     /// `height` defaults to the standing body; pass currentBodyHeight() for
@@ -1451,6 +1463,20 @@ private:
     bool serverRoundEnded;
     uint32_t serverBombRoundId_ = 0; ///< last server round id applied
     uint32_t lastLocalStateSequence_ = 0; ///< ignore stale own death/respawn
+    /// Seconds of invulnerability left after spawning. PvP damage is blocked
+    /// by the server's own copy; this covers local damage sources (bots,
+    /// blasts, falls) and the client-side death handling.
+    float spawnProtectionTimer_ = 0.0f;
+    static constexpr float kSpawnProtectionSeconds = 1.0f;
+    /// The server already put us back on our feet while a menu was open. The
+    /// local respawn waits until the player returns to the round.
+    bool respawnPending_ = false;
+    /// A round finished while a menu was open: its next round (which respawns
+    /// everyone) starts as soon as the player is back in the match.
+    bool pendingRoundStart_ = false;
+    /// The pending round was already started by the server; on return only
+    /// the local reset is missing (no round-start packet may be sent again).
+    bool pendingRoundStartFromServer_ = false;
     int roundWinner;
     RoundEndReason roundEndReason;
     /// Authoritative seconds left to plant (from BombStatePacket).
@@ -1709,6 +1735,16 @@ private:
      */
     void renderWeaponViewmodel();
 
+    /**
+     * @brief Draw the weapon held by another actor (remote player / bot /
+     *        practice enemy) at its right-hand bone.
+     *
+     * The weapon is oriented along the actor's yaw + pitch, so you can read
+     * where they are aiming from the barrel direction.
+     */
+    void renderActorWeapon(const glm::mat4& actorRoot, GltfInstance& actorPose,
+                           uint8_t weaponId, float yaw, float pitch);
+
     /// Advance weapon bob/sway/recoil and the weapon-switch animation.
     void updateWeaponViewmodel(float deltaTime);
 
@@ -1757,6 +1793,9 @@ private:
      * @brief Start a new round
      */
     void startRound();
+    /// Apply a round the server already started (BombState): respawn locally
+    /// without asking the server to start it again.
+    void beginServerRound();
     
     /**
      * @brief Update spectator camera (free-flying, like the map editor)
@@ -1857,6 +1896,21 @@ private:
      *        that was opened from the game).
      */
     void closeMenuToGame();
+
+    /**
+     * @brief True while a menu page is open over a running match.
+     *
+     * The match keeps running on the server. A death that happens here must
+     * not replace the menu with the death screen, and the pending respawn is
+     * only performed when the player returns to the round.
+     */
+    bool isInMatchMenu() const;
+
+    /**
+     * @brief Return from a menu to the match, respawning first when the player
+     *        died while the menu was open.
+     */
+    void resumeGameFromMenu();
     
     /**
      * @brief Render map editor

@@ -176,19 +176,68 @@ void Game::processInput(float deltaTime) {
     }
 }
 
+bool Game::isInMatchMenu() const {
+    if (!gameInProgress_) return false;
+    switch (gameState) {
+        case MENU:
+        case SETTINGS:
+        case MAP_SELECTION:
+        case SERVER_CONNECT:
+        case TEAM_SETUP:
+            return true;
+        default:
+            return false;
+    }
+}
+
+void Game::resumeGameFromMenu() {
+    // Returning to the game re-grabs + forgets the menu cursor position so the
+    // first move does not spin.
+    inp.resetNavKeys();
+    menuJustEntered = true;
+
+    if (pendingRoundStart_) {
+        // A round ended while the menu was open. Starting it respawns
+        // everyone, so this is exactly the "respawn on return" the player
+        // expects (and it keeps round-based modes on their normal cycle).
+        const bool serverStarted = pendingRoundStartFromServer_;
+        pendingRoundStart_ = false;
+        pendingRoundStartFromServer_ = false;
+        if (!matchOver_) {
+            if (serverStarted) beginServerRound();
+            else               startRound();
+            return;
+        }
+    }
+
+    if (isDead || respawnPending_) {
+        // Died while browsing the menu: the server held the respawn (or it
+        // arrived before we left the menu), so rejoin from a fresh spawn.
+        if (bombDefusalMode) {
+            // Round-based mode: a dead player spectates until the next round,
+            // exactly like a normal death. Do not sneak back into the round.
+            respawnPending_ = false;
+            gameState = PLAYING;
+            capturePlayCursor(true);
+            return;
+        }
+        respawnLocally();
+        return;
+    }
+
+    gameState = PLAYING;
+    capturePlayCursor(true);
+}
+
 void Game::closeMenuToGame() {
     // ESC on the bottom page of a menu that was opened from the game returns
     // to it; from the main menu (no game in progress) it just re-opens the
-    // main menu itself. Returning to the game re-grabs + forgets the menu
-    // cursor position so the first move does not spin.
-    inp.resetNavKeys();
-    menuJustEntered = true;
+    // main menu itself.
     if (gameState == MENU) {
         openMainMenu();
         return;
     }
-    gameState = PLAYING;
-    capturePlayCursor(true);
+    resumeGameFromMenu();
 }
 
 // ---------------------------------------------------------------------------
@@ -550,5 +599,16 @@ void Game::processGameInput(float deltaTime) {
         }
     } else {
         inp.gameplayGPressed = false;
+    }
+
+    // Inspect: play the weapon's inspection animation. Only the press edge
+    // starts it, and it is allowed to finish even while other keys are held.
+    if (bindingDown(keyBindings.inspect)) {
+        if (!inp.gameplayInspectPressed) {
+            inp.gameplayInspectPressed = true;
+            weaponInspect_ = kWeaponInspectDuration;
+        }
+    } else {
+        inp.gameplayInspectPressed = false;
     }
 }

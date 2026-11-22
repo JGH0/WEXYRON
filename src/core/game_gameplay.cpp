@@ -495,7 +495,7 @@ bool Game::getRemotePlayerFeet(uint32_t id, glm::vec3& feet) const {
 // ---------------------------------------------------------------------------
 
 void Game::applyPlayerDamage(float damage) {
-    if (isDead || damage <= 0.0f) return;
+    if (isDead || damage <= 0.0f || spawnProtectionTimer_ > 0.0f) return;
 
     playerHealth -= damage;
     damageEffectTime = std::max(damageEffectTime, 1.0f);
@@ -526,6 +526,10 @@ void Game::reportLocalDamage(float damage, uint8_t weaponId) {
 void Game::dieLocally() {
     if (isDead) return;
     isDead = true;
+    // A death that happens while a menu page is open (the match keeps running
+    // on the server) must not close that menu or show the death screen. Keep
+    // the player in the match; the respawn happens on return to the round.
+    const bool inMenu = isInMatchMenu();
     deaths_++;
     // Team kill counters only exist in Team Deathmatch. Bomb Defusal's team
     // scores are ROUND wins and must never be overwritten with kill counts.
@@ -552,9 +556,11 @@ void Game::dieLocally() {
     playSoundEffect("player_death", playerPos + glm::vec3(0.0f, currentEyeHeight(), 0.0f));
 
     if (bombDefusalMode) {
+        // Dead in a round-based mode: spectate until the next round. In a menu
+        // this stays hidden behind the menu and is picked up on return.
         spectatorMode = true;
         std::cout << "Player died! Entering spectator mode." << std::endl;
-    } else {
+    } else if (!inMenu) {
         gameState = DEAD;
     }
 
@@ -567,13 +573,18 @@ void Game::dieLocally() {
                                        eye.x, eye.y, eye.z, false,
                                        static_cast<uint8_t>(currentGameMode),
                                        static_cast<uint8_t>(matchFormat_),
-                                       static_cast<uint8_t>(stance_));
+                                       static_cast<uint8_t>(stance_),
+                                       inMenu);
     }
     std::cout << "Player defeated!" << std::endl;
 }
 
 void Game::respawnLocally() {
+    respawnPending_ = false;
     resetGame();
+    // A fresh respawn cannot be hit for one second (the server enforces the
+    // same window for PvP; this also covers local damage sources).
+    spawnProtectionTimer_ = kSpawnProtectionSeconds;
     // resetGame() also rebuilds the practice bots; they have no place in a
     // networked match (other players are the opponents there).
     if (networkClient && networkClient->isConnected()) {
@@ -812,6 +823,8 @@ bool Game::createProjectile(const glm::vec3& position, const glm::vec3& velocity
 
 void Game::shoot() {
     if (currentWeaponInstance && currentWeaponInstance->canShoot()) {
+        // Firing cancels an inspect so the action never gets in the way.
+        weaponInspect_ = 0.0f;
         currentWeaponInstance->shoot(this);
         // Weapon viewmodel kick: pistols snap a little, the pump shotgun kicks
         // hard, throwables barely move the hand.
@@ -834,6 +847,7 @@ void Game::switchWeapon(WeaponType weapon) {
 
     currentWeapon = weapon;
     weaponSwitch_ = 1.0f;   // lower the old gun / raise the new one
+    weaponInspect_ = 0.0f;  // a switch always returns to the normal pose
 
     // Leaving the sniper cancels a queued bolt rattle from a shot.
     if (weapon != SNIPER) sniperBoltSoundPending_ = false;
@@ -1052,7 +1066,8 @@ void Game::updateProjectiles(float deltaTime) {
             // Store position before update
             glm::vec3 prevPos = projectiles[i].position;
             
-            // Apply gravity to all projectiles so they always fall
+            // Every projectile is ballistic: bullets drop over distance just
+            // like grenades and flashbangs.
             projectiles[i].velocity.y -= 15.0f * deltaTime;
             
             // Simple position update
@@ -1505,9 +1520,14 @@ bool Game::checkProjectileCollision(Projectile& projectile) {
     const float boundZ = mapHalf.z + 2.0f;
     const float maxY = std::max(20.0f, mapHalf.y * 2.0f + 5.0f);
 
-    // Only check boundaries if projectile has moved significantly from spawn
-    float distanceFromPlayer = glm::length(projectile.position - camera.Position);
-    if (distanceFromPlayer > 1.0f) { // Only check boundaries after moving 1 unit
+    // A locally-fired projectile starts at the camera. Ignore geometry only
+    // for that first step, so the gun cannot hit the wall the player is
+    // standing next to. Bullets from other actors must always collide: using
+    // the local camera distance for them let bot/remote rounds tunnel through
+    // floors and the player and trail away into the air.
+    const bool localShot = projectile.owner == 0;
+    const float distanceFromPlayer = glm::length(projectile.position - camera.Position);
+    if (!localShot || distanceFromPlayer > 1.0f) {
         if (std::abs(projectile.position.x) >= boundX ||
             std::abs(projectile.position.z) >= boundZ ||
             projectile.position.y <= -10.0f ||
@@ -1517,7 +1537,7 @@ bool Game::checkProjectileCollision(Projectile& projectile) {
     }
 
     // Check collision with map blocks if map is loaded
-    if (currentMap && distanceFromPlayer > 0.5f) {
+    if (currentMap && (!localShot || distanceFromPlayer > 0.5f)) {
         const std::vector<MapBlock>& blocks = currentMap->getBlocks();
 
         // Use class-member tracking instead of statics so slot-reuse doesn't
@@ -1660,6 +1680,8 @@ void Game::spawnEnemy(const glm::vec3& position) {
             enemies[i].active = true;
             enemies[i].alive = true;
             enemies[i].yaw = 0.0f;
+            enemies[i].pitch = 0.0f;
+            enemies[i].weaponId = static_cast<uint8_t>(PISTOL);
             enemies[i].deathTimer = 0.0f;
             enemies[i].anim = humanoid::Anim{};
             activeEnemies++;
@@ -1736,6 +1758,7 @@ bool Game::checkProjectileEnemyCollision(Projectile& projectile) {
 }
 
 void Game::checkEnemyPlayerCollision(float deltaTime) {
+    if (spawnProtectionTimer_ > 0.0f) return;
     if (playerDamageCooldown > 0.0f) {
         playerDamageCooldown -= deltaTime;
         return;
@@ -1793,6 +1816,16 @@ void Game::updateEnemies(float deltaTime) {
                 if (std::abs(vx) + std::abs(vz) > 0.01f) {
                     enemies[i].yaw = glm::degrees(std::atan2(vz, vx));
                 }
+                // Aim the held weapon at the player's chest so its barrel
+                // visibly points where the target is attacking.
+                const glm::vec3 eye = enemyPos + glm::vec3(0.0f, 1.4f, 0.0f);
+                const glm::vec3 target = playerPos + glm::vec3(0.0f, 1.1f, 0.0f);
+                const glm::vec3 look = target - eye;
+                const float lookLength = glm::length(look);
+                if (lookLength > 0.001f) {
+                    enemies[i].pitch = glm::degrees(
+                        std::asin(glm::clamp(look.y / lookLength, -1.0f, 1.0f)));
+                }
             }
             // Practice targets walk on the floor; the animation still reacts to
             // their own movement speed and direction.
@@ -1812,13 +1845,10 @@ void Game::updateEnemies(float deltaTime) {
 }
 
 bool Game::checkProjectilePlayerBody(Projectile& projectile) {
-    // Hits are resolved once, by the shooter's client, against the same body
-    // box and reported to the server. The victim must not apply a second copy
-    // locally: that made the victim die on its own while the server (and the
-    // other players) still saw a living player.
-    if (!networkClient || !networkClient->isConnected()) return false;
-
-    // Only check projectiles from other players (owner != 0 means remote player)
+    // Hits are resolved once, by the shooter's client (or the bot AI), and
+    // must not apply a second copy of the damage here. In singleplayer there
+    // is no network client, but bot rounds still need to visibly stop on the
+    // player's body instead of flying through and leaving a trail in the air.
     if (projectile.owner == 0) return false; // Skip own projectiles
 
     if (projectile.type == 1 || projectile.type == 2) {
@@ -1843,7 +1873,7 @@ bool Game::checkProjectilePlayerBody(Projectile& projectile) {
 }
 
 void Game::damagePlayer(float damage) {
-    if (isDead) return; // Already dead
+    if (isDead || spawnProtectionTimer_ > 0.0f) return; // Dead or spawn-protected
     
     playerHealth -= damage;
     if (playerHealth < 0.0f) playerHealth = 0.0f;
@@ -2143,11 +2173,17 @@ void Game::renderRemotePlayers() {
                                     ? 0.0f
                                     : glm::clamp(remote.health / 100.0f, 0.0f, 1.0f);
         const uint8_t renderStance = remote.isDead ? 0 : remote.stance;
+        const glm::mat4 actorRoot =
+            humanoid::rootTransform(remote.renderPosition, remote.yaw);
         if (playerModel_ && remoteModelAnims[i].valid()) {
             posePlayerInstance(remoteModelAnims[i], remote.anim, renderStance);
             renderer.submitModel(playerModel_.get(), &remoteModelAnims[i],
-                                 humanoid::rootTransform(remote.renderPosition, remote.yaw),
-                                 color);
+                                 actorRoot, color);
+            // Show the weapon they actually carry, aimed along their view.
+            if (!remote.isDead) {
+                renderActorWeapon(actorRoot, remoteModelAnims[i], remote.weaponId,
+                                  remote.yaw, remote.pitch);
+            }
         } else {
             humanoid::render(renderer, remote.renderPosition, remote.yaw, color,
                              healthPct, remote.anim, remote.pitch, !remote.isDead,
@@ -2489,7 +2525,20 @@ void Game::updateRoundEndTimer(float deltaTime) {
     if (roundEndTimer > 0.0f) {
         roundEndTimer -= deltaTime;
         if (roundEndTimer <= 0.0f) {
-            if (!matchOver_) startRound();
+            roundEndTimer = 0.0f;
+            if (bombDefusalMode && networkClient && networkClient->isConnected()) {
+                // The server owns the bomb-round intermission and starts the
+                // next round itself. In a menu the new BombState parks the
+                // local reset until the return; outside a menu it resets at
+                // once. Never start the round from here (that raced the
+                // server and respawned the player twice).
+            } else if (isInMatchMenu()) {
+                // Do not start the next round (and respawn everyone) while
+                // the player is browsing a menu: hold it until the return.
+                pendingRoundStart_ = true;
+            } else if (!matchOver_) {
+                startRound();
+            }
         }
     }
 }
@@ -2510,8 +2559,9 @@ void Game::startRound() {
     serverPlantActor_ = 0;
     serverDefuseActor_ = 0;
     
-    // Reset players
+    // Reset players (a new round is also a respawn: one second of protection)
     resetGame();
+    spawnProtectionTimer_ = kSpawnProtectionSeconds;
 
     // Single-player bomb defusal: bots that died in the previous round come
     // back at the same time as the player.
@@ -2527,6 +2577,29 @@ void Game::startRound() {
 
     playUiSound("round_start");
     std::cout << "NEW ROUND STARTED! Attacking Team: " << (attackingTeam == 0 ? "Team A (Red)" : "Team B (Blue)") << std::endl;
+}
+
+void Game::beginServerRound() {
+    // The server already reset the round/bomb and revived everyone; this is
+    // only the local side: take a fresh life at a spawn point. Never send a
+    // round-start packet from here, or the server would restart the round.
+    pendingRoundStart_ = false;
+    pendingRoundStartFromServer_ = false;
+    roundNumber_++;
+    roundTime = 0.0f;
+    roundActive = true;
+    roundEndTimer = 0.0f;
+    roundWinner = -1;
+    roundEndReason = ROUND_END_NONE;
+    serverRoundEnded = false;
+    teamADeaths = 0;
+    teamBDeaths = 0;
+
+    resetGame();
+    spawnProtectionTimer_ = kSpawnProtectionSeconds;
+    playUiSound("round_start");
+    std::cout << "NEW ROUND STARTED! Attacking Team: "
+              << (attackingTeam == 0 ? "Team A (Red)" : "Team B (Blue)") << std::endl;
 }
 
 void Game::updateSpectator(float deltaTime) {
@@ -2623,8 +2696,9 @@ void Game::updateLocalBots(float deltaTime) {
         deltaTime, playerPos, playerTeam & 1, playerAlive,
         [this](float damage) { damagePlayer(damage); },
         [this](const glm::vec3& origin, const glm::vec3& velocity, uint8_t type) {
-            // Visual only: the host already applied the hit. A non-zero owner
-            // makes the normal player-shot collision path ignore it.
+            // Visible tracer round. Damage is already applied by the bot AI,
+            // but the round still travels from the muzzle, collides with the
+            // player/map and stops there (see updateProjectiles).
             createProjectile(origin, velocity, 1.2f, 1u, static_cast<int>(type));
         });
 
@@ -2659,7 +2733,18 @@ void Game::updateLocalBots(float deltaTime) {
         remotePlayers[i].active   = true;
         remotePlayers[i].team     = view.team;
         remotePlayers[i].stance   = 0;   // bot AI never crouches or goes prone
+        remotePlayers[i].weaponId = view.weaponId;
+        // A fresh shot starts the firing pose/flash and plays the gunshot
+        // once per trigger (the AI reports every pellet, but the pose timer
+        // only resets once between bursts).
+        const bool newBotShot = view.shooting && remotePlayers[i].anim.shoot < 0.5f;
         if (view.shooting) remotePlayers[i].anim.shoot = 1.0f;
+        if (newBotShot) {
+            const char* sound = view.weaponId == 1 ? "shotgun_fire"
+                              : view.weaponId == 2 ? "sniper_fire"
+                                                   : "pistol_fire";
+            playSoundEffect(sound, view.position + glm::vec3(0.0f, 1.3f, 0.0f), 0.8f);
+        }
     }
 
     // The host is the scoreboard in single player.

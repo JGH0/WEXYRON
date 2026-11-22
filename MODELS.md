@@ -38,9 +38,11 @@ legs) and tinted per team at runtime.
    scale that keeps the player at 1.8 units tall.
 5. Save under `assets/models/`.
 
-For first-person weapons, author them in the same local space the viewmodel
-used before (barrel towards `-Z`, grip near the origin). The game applies the
-bob/sway/recoil transform, so the file itself can stay static.
+For weapons, author them in the same local space the viewmodel used before
+(barrel towards `-Z`, grip near the origin). Keep hands and arms out of the
+weapon file: first-person draws only the gun, and third-person attaches it to
+the character's hand bone. The game applies the bob/sway/recoil transform, so
+the file itself can stay static.
 
 ### Regenerating the built-in models
 

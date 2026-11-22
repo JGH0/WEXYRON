@@ -60,6 +60,8 @@ public:
         char siteLabel = 'A';
         float timeLeft = 0.0f;
         float roundTimeLeft = 0.0f;
+        float roundAge = 0.0f;          ///< seconds since the round started
+        bool matchOver = false;         ///< round target reached
         float plantProgress = 0.0f;
         float defuseProgress = 0.0f;
     };
@@ -93,6 +95,11 @@ public:
     std::function<void(uint32_t shooterId, uint32_t victimId,
                        uint16_t damage, uint8_t weaponId)> onDamage;
 
+    /// The server started the next round by itself after the intermission.
+    /// The server side uses this to revive the players and restart the bots
+    /// for that map (unlike onRoundStart, the round is already reset here).
+    std::function<void(const std::string& mapName, int gameMode)> onRoundRestart;
+
 private:
     struct MapState {
         int gameMode = 0;
@@ -103,6 +110,10 @@ private:
         bool hasHumans = false;        ///< a human is currently on this map
         uint8_t attackingTeam = 0;
         float roundTimeLeft = 0.0f;
+        float roundAge = 0.0f;         ///< seconds since this round started
+        float intermission = 0.0f;     ///< seconds until the next round starts
+        int teamWins[2] = {0, 0};      ///< completed round wins per team
+        bool matchOver = false;        ///< round target reached
         bool roundEnded = false;
         uint8_t roundWinner = 255;     ///< 255 = draw
         uint8_t roundEndReason = ROUND_END_NONE;

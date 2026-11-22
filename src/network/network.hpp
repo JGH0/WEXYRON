@@ -161,6 +161,10 @@ struct PlayerInputPacket {
     /// Stance (0 = standing, 1 = crouching, 2 = prone) for the remote model
     /// and the remote hit box.
     uint8_t stance;
+    /// The client is on a menu page over a running match. The server keeps the
+    /// player in the match (and its body on the map) but must not auto-respawn
+    /// it until the client returns to the round.
+    uint8_t inMenu;
 };
 
 // Player state from server
@@ -174,6 +178,7 @@ struct PlayerStatePacket {
     bool isDead;
     uint8_t team;                  ///< 0 = Team A, 1 = Team B
     uint8_t stance;                ///< 0 standing, 1 crouching, 2 prone
+    uint8_t weaponId;              ///< held weapon (0 pistol ... 4 flashbang)
 };
 
 /// A hit one client scored on another player (client -> server -> victim and
@@ -395,7 +400,7 @@ public:
     double secondsSinceLastReceive() const;
     
     // Send player input to server
-    void sendPlayerInput(float moveX, float moveZ, float yaw, float pitch, bool jump, bool shoot, uint8_t weaponId, float posX, float posY, float posZ, bool alive = true, uint8_t gameMode = 0, uint8_t matchFormat = 0, uint8_t stance = 0);
+    void sendPlayerInput(float moveX, float moveZ, float yaw, float pitch, bool jump, bool shoot, uint8_t weaponId, float posX, float posY, float posZ, bool alive = true, uint8_t gameMode = 0, uint8_t matchFormat = 0, uint8_t stance = 0, bool inMenu = false);
     
     // Receive packets from server - call every frame
     void update();
@@ -519,8 +524,14 @@ struct ServerPlayer {
     uint8_t gameMode = 0; ///< last game mode the client reported
     uint8_t matchFormat = 0; ///< last match format the client reported
     uint8_t stance = 0;   ///< 0 standing, 1 crouching, 2 prone
+    uint8_t weaponId = 0; ///< held weapon reported by the client / bot
     uint32_t stateSequence = 0; ///< monotonic PlayerState sequence
     bool isBot = false;   ///< server-controlled player (no socket / timeout)
+    /// Seconds of invulnerability left after a spawn / respawn.
+    float spawnProtection = 0.0f;
+    /// The client is browsing a menu over a running match; keep it in the
+    /// match and hold a pending respawn until it comes back.
+    bool inMenu = false;
 
     // Pre-match lobby (separate from the map the player is currently in).
     char playerName[LOBBY_NAME_LENGTH] = {};

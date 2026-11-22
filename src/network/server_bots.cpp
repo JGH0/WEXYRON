@@ -28,6 +28,7 @@ struct ServerBotManager::Runtime {
     std::string mapName;
     int gameMode = 0;
     bool assigned = true;   ///< in the active roster (not parked)
+    uint8_t weaponId = 0;   ///< weapon the bot is currently firing/holding
     std::unique_ptr<bots::Bot> ai;
 };
 
@@ -223,6 +224,7 @@ void ServerBotManager::tick(float deltaTime, NetworkServer& server) {
             player->velocity = runtime.ai->velocity();
             player->yaw = runtime.ai->yaw();
             player->pitch = runtime.ai->pitch();
+            player->weaponId = runtime.weaponId;
         }
         return;
     }
@@ -330,6 +332,7 @@ void ServerBotManager::tick(float deltaTime, NetworkServer& server) {
             player->velocity = runtime.ai->velocity();
             player->yaw = runtime.ai->yaw();
             player->pitch = runtime.ai->pitch();
+            player->weaponId = runtime.weaponId;
             server.broadcastPlayerStateToMap(
                 runtime.id, runtime.mapName, player->position, player->velocity,
                 player->yaw, player->pitch, player->health, player->isDead, false);
@@ -374,6 +377,7 @@ void ServerBotManager::tick(float deltaTime, NetworkServer& server) {
         player->velocity = runtime.ai->velocity();
         player->yaw = runtime.ai->yaw();
         player->pitch = runtime.ai->pitch();
+        player->weaponId = runtime.weaponId;
 
         server.broadcastPlayerStateToMap(
             runtime.id, runtime.mapName, player->position, player->velocity,
@@ -494,6 +498,16 @@ void ServerBotManager::startRound(const std::string& mapName, int gameMode) {
 void ServerBotManager::applyActions(NetworkServer& server, Runtime& runtime,
                                     const std::vector<bots::Action>& actions) {
     for (const bots::Action& action : actions) {
+        // Remember which weapon produced this action so clients can render
+        // the correct gun in the bot's hands.
+        switch (action.projectileType) {
+            case 3:  runtime.weaponId = 1; break;   // shotgun
+            case 4:  runtime.weaponId = 2; break;   // sniper
+            case 1:  runtime.weaponId = 3; break;   // grenade
+            case 2:  runtime.weaponId = 4; break;   // flashbang
+            default: runtime.weaponId = 0; break;   // pistol
+        }
+
         switch (action.type) {
             case bots::Action::FireBullet:
                 server.broadcastProjectileSpawnToMap(

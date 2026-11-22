@@ -28,13 +28,17 @@ void Game::renderEnemies() {
         const float healthPct = enemies[i].alive
                                     ? glm::clamp(enemies[i].health / 50.0f, 0.0f, 1.0f)
                                     : 0.0f;
+        const glm::mat4 enemyRoot =
+            humanoid::rootTransform(glm::vec3(enemies[i].x, enemies[i].y, enemies[i].z),
+                                    enemies[i].yaw);
         if (playerModel_ && enemyModelAnims[i].valid()) {
             posePlayerInstance(enemyModelAnims[i], enemies[i].anim);
-            renderer.submitModel(
-                playerModel_.get(), &enemyModelAnims[i],
-                humanoid::rootTransform(glm::vec3(enemies[i].x, enemies[i].y, enemies[i].z),
-                                        enemies[i].yaw),
-                glm::vec3(0.95f, 0.18f, 0.15f));
+            renderer.submitModel(playerModel_.get(), &enemyModelAnims[i], enemyRoot,
+                                 glm::vec3(0.95f, 0.18f, 0.15f));
+            if (enemies[i].alive) {
+                renderActorWeapon(enemyRoot, enemyModelAnims[i], enemies[i].weaponId,
+                                  enemies[i].yaw, enemies[i].pitch);
+            }
         } else {
             humanoid::render(renderer,
                              glm::vec3(enemies[i].x, enemies[i].y, enemies[i].z),
@@ -524,6 +528,10 @@ void Game::updateWeaponViewmodel(float deltaTime) {
     if (weaponSwitch_ > 0.0f) {
         weaponSwitch_ = std::max(0.0f, weaponSwitch_ - deltaTime * 4.5f);
     }
+    // Inspect animation runs on its own clock and returns the gun to rest.
+    if (weaponInspect_ > 0.0f) {
+        weaponInspect_ = std::max(0.0f, weaponInspect_ - deltaTime);
+    }
 
     // Walk bob follows the actual horizontal speed, and only while grounded.
     const float speed = std::sqrt(playerVelocity.x * playerVelocity.x +
@@ -573,21 +581,36 @@ void Game::renderWeaponViewmodel() {
     // Animation: bob, look sway, recoil and weapon-switch drop.
     const float bobX = std::sin(weaponBobTime_) * 0.012f * weaponBobAmount_;
     const float bobY = -std::abs(std::cos(weaponBobTime_)) * 0.012f * weaponBobAmount_;
+
+    // Inspect: lift the gun towards the centre of the screen, turn it to show
+    // the side and tilt the muzzle up, then settle back to the rest pose.
+    // The envelope is zero at both ends, so the animation blends seamlessly
+    // with bob/sway/recoil and never leaves the weapon displaced.
+    const float inspectP = weaponInspect_ > 0.0f
+                               ? 1.0f - weaponInspect_ / kWeaponInspectDuration
+                               : 0.0f;
+    const float inspectEnv = std::sin(3.14159265358979f *
+                                      glm::clamp(inspectP, 0.0f, 1.0f));
+
     // The gun sits in the lower-right quadrant but above the weapon HUD panel,
     // so both stay readable. The slight inward yaw shows the side of the model
     // instead of looking straight down the barrel.
     const glm::vec3 base(
-        0.23f + bobX + weaponSwayX_,
-        -0.11f + bobY + weaponSwayY_ - weaponSwitch_ * 0.18f,
-        -0.64f + weaponRecoil_ * 0.07f);
+        0.23f + bobX + weaponSwayX_ - inspectEnv * 0.175f,
+        -0.11f + bobY + weaponSwayY_ - weaponSwitch_ * 0.18f + inspectEnv * 0.075f,
+        -0.64f + weaponRecoil_ * 0.07f + inspectEnv * 0.075f);
 
     glm::mat4 model = glm::translate(glm::mat4(1.0f), base);
-    model = glm::rotate(model, glm::radians(18.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-    model = glm::rotate(model, glm::radians(weaponRecoil_ * 8.0f), glm::vec3(1.0f, 0.0f, 0.0f));
-    model = glm::rotate(model, glm::radians(weaponRecoil_ * 2.5f), glm::vec3(0.0f, 0.0f, 1.0f));
+    model = glm::rotate(model, glm::radians(18.0f + inspectEnv * 105.0f),
+                        glm::vec3(0.0f, 1.0f, 0.0f));
+    model = glm::rotate(model, glm::radians(weaponRecoil_ * 8.0f - inspectEnv * 10.0f),
+                        glm::vec3(1.0f, 0.0f, 0.0f));
+    model = glm::rotate(model, glm::radians(weaponRecoil_ * 2.5f + inspectEnv * 20.0f),
+                        glm::vec3(0.0f, 0.0f, 1.0f));
     // The model is authored roughly at world scale; shrink it as a whole so it
-    // reads as a held first-person weapon instead of a wall-sized prop.
-    model = glm::scale(model, glm::vec3(0.55f));
+    // reads as a held first-person weapon instead of a wall-sized prop. It
+    // grows slightly while being inspected so the details are readable.
+    model = glm::scale(model, glm::vec3(0.55f + inspectEnv * 0.08f));
 
     // Add one box in weapon-local coordinates. `rotation` is applied around the
     // part's own centre (grips/stock angles).
@@ -629,7 +652,8 @@ void Game::renderWeaponViewmodel() {
         instance.update();
         renderer.submitViewModelModel(weaponModels_[weaponIndex].get(), &instance, model);
 
-        // The model owns the gun and hands; only the muzzle flash is dynamic.
+        // The weapon asset is the gun only (no hands/arms); only the muzzle
+        // flash is dynamic.
         switch (currentWeapon) {
             case PISTOL:
                 if (weaponRecoil_ > 0.40f) {
@@ -769,6 +793,47 @@ void Game::renderWeaponViewmodel() {
         }
     }
     }
+}
+
+void Game::renderActorWeapon(const glm::mat4& actorRoot, GltfInstance& actorPose,
+                             uint8_t weaponId, float yaw, float pitch) {
+    if (weaponId >= 5 || !weaponModels_[weaponId] ||
+        !weaponModels_[weaponId]->isLoaded()) {
+        return;
+    }
+    if (playerHandRNode_ < 0 || !actorPose.valid()) return;
+
+    // Anchor the grip at the right hand, then point the barrel (-Z in the
+    // weapon asset) along the actor's look direction. Using the aim angle
+    // rather than the hand bone's rotation keeps the gun honest: you can see
+    // the exact direction a remote player or bot is aiming, including pitch.
+    const glm::mat4 handLocal = actorPose.globalTransform(playerHandRNode_);
+    const glm::vec3 handWorld = glm::vec3(actorRoot * glm::vec4(glm::vec3(handLocal[3]), 1.0f));
+
+    const float yawRad = glm::radians(yaw);
+    const float pitchRad = glm::radians(pitch);
+    const glm::vec3 aim(std::cos(pitchRad) * std::cos(yawRad),
+                        std::sin(pitchRad),
+                        std::cos(pitchRad) * std::sin(yawRad));
+
+    glm::vec3 right = glm::cross(aim, glm::vec3(0.0f, 1.0f, 0.0f));
+    if (glm::length(right) < 0.0001f) right = glm::vec3(1.0f, 0.0f, 0.0f);
+    right = glm::normalize(right);
+    const glm::vec3 up = glm::normalize(glm::cross(right, aim));
+
+    // Small palm offset so the grip sits in the hand instead of at the wrist.
+    const glm::vec3 origin = handWorld + aim * 0.035f - up * 0.025f + right * 0.01f;
+
+    glm::mat4 weapon(1.0f);
+    weapon[0] = glm::vec4(right, 0.0f);
+    weapon[1] = glm::vec4(up, 0.0f);
+    weapon[2] = glm::vec4(-aim, 0.0f);   // weapon model points down local -Z
+    weapon[3] = glm::vec4(origin, 1.0f);
+    const float weaponScale = 0.85f;
+    weapon = glm::scale(weapon, glm::vec3(weaponScale));
+
+    renderer.submitModel(weaponModels_[weaponId].get(),
+                         &weaponModelAnims_[weaponId], weapon);
 }
 
 void Game::renderBombDefusalHUD() {
