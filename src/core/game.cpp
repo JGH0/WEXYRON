@@ -470,6 +470,7 @@ Game::Game(int width, int height)
     window = nullptr;
     bool wantVulkan = gameSettings_.renderApi == settings::RENDER_API_VULKAN;
     if (const char* forced = std::getenv("CUBE_RENDER_API")) {
+        renderApiForcedByEnv_ = true;
         const std::string api = forced;
         if (api == "vulkan" || api == "vk") wantVulkan = true;
         else if (api == "opengl" || api == "gl") wantVulkan = false;

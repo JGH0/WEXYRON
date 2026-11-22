@@ -41,10 +41,15 @@ VULKAN_HEADERS_DIR = third_party/vulkan-headers
 ifeq ($(and $(wildcard $(NVRHI_DIR)/include/nvrhi/nvrhi.h),$(wildcard $(VULKAN_HEADERS_DIR)/include/vulkan/vulkan.hpp)),)
 $(info Vulkan backend disabled: run 'git submodule update --init' to build it)
 NVRHI_SOURCES =
+NVRHI_EXTRA_ENGINE_SOURCES =
 else
 CXXFLAGS += -DCUBE_WITH_VULKAN -I$(NVRHI_DIR)/include -I$(VULKAN_HEADERS_DIR)/include
 NVRHI_SOURCES = $(filter-out %/dxgi-format.cpp,$(wildcard $(NVRHI_DIR)/src/common/*.cpp \
                 $(NVRHI_DIR)/src/vulkan/*.cpp $(NVRHI_DIR)/src/validation/*.cpp))
+# These include Vulkan headers unconditionally; skip them (with the whole
+# backend) in an OpenGL-only build so no Vulkan SDK is needed.
+NVRHI_EXTRA_ENGINE_SOURCES = $(ENGINE_SRC_DIR)/backends/nvrhi/fsr_vulkan.cpp \
+                             $(ENGINE_SRC_DIR)/backends/nvrhi/streamline_vulkan.cpp
 endif
 NVRHI_OBJECTS = $(patsubst $(NVRHI_DIR)/src/%.cpp,$(BUILD_DIR)/nvrhi/%.o,$(NVRHI_SOURCES))
 # Presence of the submodules changes CXXFLAGS, not the sources. Make does not
@@ -96,7 +101,7 @@ GAME_BOT_SOURCES = $(GAME_DIR)/bot.cpp
 LOCAL_BOT_SOURCES = $(GAME_DIR)/local_bots.cpp
 SERVER_BOT_SOURCES = $(NETWORK_DIR)/server_bots.cpp $(NETWORK_DIR)/server_bomb.cpp
 UI_SOURCES = $(UI_DIR)/menu_core.cpp $(UI_DIR)/menu_draw.cpp $(UI_DIR)/menu_input.cpp $(UI_DIR)/menu_pages.cpp
-ENGINE_LIB_SOURCES = $(ENGINE_SRC_DIR)/audio_manager.cpp $(ENGINE_SRC_DIR)/camera.cpp $(ENGINE_SRC_DIR)/gltf_model.cpp $(ENGINE_SRC_DIR)/map.cpp $(ENGINE_SRC_DIR)/map_loader.cpp $(ENGINE_SRC_DIR)/renderer.cpp $(ENGINE_SRC_DIR)/render_window.cpp $(ENGINE_SRC_DIR)/graphics_capabilities.cpp $(ENGINE_SRC_DIR)/backends/gl/gl_backend.cpp $(ENGINE_SRC_DIR)/backends/nvrhi/nvrhi_backend.cpp $(ENGINE_SRC_DIR)/backends/nvrhi/vulkan_device.cpp $(ENGINE_SRC_DIR)/backends/nvrhi/fsr_vulkan.cpp $(ENGINE_SRC_DIR)/backends/nvrhi/streamline_vulkan.cpp $(ENGINE_SRC_DIR)/shader.cpp $(ENGINE_SRC_DIR)/texture.cpp
+ENGINE_LIB_SOURCES = $(ENGINE_SRC_DIR)/audio_manager.cpp $(ENGINE_SRC_DIR)/camera.cpp $(ENGINE_SRC_DIR)/gltf_model.cpp $(ENGINE_SRC_DIR)/map.cpp $(ENGINE_SRC_DIR)/map_loader.cpp $(ENGINE_SRC_DIR)/renderer.cpp $(ENGINE_SRC_DIR)/render_window.cpp $(ENGINE_SRC_DIR)/graphics_capabilities.cpp $(ENGINE_SRC_DIR)/backends/gl/gl_backend.cpp $(ENGINE_SRC_DIR)/backends/nvrhi/nvrhi_backend.cpp $(ENGINE_SRC_DIR)/backends/nvrhi/vulkan_device.cpp $(NVRHI_EXTRA_ENGINE_SOURCES) $(ENGINE_SRC_DIR)/shader.cpp $(ENGINE_SRC_DIR)/texture.cpp
 MINIAUDIO_SOURCES = third_party/miniaudio/miniaudio.c
 MAIN_SOURCES = $(SRC_DIR)/main.cpp
 SERVER_SOURCES = server_main.cpp $(NETWORK_SOURCES) $(GAME_BOT_SOURCES) $(SERVER_BOT_SOURCES)

@@ -227,12 +227,6 @@ std::string activeRenderApiName(const Renderer& renderer) {
     }
     return api;
 }
-
-/// Graphics card the running renderer uses (for the status rows).
-std::string activeGpuName(const Renderer& renderer) {
-    if (const IRenderBackend* backend = renderer.backend()) return backend->describe().renderer;
-    return graphicsCapabilities().primaryGpu;
-}
 } // namespace
 
 namespace {
@@ -415,15 +409,13 @@ void Game::openSettingsGroup(const std::string& group) {
         const GraphicsCapabilities& caps = graphicsCapabilities();
         page.add(menu::info("ACTIVE RENDERER", activeRenderApiName(renderer),
                             "Running now; a RENDERER change applies after a restart"));
-        page.add(menu::info("GPU", activeGpuName(renderer),
-                            "Graphics card used by the running renderer"));
         const std::string activeApi = activeRenderApiName(renderer);
         if (!caps.vulkanAvailable) {
             page.add(menu::info("VULKAN", "UNAVAILABLE", caps.vulkanNote));
         } else if (vulkanFallback_) {
             page.add(menu::info("VULKAN", "FAILED",
                                 "Vulkan is available but could not start; the game is running on OPENGL"));
-        } else {
+        } else if (!renderApiForcedByEnv_) {
             const bool selectedVulkan = gameSettings_.renderApi == settings::RENDER_API_VULKAN;
             if (selectedVulkan != (activeApi == "VULKAN")) {
                 page.add(menu::info("VULKAN", "RESTART",
@@ -493,8 +485,6 @@ void Game::openFrameGenSettings() {
 
     page.add(menu::separator("STATUS"));
     page.add(menu::info("RENDERER", api, "Graphics API the game is running on"));
-    page.add(menu::info("GPU", activeGpuName(renderer),
-                        "Graphics card used by the running renderer"));
     page.add(menu::info("PLATFORM", caps.os,
                         "Frame generation support depends on the OS and GPU"));
     page.add(menu::info("SUPPORT", supported,

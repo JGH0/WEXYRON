@@ -16,8 +16,6 @@ add_library(cube_engine STATIC
     src/backends/gl/gl_backend.cpp
     src/backends/nvrhi/nvrhi_backend.cpp
     src/backends/nvrhi/vulkan_device.cpp
-    src/backends/nvrhi/fsr_vulkan.cpp
-    src/backends/nvrhi/streamline_vulkan.cpp
     src/shader.cpp
     src/texture.cpp
     ${CMAKE_SOURCE_DIR}/glad.c
@@ -58,6 +56,12 @@ endif()
 option(CUBE_WITH_VULKAN "Build the Vulkan render backend (NVRHI)" ${_cube_vulkan_default})
 
 if(CUBE_WITH_VULKAN)
+    # These include Vulkan headers unconditionally, so they only belong to a
+    # build that has the submodules (an OpenGL-only build must not need them).
+    target_sources(cube_engine PRIVATE
+        src/backends/nvrhi/fsr_vulkan.cpp
+        src/backends/nvrhi/streamline_vulkan.cpp
+    )
     if(NOT TARGET Vulkan::Headers)
         add_subdirectory(${CUBE_VULKAN_HEADERS_DIR} ${CMAKE_BINARY_DIR}/third_party/vulkan-headers EXCLUDE_FROM_ALL)
     endif()
@@ -88,6 +92,12 @@ if(CUBE_WITH_VULKAN)
     if(WIN32 AND EXISTS "${CUBE_SL_DIR}/include/sl.h")
         target_compile_definitions(cube_engine PRIVATE CUBE_WITH_STREAMLINE)
         target_include_directories(cube_engine PRIVATE "${CUBE_SL_DIR}/include")
+        # Older MinGW headers lack the modern <Softpub.h>/<wintrust.h>
+        # declarations Streamline's sl_security.h needs.
+        if(MINGW)
+            target_include_directories(cube_engine PRIVATE
+                "${CMAKE_CURRENT_SOURCE_DIR}/src/backends/nvrhi/compat")
+        endif()
         target_link_libraries(cube_engine PRIVATE wintrust crypt32)
         message(STATUS "Cube Engine: NVIDIA DLSS frame generation enabled (Streamline)")
     endif()

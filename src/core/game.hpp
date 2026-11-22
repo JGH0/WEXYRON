@@ -523,6 +523,9 @@ private:
     /// True when this launch requested Vulkan but had to fall back to OpenGL
     /// (shown on VIDEO so a restart that changed nothing is explained).
     bool vulkanFallback_ = false;
+    /// True when CUBE_RENDER_API overrides the saved RENDERER setting (tests
+    /// and development runs): no "restart to apply" hint then.
+    bool renderApiForcedByEnv_ = false;
     
     // New weapon system
     Weapon* currentWeaponInstance;

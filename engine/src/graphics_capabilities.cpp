@@ -47,6 +47,7 @@ std::string osName() {
 #endif
 }
 
+#if defined(CUBE_WITH_VULKAN)
 std::string vendorName(uint32_t id) {
     switch (id) {
         case 0x10DE: return "NVIDIA";
@@ -81,8 +82,6 @@ int nvidiaRtxGeneration(const std::string& name) {
     // the series. Keep the whole number so a future 60 series still works.
     return generation >= 100 ? generation / 100 : generation;
 }
-
-#if defined(CUBE_WITH_VULKAN)
 
 bool hasExtension(const std::vector<VkExtensionProperties>& list, const char* name) {
     for (const VkExtensionProperties& extension : list) {
