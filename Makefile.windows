@@ -42,6 +42,20 @@ FSR_DLLS = $(FSR_KIT)/signedbin/amd_fidelityfx_loader_vk.dll $(FSR_KIT)/signedbi
 else
 FSR_DLLS =
 endif
+
+# -- NVIDIA DLSS frame generation + Reflex (Streamline, Vulkan, Windows) -------
+# Also from tools/fetch_sdks.py. The interposer is loaded at runtime; only its
+# signature check (WinVerifyTrust) needs extra system libraries.
+SL_DIR = third_party/sdks/streamline
+ifneq ($(and $(NVRHI_SOURCES),$(wildcard $(SL_DIR)/include/sl.h)),)
+CXXFLAGS += -DCUBE_WITH_STREAMLINE -I$(SL_DIR)/include
+SL_DLLS = $(addprefix $(SL_DIR)/bin/x64/,sl.interposer.dll sl.common.dll sl.dlss_g.dll sl.reflex.dll \
+          sl.pcl.dll nvngx_dlssg.dll NvLowLatencyVk.dll)
+SL_LDFLAGS = -lwintrust -lcrypt32
+else
+SL_DLLS =
+SL_LDFLAGS =
+endif
 # Third-party code: optimised, warnings off (not ours to fix).
 NVRHI_CXXFLAGS = -std=c++17 -O2 -w -I$(NVRHI_DIR)/include -I$(VULKAN_HEADERS_DIR)/include \
                  -DNVRHI_WITH_AFTERMATH=0 -DVK_USE_PLATFORM_WIN32_KHR
@@ -51,7 +65,7 @@ NVRHI_CXXFLAGS = -std=c++17 -O2 -w -I$(NVRHI_DIR)/include -I$(VULKAN_HEADERS_DIR
 DEPFLAGS = -MMD -MP
 # Client needs GLFW + system OpenGL; the headless server must NOT, so a
 # server without a GPU/GLFW runtime still starts.
-CLIENT_LDFLAGS = -lglfw3 -lopengl32 -lgdi32 -luser32 -lkernel32 -lshell32 -lws2_32 -lstdc++ -lpthread
+CLIENT_LDFLAGS = -lglfw3 -lopengl32 -lgdi32 -luser32 -lkernel32 -lshell32 -lws2_32 $(SL_LDFLAGS) -lstdc++ -lpthread
 SERVER_LDFLAGS = -lws2_32 -lstdc++ -lpthread
 
 SRC_DIR = src
@@ -76,7 +90,7 @@ GAME_BOT_SOURCES = $(GAME_DIR)/bot.cpp
 LOCAL_BOT_SOURCES = $(GAME_DIR)/local_bots.cpp
 SERVER_BOT_SOURCES = $(NETWORK_DIR)/server_bots.cpp $(NETWORK_DIR)/server_bomb.cpp
 UI_SOURCES = $(UI_DIR)/menu_core.cpp $(UI_DIR)/menu_draw.cpp $(UI_DIR)/menu_input.cpp $(UI_DIR)/menu_pages.cpp
-ENGINE_LIB_SOURCES = $(ENGINE_SRC_DIR)/audio_manager.cpp $(ENGINE_SRC_DIR)/camera.cpp $(ENGINE_SRC_DIR)/gltf_model.cpp $(ENGINE_SRC_DIR)/map.cpp $(ENGINE_SRC_DIR)/map_loader.cpp $(ENGINE_SRC_DIR)/renderer.cpp $(ENGINE_SRC_DIR)/render_window.cpp $(ENGINE_SRC_DIR)/backends/gl/gl_backend.cpp $(ENGINE_SRC_DIR)/backends/nvrhi/nvrhi_backend.cpp $(ENGINE_SRC_DIR)/backends/nvrhi/vulkan_device.cpp $(ENGINE_SRC_DIR)/backends/nvrhi/fsr_vulkan.cpp $(ENGINE_SRC_DIR)/shader.cpp $(ENGINE_SRC_DIR)/texture.cpp
+ENGINE_LIB_SOURCES = $(ENGINE_SRC_DIR)/audio_manager.cpp $(ENGINE_SRC_DIR)/camera.cpp $(ENGINE_SRC_DIR)/gltf_model.cpp $(ENGINE_SRC_DIR)/map.cpp $(ENGINE_SRC_DIR)/map_loader.cpp $(ENGINE_SRC_DIR)/renderer.cpp $(ENGINE_SRC_DIR)/render_window.cpp $(ENGINE_SRC_DIR)/backends/gl/gl_backend.cpp $(ENGINE_SRC_DIR)/backends/nvrhi/nvrhi_backend.cpp $(ENGINE_SRC_DIR)/backends/nvrhi/vulkan_device.cpp $(ENGINE_SRC_DIR)/backends/nvrhi/fsr_vulkan.cpp $(ENGINE_SRC_DIR)/backends/nvrhi/streamline_vulkan.cpp $(ENGINE_SRC_DIR)/shader.cpp $(ENGINE_SRC_DIR)/texture.cpp
 MINIAUDIO_SOURCES = third_party/miniaudio/miniaudio.c
 MAIN_SOURCES = $(SRC_DIR)/main.cpp
 SERVER_SOURCES = server_main.cpp $(NETWORK_SOURCES) $(GAME_BOT_SOURCES) $(SERVER_BOT_SOURCES)
@@ -272,6 +286,12 @@ stage-runtime:
 	done
 	@for dll in $(FSR_DLLS); do cp -f "$$dll" $(BIN_DIR)/; done
 	@if [ -n "$(FSR_DLLS)" ]; then cp -f $(FSR_KIT)/docs/license.md $(BIN_DIR)/AMD_FidelityFX_LICENSE.md; fi
+	@for dll in $(SL_DLLS); do cp -f "$$dll" $(BIN_DIR)/; done
+	@if [ -n "$(SL_DLLS)" ]; then \
+		cp -f $(SL_DIR)/license.txt $(BIN_DIR)/NVIDIA_Streamline_LICENSE.txt; \
+		cp -f $(SL_DIR)/bin/x64/nvngx_dlss.license.txt $(BIN_DIR)/NVIDIA_DLSS_LICENSE.txt; \
+		cp -f $(SL_DIR)/bin/x64/reflex.license.txt $(BIN_DIR)/NVIDIA_Reflex_LICENSE.txt; \
+	fi
 	@if [ -f mesa-deps/x64/opengl32.dll ]; then \
 		cp -f mesa-deps/x64/libgallium_wgl.dll mesa-deps/x64/libdlclose-skip.dll $(BIN_DIR)/ 2>/dev/null || true; \
 		cp -f mesa-deps/x64/opengl32.dll $(BIN_DIR)/opengl32_sw.dll; \

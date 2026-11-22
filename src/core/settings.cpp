@@ -357,7 +357,7 @@ std::vector<SettingDef> makeGameSettingDefs(GameSettings& s) {
               "Shown frames per rendered frame (3X, 4X: DLSS on RTX 50, XESS 3)",
               &GameSettings::frameGenOutput, {"2X", "3X", "4X"}, {"2x", "3x", "4x"});
     addBool("frame_gen_low_latency", "LOW LATENCY", kFrameGenGroup,
-            "REFLEX / ANTI-LAG 2 / XELL: cuts the input lag frame generation adds",
+            "NVIDIA REFLEX / AMD ANTI-LAG 2 / INTEL XELL: cuts the input lag frame generation adds",
             &GameSettings::frameGenLowLatency);
 
     addInt("master_volume", "MASTER VOLUME", "AUDIO",

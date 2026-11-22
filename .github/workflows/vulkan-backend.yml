@@ -154,4 +154,5 @@ jobs:
           make -f Makefile.windows -j"$(nproc)" client render-tests 2>&1 | tee build.log
           ! grep -q "Vulkan backend disabled" build.log
           test -f build/bin/amd_fidelityfx_loader_vk.dll
+          test -f build/bin/sl.interposer.dll
           file build/bin/game.exe

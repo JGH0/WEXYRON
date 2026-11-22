@@ -137,6 +137,9 @@ public:
                               const glm::mat4& transform,
                               const glm::vec3& tint = glm::vec3(1.0f));
 
+    /// Start of a frame, before input and the game update (latency markers,
+    /// low-latency sleep). Optional: render-only loops may skip it.
+    void beginSimulation() { if (backend_) backend_->beginSimulation(); }
     /// Flush all queued instances to the GPU. Call once at the end of a frame.
     void endFrame();
     /// Show the finished frame (after endFrame).

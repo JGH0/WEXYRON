@@ -16,6 +16,7 @@ add_library(cube_engine STATIC
     src/backends/nvrhi/nvrhi_backend.cpp
     src/backends/nvrhi/vulkan_device.cpp
     src/backends/nvrhi/fsr_vulkan.cpp
+    src/backends/nvrhi/streamline_vulkan.cpp
     src/shader.cpp
     src/texture.cpp
     ${CMAKE_SOURCE_DIR}/glad.c
@@ -79,6 +80,15 @@ if(CUBE_WITH_VULKAN)
         target_include_directories(cube_engine PRIVATE "${CUBE_FSR_KIT}/api/include"
                                                        "${CUBE_FSR_KIT}/framegeneration/include")
         message(STATUS "Cube Engine: AMD FSR frame generation enabled")
+    endif()
+
+    # NVIDIA DLSS frame generation + Reflex (Streamline): also fetch_sdks.py.
+    set(CUBE_SL_DIR "${CMAKE_SOURCE_DIR}/third_party/sdks/streamline")
+    if(WIN32 AND EXISTS "${CUBE_SL_DIR}/include/sl.h")
+        target_compile_definitions(cube_engine PRIVATE CUBE_WITH_STREAMLINE)
+        target_include_directories(cube_engine PRIVATE "${CUBE_SL_DIR}/include")
+        target_link_libraries(cube_engine PRIVATE wintrust crypt32)
+        message(STATUS "Cube Engine: NVIDIA DLSS frame generation enabled (Streamline)")
     endif()
 else()
     message(STATUS "Cube Engine: Vulkan backend disabled (run 'git submodule update --init')")

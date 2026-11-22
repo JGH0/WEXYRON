@@ -131,6 +131,22 @@ and glTF draws into a `FramePacket` and hands it to an `IRenderBackend`
   per rendered frame, across a resize and an off/on switch. Known: FSR SDK
   2.4 leaves 29 of its own Vulkan objects at device destruction (exit only),
   and 3 more each time FSR is switched off and on.
+- **NVIDIA DLSS frame generation + Reflex (Vulkan, Windows):** MODE = NVIDIA
+  DLSS, or AUTO (preferred over FSR where it runs: GeForce RTX 40 or newer).
+  Also from `tools/fetch_sdks.py` (Streamline 2.14). On machines with an NVIDIA
+  GPU, Vulkan is reached through Streamline's interposer
+  (`streamline_vulkan.cpp`, signature checked) so it can add what DLSS-G needs
+  to the device; other GPUs never load it. DLSS-G is loaded only while its
+  swapchain exists (switching rebuilds the swapchain); it gets HUD-less colour,
+  the HUD layer, depth, motion vectors and the camera every frame, pauses in
+  full-screen menus and presents without vsync (a Streamline limitation on
+  Vulkan). Reflex markers run every frame (`Renderer::beginSimulation`, called
+  by the game before input). 3X/4X need an RTX 50; others are clamped to 2X.
+  `render_capture_test framegen dlss` checks it like FSR. `CUBE_STREAMLINE=0`
+  keeps Streamline out, `CUBE_STREAMLINE_LOG=1` prints its verbose log. Known:
+  with `CUBE_VULKAN_VALIDATION=1`, Streamline's own queues, semaphores and
+  swapchain images report validation messages (none name the game's objects
+  except Streamline's swapchain image layout).
 - **Parity check:** `render_capture_test capture <dir>` with each backend, then
   `render_capture_test compare <gl-dir> <vk-dir> 1.0`. Glyph edges can differ
   by one pixel (half-pixel rounding differs between the APIs); everything else

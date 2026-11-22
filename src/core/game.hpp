@@ -97,6 +97,7 @@ public:
      * @param deltaTime Time delta for frame-independent input processing
      */
     void processInput(float deltaTime);
+    void beginFrame();               ///< Frame start, before input (latency markers)
     void endFrame(float deltaTime);  ///< Frame-end bookkeeping (FPS counter)
     void frameWait();  ///< Spin-wait to cap FPS based on maxFps
     

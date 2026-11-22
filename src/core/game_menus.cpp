@@ -317,9 +317,7 @@ void Game::openControlsSettings() {
 void Game::openFrameGenSettings() {
     menu::Page page = menu::buildFrameGenPage(settingDefs_, [this]() { onSettingRowChanged(); });
 
-    // The options are stored now; frame generation itself (FSR / DLSS / XeSS
-    // on the Vulkan or Direct3D 12 renderer) comes in a later step. Say so
-    // instead of letting the rows look broken.
+    // What runs right now and, when nothing does, why (renderer, GPU, files).
     const std::string api = activeRenderApiName(renderer);
     page.add(menu::separator("STATUS"));
     page.add(menu::info("RENDERER", api, "Graphics API the game is running on"));

@@ -284,6 +284,7 @@ int main() {
                 lastFrame = currentFrame;
                 if (deltaTime > 0.05f) deltaTime = 0.05f; // Cap at 50ms to avoid physics issues
 
+                game.beginFrame();
                 game.processInput(deltaTime);
                 game.update(deltaTime); // Only update physics when playing
                 game.render();

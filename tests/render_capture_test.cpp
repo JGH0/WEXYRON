@@ -356,12 +356,20 @@ int frameGenCheck(const std::string& techName) {
     game.gameSettings().frameGen = chosen;
     game.applySettingsForTest();
     for (int i = 0; i < 30; ++i) frame();
-    const FrameGenStatus again0 = game.debugRenderer().frameGenerationStatus();
-    for (int i = 0; i < 60; ++i) frame();
-    const FrameGenStatus again1 = game.debugRenderer().frameGenerationStatus();
-    const double againRatio = static_cast<double>(again1.presentedFrames - again0.presentedFrames) / 60.0;
-    std::printf("framegen off: %s, on again: active='%s' x%.2f\n", offOk ? "ok" : "still active",
-                again1.active.c_str(), againRatio);
+    // The vendor may need a moment to rebuild its resources: measure 60-frame
+    // windows until generation is back (or give up after ten).
+    FrameGenStatus again1;
+    double againRatio = 0.0;
+    int windows = 0;
+    while (windows < 10 && againRatio <= 1.6) {
+        const FrameGenStatus again0 = game.debugRenderer().frameGenerationStatus();
+        for (int i = 0; i < 60; ++i) frame();
+        again1 = game.debugRenderer().frameGenerationStatus();
+        againRatio = static_cast<double>(again1.presentedFrames - again0.presentedFrames) / 60.0;
+        ++windows;
+    }
+    std::printf("framegen off: %s, on again: active='%s' x%.2f (after %d frames)\n", offOk ? "ok" : "still active",
+                again1.active.c_str(), againRatio, 30 + windows * 60);
     ok = ok && offOk && againRatio > 1.6;
 
     // Optional: keep running for a screenshot of what reaches the screen.

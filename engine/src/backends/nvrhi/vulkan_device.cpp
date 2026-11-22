@@ -16,12 +16,19 @@
  * Frame generation: AMD FSR replaces the swapchain (fsr_vulkan.cpp) and needs
  * queues of its own (async compute, present, image acquire), so the device is
  * created with them whenever the GPU has enough queues.
+ *
+ * NVIDIA DLSS frame generation (streamline_vulkan.cpp): on machines with an
+ * NVIDIA GPU and the Streamline files, Vulkan is reached through Streamline's
+ * interposer instead (it adds what DLSS-G needs at device creation). DLSS-G is
+ * loaded only while its swapchain exists; switching it on or off rebuilds the
+ * swapchain. Reflex markers run every frame while Streamline is loaded.
  */
 
 #if defined(CUBE_WITH_VULKAN)
 
 #include "nvrhi_device.hpp"
 #include "fsr_vulkan.hpp"
+#include "streamline_vulkan.hpp"
 
 // Must match NVRHI's vulkan-backend.h; the dispatcher storage lives here.
 #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
@@ -33,6 +40,10 @@ VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>   // Vulkan helpers are declared because vulkan.h came first
+#if defined(_WIN32)
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3native.h>
+#endif
 
 #include <algorithm>
 #include <cstdlib>
@@ -87,6 +98,39 @@ bool hasExtension(const std::vector<VkExtensionProperties>& list, const char* na
     for (const auto& e : list) if (std::strcmp(e.extensionName, name) == 0) return true;
     return false;
 }
+
+#if defined(_WIN32)
+/// Whether any Vulkan GPU is an NVIDIA one (a throwaway instance through the
+/// plain loader): only then is Streamline put between the game and Vulkan.
+bool hasNvidiaGpu(PFN_vkGetInstanceProcAddr gipa) {
+    auto createInstance = reinterpret_cast<PFN_vkCreateInstance>(gipa(nullptr, "vkCreateInstance"));
+    if (!createInstance) return false;
+    VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
+    app.apiVersion = VK_API_VERSION_1_2;
+    VkInstanceCreateInfo info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+    info.pApplicationInfo = &app;
+    VkInstance instance = VK_NULL_HANDLE;
+    if (createInstance(&info, nullptr, &instance) != VK_SUCCESS) return false;
+    auto enumerate = reinterpret_cast<PFN_vkEnumeratePhysicalDevices>(gipa(instance, "vkEnumeratePhysicalDevices"));
+    auto properties = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(
+        gipa(instance, "vkGetPhysicalDeviceProperties"));
+    auto destroy = reinterpret_cast<PFN_vkDestroyInstance>(gipa(instance, "vkDestroyInstance"));
+    bool nvidia = false;
+    if (enumerate && properties) {
+        uint32_t count = 0;
+        enumerate(instance, &count, nullptr);
+        std::vector<VkPhysicalDevice> gpus(count);
+        enumerate(instance, &count, gpus.data());
+        for (VkPhysicalDevice gpu : gpus) {
+            VkPhysicalDeviceProperties props;
+            properties(gpu, &props);
+            nvidia = nvidia || props.vendorID == 0x10DE;
+        }
+    }
+    if (destroy) destroy(instance, nullptr);
+    return nvidia;
+}
+#endif
 
 class VulkanDeviceManager final : public NvrhiDeviceManager {
 public:
@@ -167,18 +211,35 @@ public:
     void setFrameGeneration(const FrameGenSettings& settings) override;
     FrameGenStatus frameGenerationStatus() const override;
     bool frameGenerationComposesUi() const override { return fsrSwapchain_; }
+    bool frameGenerationWantsInputs() const override { return fsrSwapchain_ || dlssSwapchain_; }
     void recordFrameGeneration(const FrameGenFrame& frame) override;
+    void beginSimulation() override {
+        if (sl_) sl_->beginSimulation();
+    }
 
 private:
-    /// AMD FSR is what the player asked for (FSR, or AUTO without a better one).
-    bool wantsFsr() const {
-        return frameGen_.tech == FrameGenTech::FSR || frameGen_.tech == FrameGenTech::Auto;
+    /// NVIDIA DLSS is what the player asked for (DLSS, or AUTO where it runs).
+    bool wantsDlss() const {
+        return frameGen_.tech == FrameGenTech::DLSS || (frameGen_.tech == FrameGenTech::Auto && dlssAvailable_);
     }
+    /// AMD FSR is what the player asked for (FSR, or AUTO without DLSS).
+    bool wantsFsr() const {
+        return frameGen_.tech == FrameGenTech::FSR || (frameGen_.tech == FrameGenTech::Auto && !dlssAvailable_);
+    }
+    void applyLowLatency() {
+        // DLSS-G needs Reflex on; otherwise it follows LOW LATENCY.
+        if (sl_) sl_->setLowLatency(dlssSwapchain_ || (frameGen_.lowLatency && frameGen_.tech != FrameGenTech::Off));
+    }
+    FrameGenStatus dlssStatus() const;
     FrameGenSettings frameGen_;
     std::unique_ptr<FsrVulkan> fsr_;
     std::string fsrError_;      ///< why FSR is unavailable (empty when it works)
     bool fsrLoadTried_ = false;
     bool fsrSwapchain_ = false; ///< the current swapchain is FSR's
+    std::unique_ptr<StreamlineVulkan> sl_;   ///< NVIDIA GPUs with Streamline installed
+    std::string dlssError_;     ///< why DLSS-G is unavailable
+    bool dlssAvailable_ = false;
+    bool dlssSwapchain_ = false; ///< the current swapchain is Streamline's (DLSS-G)
 };
 
 bool VulkanDeviceManager::create(GLFWwindow* window) {
@@ -187,11 +248,30 @@ bool VulkanDeviceManager::create(GLFWwindow* window) {
     auto getInstanceProcAddr = reinterpret_cast<PFN_vkGetInstanceProcAddr>(
         glfwGetInstanceProcAddress(nullptr, "vkGetInstanceProcAddr"));
     if (!getInstanceProcAddr) return fail("vkGetInstanceProcAddr unavailable");
+
+    // NVIDIA DLSS: Streamline must see the instance and device being created.
+    dlssError_ = "NVIDIA DLSS frame generation needs an NVIDIA GeForce RTX 40 series or newer GPU";
+#if defined(_WIN32)
+    if (hasNvidiaGpu(getInstanceProcAddr)) {
+        sl_ = StreamlineVulkan::load(dlssError_);
+        if (sl_) getInstanceProcAddr = sl_->getInstanceProcAddr();
+        else std::cerr << "Vulkan: " << dlssError_ << std::endl;
+    }
+#else
+    dlssError_ = "NVIDIA DLSS frame generation needs Windows";
+#endif
     VKD.init(getInstanceProcAddr);
 
     if (!createInstance() || !pickPhysicalDevice() || !createDevice()) {
         destroy();
         return false;
+    }
+    if (sl_) {
+        dlssAvailable_ = sl_->checkDlssg(gpu_, dlssError_);
+        if (!dlssAvailable_) std::cerr << "Vulkan: " << dlssError_ << std::endl;
+        // Loaded for device creation (queues, extensions); from now on only
+        // while its swapchain exists.
+        sl_->setDlssgLoaded(false);
     }
 
     VkSemaphoreCreateInfo semaphoreInfo{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
@@ -280,6 +360,18 @@ bool VulkanDeviceManager::createInstance() {
         VKD.vkCreateDebugUtilsMessengerEXT(instance_, &m, nullptr, &messenger_);
     }
 
+#if defined(_WIN32)
+    if (sl_) {
+        // Through Streamline (not GLFW's loader): it maps the surface to the
+        // window it presents generated frames to.
+        VkWin32SurfaceCreateInfoKHR s{VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR};
+        s.hinstance = GetModuleHandleW(nullptr);
+        s.hwnd = glfwGetWin32Window(window_);
+        if (!VKD.vkCreateWin32SurfaceKHR || VKD.vkCreateWin32SurfaceKHR(instance_, &s, nullptr, &surface_) != VK_SUCCESS)
+            return fail("cannot create a surface for the window");
+        return true;
+    }
+#endif
     if (glfwCreateWindowSurface(instance_, window_, nullptr, &surface_) != VK_SUCCESS)
         return fail("cannot create a surface for the window");
     return true;
@@ -390,6 +482,24 @@ bool VulkanDeviceManager::createDevice() {
     f12.timelineSemaphore = VK_TRUE;
     f12.pNext = core13_ ? static_cast<void*>(&f13) : static_cast<void*>(&dyn);
 
+    // NVIDIA Streamline: the Reflex extension it adds (VK_NV_low_latency2)
+    // needs present ids, and it keeps per-object data in private data slots.
+    VkPhysicalDevicePresentIdFeaturesKHR presentId{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_ID_FEATURES_KHR};
+    bool enablePresentId = false;
+    if (sl_) {
+        VkPhysicalDeviceVulkan13Features q13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
+        VkPhysicalDeviceFeatures2 query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+        query.pNext = &presentId;
+        presentId.pNext = core13_ ? &q13 : nullptr;
+        VKD.vkGetPhysicalDeviceFeatures2(gpu_, &query);
+        presentId.pNext = nullptr;
+        if (hasExtension(exts, VK_KHR_PRESENT_ID_EXTENSION_NAME) && presentId.presentId) {
+            deviceExtensions_.push_back(VK_KHR_PRESENT_ID_EXTENSION_NAME);
+            enablePresentId = true;
+        }
+        if (core13_) f13.privateData = q13.privateData;
+    }
+
     // Queues: the game queue, plus three for frame generation where the GPU
     // has them (same preferences as the FSR SDK sample): a present queue
     // (graphics/compute family that can present), an image-acquire queue (no
@@ -450,6 +560,10 @@ bool VulkanDeviceManager::createDevice() {
         // between the KHR and NV extensions).
         derivatives.pNext = &f12;
         features.pNext = &derivatives;
+    }
+    if (enablePresentId) {
+        presentId.pNext = features.pNext;
+        features.pNext = &presentId;
     }
 
     VkDeviceCreateInfo info{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
@@ -514,9 +628,14 @@ bool VulkanDeviceManager::createSwapchain() {
     VKD.vkGetPhysicalDeviceSurfacePresentModesKHR(gpu_, surface_, &modeCount, nullptr);
     std::vector<VkPresentModeKHR> modes(modeCount);
     VKD.vkGetPhysicalDeviceSurfacePresentModesKHR(gpu_, surface_, &modeCount, modes.data());
+    // DLSS-G on Vulkan cannot present with vsync (Streamline guide, 22.5).
+    const bool dlss = sl_ && dlssAvailable_ && wantsDlss() && !fsrSwapchain_;
     VkPresentModeKHR mode = VK_PRESENT_MODE_FIFO_KHR;   // always available = vsync
-    if (!vsync_) {
-        for (VkPresentModeKHR m : {VK_PRESENT_MODE_MAILBOX_KHR, VK_PRESENT_MODE_IMMEDIATE_KHR}) {
+    if (!vsync_ || dlss) {
+        // DLSS-G paces its own presents: no vsync interval at all (IMMEDIATE).
+        const VkPresentModeKHR order[2] = {dlss ? VK_PRESENT_MODE_IMMEDIATE_KHR : VK_PRESENT_MODE_MAILBOX_KHR,
+                                           dlss ? VK_PRESENT_MODE_MAILBOX_KHR : VK_PRESENT_MODE_IMMEDIATE_KHR};
+        for (VkPresentModeKHR m : order) {
             if (std::find(modes.begin(), modes.end(), m) != modes.end()) { mode = m; break; }
         }
     }
@@ -558,6 +677,10 @@ bool VulkanDeviceManager::createSwapchain() {
             fsrSwapchain_ = false;
             fsrError_ = error;
         }
+    } else if (dlss) {
+        // Streamline hands out its own swapchain while DLSS-G is loaded.
+        sl_->setDlssgLoaded(true);
+        dlssSwapchain_ = true;
     } else if (wantsFsr()) {
         if (!fsrLoadTried_) {
             fsrLoadTried_ = true;
@@ -586,8 +709,19 @@ bool VulkanDeviceManager::createSwapchain() {
             }
         }
     }
-    if (!fsrSwapchain_ && VKD.vkCreateSwapchainKHR(device_, &info, nullptr, &swapchain_) != VK_SUCCESS)
+    if (!fsrSwapchain_ && VKD.vkCreateSwapchainKHR(device_, &info, nullptr, &swapchain_) != VK_SUCCESS) {
+        if (dlssSwapchain_) {
+            dlssError_ = "NVIDIA DLSS swapchain creation failed";
+            std::cerr << "Vulkan: " << dlssError_ << " - presenting without frame generation" << std::endl;
+            dlssAvailable_ = false;
+            dlssSwapchain_ = false;
+            sl_->setDlssgLoaded(false);
+            swapchain_ = VK_NULL_HANDLE;
+            return createSwapchain();
+        }
         return fail("vkCreateSwapchainKHR failed");
+    }
+    applyLowLatency();
     swapchainFormat_ = chosen.format;
     extent_ = extent;
 
@@ -640,13 +774,15 @@ void VulkanDeviceManager::destroySwapchain() {
         else VKD.vkDestroySwapchainKHR(device_, swapchain_, nullptr);
     }
     fsrSwapchain_ = false;
+    if (dlssSwapchain_) sl_->setDlssgLoaded(false);
+    dlssSwapchain_ = false;
     swapchain_ = VK_NULL_HANDLE;
     extent_ = {0, 0};
 }
 
 bool VulkanDeviceManager::recreateSwapchain() {
     nvrhiDevice_->waitForIdle();
-    VKD.vkQueueWaitIdle(queue_);
+    VKD.vkDeviceWaitIdle(device_);   // also the frame generation queues
     if (fsrSwapchain_ && wantsFsr() && swapchain_) {
         // Resize / vsync with FSR on: FSR recreates its swapchain in place
         // (a full rebuild leaks FSR-internal objects every time).
@@ -659,6 +795,7 @@ bool VulkanDeviceManager::recreateSwapchain() {
 
 bool VulkanDeviceManager::beginFrame() {
     if (!nvrhiDevice_) return false;
+    if (sl_) sl_->beginRenderSubmit();
 
     // Frame pacing: at most kFramesInFlight frames queued on the GPU.
     if (frameQuerySet_[frameSlot_]) {
@@ -705,6 +842,10 @@ void VulkanDeviceManager::present() {
     signal->close();
     nvrhiDevice_->executeCommandList(signal);
 
+    if (sl_) {
+        sl_->endRenderSubmit();
+        sl_->beginPresent();
+    }
     VkPresentInfoKHR info{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
     info.waitSemaphoreCount = 1;
     info.pWaitSemaphores = &done;
@@ -713,6 +854,7 @@ void VulkanDeviceManager::present() {
     info.pImageIndices = &imageIndex_;
     const VkResult result = fsrSwapchain_ ? fsr_->present(queue_, &info) : VKD.vkQueuePresentKHR(queue_, &info);
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) swapchainDirty_ = true;
+    if (sl_) sl_->endPresent();
 
     nvrhiDevice_->setEventQuery(frameQueries_[frameSlot_], nvrhi::CommandQueue::Graphics);
     frameQuerySet_[frameSlot_] = true;
@@ -734,6 +876,7 @@ void VulkanDeviceManager::destroy() {
     fsr_.reset();
     nvrhiDevice_ = nullptr;
     vkDevice_ = nullptr;
+    if (sl_) sl_->shutdown();   // before the device goes (Streamline guide)
     if (device_) VKD.vkDestroyDevice(device_, nullptr);
     device_ = VK_NULL_HANDLE;
     if (surface_) VKD.vkDestroySurfaceKHR(instance_, surface_, nullptr);
@@ -742,14 +885,48 @@ void VulkanDeviceManager::destroy() {
     messenger_ = VK_NULL_HANDLE;
     if (instance_) VKD.vkDestroyInstance(instance_, nullptr);
     instance_ = VK_NULL_HANDLE;
+    sl_.reset();   // the interposer DLL, after the last Vulkan call through it
+    dlssAvailable_ = false;
 }
 
 void VulkanDeviceManager::setFrameGeneration(const FrameGenSettings& settings) {
     const bool hadFsr = wantsFsr();
+    const bool hadDlss = wantsDlss() && dlssAvailable_;
     frameGen_ = settings;
-    // Switching FSR on or off swaps the swapchain (recreated on the next
-    // frame); changes within FSR (on/off generation) need no new swapchain.
-    if (hadFsr != wantsFsr()) swapchainDirty_ = true;
+    // Switching FSR or DLSS on or off swaps the swapchain (recreated on the
+    // next frame); changes within one (multiplier, generation off) do not.
+    if (hadFsr != wantsFsr() || hadDlss != (wantsDlss() && dlssAvailable_)) swapchainDirty_ = true;
+    applyLowLatency();
+}
+
+FrameGenStatus VulkanDeviceManager::dlssStatus() const {
+    FrameGenStatus status;
+    if (!dlssAvailable_) {
+        status.note = dlssError_;
+        return status;
+    }
+    if (!dlssSwapchain_) {
+        status.note = "NVIDIA DLSS starts with the next frame";
+        return status;
+    }
+    if (!sl_->runtimeError().empty()) {
+        status.note = sl_->runtimeError();
+        return status;
+    }
+    const uint32_t maxFrames = std::max<uint32_t>(1, sl_->maxFramesToGenerate());
+    const uint32_t frames = std::clamp<uint32_t>(static_cast<uint32_t>(std::max(1, frameGen_.generatedFrames)), 1,
+                                                 maxFrames);
+    status.active = "NVIDIA DLSS " + std::to_string(frames + 1) + "X";
+    status.presentedFrames = sl_->presentedFrames();
+    if (static_cast<uint32_t>(frameGen_.generatedFrames) > maxFrames)
+        status.note = "This GPU generates up to " + std::to_string(maxFrames + 1) + "X with NVIDIA DLSS";
+    else if (sl_->generatingFrames() == 0)
+        status.note = "Runs while the game is on screen (off in full-screen menus)";
+    else if (vsync_)
+        status.note = "VSync is off while NVIDIA DLSS frame generation runs (Vulkan)";
+    else if (!frameGen_.lowLatency)
+        status.note = "NVIDIA Reflex stays on with DLSS frame generation";
+    return status;
 }
 
 FrameGenStatus VulkanDeviceManager::frameGenerationStatus() const {
@@ -758,12 +935,13 @@ FrameGenStatus VulkanDeviceManager::frameGenerationStatus() const {
         case FrameGenTech::Off:
             return status;
         case FrameGenTech::DLSS:
-            status.note = "NVIDIA DLSS frame generation is not available yet";
-            return status;
+            return dlssStatus();
         case FrameGenTech::XeSS:
             status.note = "Intel XeSS frame generation needs the Direct3D 12 renderer";
             return status;
         case FrameGenTech::Auto:
+            if (dlssAvailable_) return dlssStatus();
+            break;
         case FrameGenTech::FSR:
             break;
     }
@@ -779,10 +957,45 @@ FrameGenStatus VulkanDeviceManager::frameGenerationStatus() const {
 }
 
 void VulkanDeviceManager::recordFrameGeneration(const FrameGenFrame& frame) {
-    if (!fsrSwapchain_ || !fsr_ || !frame.commandList) return;
-    FsrVulkan::FrameInputs in;
-    in.commandBuffer = static_cast<VkCommandBuffer>(
+    if (!frame.commandList) return;
+    const auto commandBuffer = static_cast<VkCommandBuffer>(
         frame.commandList->getNativeObject(nvrhi::ObjectTypes::VK_CommandBuffer).pointer);
+    if (dlssSwapchain_ && sl_) {
+        auto image = [](nvrhi::ITexture* t) {
+            StreamlineVulkan::Image im;
+            im.image = static_cast<VkImage>(t->getNativeObject(nvrhi::ObjectTypes::VK_Image).pointer);
+            im.memory = static_cast<VkDeviceMemory>(t->getNativeObject(nvrhi::ObjectTypes::VK_DeviceMemory).pointer);
+            im.view = static_cast<VkImageView>(t->getNativeView(nvrhi::ObjectTypes::VK_ImageView).pointer);
+            im.info = static_cast<const VkImageCreateInfo*>(
+                t->getNativeObject(nvrhi::ObjectTypes::VK_ImageCreateInfo).pointer);
+            im.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;   // NVRHI ShaderResource
+            return im;
+        };
+        StreamlineVulkan::FrameInputs in;
+        in.commandBuffer = commandBuffer;
+        in.depth = image(frame.depth);
+        in.motion = image(frame.motion);
+        in.hudless = image(frame.sceneColor);
+        in.ui = image(frame.ui);
+        in.width = frame.width;
+        in.height = frame.height;
+        in.reset = frame.reset;
+        in.generate = !frame.inMenu;
+        in.framesToGenerate = static_cast<uint32_t>(std::max(1, frameGen_.generatedFrames));
+        in.view = frame.view;
+        in.projection = frame.projection;
+        in.prevView = frame.prevView;
+        in.prevProjection = frame.prevProjection;
+        std::string error;
+        if (!sl_->frame(in, error)) {
+            if (dlssError_ != error) std::cerr << "Vulkan: " << error << std::endl;
+            dlssError_ = error;
+        }
+        return;
+    }
+    if (!fsrSwapchain_ || !fsr_) return;
+    FsrVulkan::FrameInputs in;
+    in.commandBuffer = commandBuffer;
     in.depth = static_cast<VkImage>(frame.depth->getNativeObject(nvrhi::ObjectTypes::VK_Image).pointer);
     in.motion = static_cast<VkImage>(frame.motion->getNativeObject(nvrhi::ObjectTypes::VK_Image).pointer);
     in.ui = static_cast<VkImage>(frame.ui->getNativeObject(nvrhi::ObjectTypes::VK_Image).pointer);

@@ -150,6 +150,22 @@ EOF
             echo "note: AMD FSR not fetched (tools/fetch_sdks.py) - zip ships without FSR frame generation" >&2
         fi
 
+        # NVIDIA DLSS frame generation + Reflex (Streamline): opt-in. The NVIDIA
+        # licences add conditions for distributing them (see
+        # THIRD_PARTY_NOTICES.md), so only WEXYRON_SHIP_NVIDIA=1 includes them.
+        SL_DIR="$ROOT/third_party/sdks/streamline"
+        if [ "${WEXYRON_SHIP_NVIDIA:-0}" = "1" ] && [ -f "$SL_DIR/bin/x64/sl.interposer.dll" ]; then
+            for dll in sl.interposer.dll sl.common.dll sl.dlss_g.dll sl.reflex.dll sl.pcl.dll \
+                       nvngx_dlssg.dll NvLowLatencyVk.dll; do
+                cp "$SL_DIR/bin/x64/$dll" "$STAGE/"
+            done
+            cp "$SL_DIR/license.txt" "$STAGE/NVIDIA_Streamline_LICENSE.txt"
+            cp "$SL_DIR/bin/x64/nvngx_dlss.license.txt" "$STAGE/NVIDIA_DLSS_LICENSE.txt"
+            cp "$SL_DIR/bin/x64/reflex.license.txt" "$STAGE/NVIDIA_Reflex_LICENSE.txt"
+        else
+            echo "note: NVIDIA DLSS not packaged (WEXYRON_SHIP_NVIDIA=1 to include it; see THIRD_PARTY_NOTICES.md)" >&2
+        fi
+
         # MinGW runtime + glfw DLLs, taken from the sysroot next to the
         # compiler that built the exe (MSYS2 or mingw-w64). CI exports
         # MINGW_DLL_DIR; locally we derive it from the cross compiler.

@@ -129,6 +129,27 @@ licensors are not liable for any damages arising from its use. The complete
 licence text, including all disclaimers, ships next to the DLLs as
 `AMD_FidelityFX_LICENSE.md`.
 
+## NVIDIA Streamline, DLSS Frame Generation and Reflex (Windows)
+
+Files: `sl.interposer.dll`, `sl.common.dll`, `sl.dlss_g.dll`, `sl.reflex.dll`,
+`sl.pcl.dll`, `nvngx_dlssg.dll`, `NvLowLatencyVk.dll` and the Streamline
+headers (fetched by `tools/fetch_sdks.py` from NVIDIA-RTX/Streamline v2.14.16;
+not stored in this repository and not covered by this project's MIT licence)
+
+- Streamline: MIT, Copyright (c) 2022-2023 NVIDIA CORPORATION
+  (`NVIDIA_Streamline_LICENSE.txt`).
+- DLSS Frame Generation (`nvngx_dlssg.dll`): NVIDIA RTX SDKs licence
+  (`NVIDIA_DLSS_LICENSE.txt`). Licensed for systems with NVIDIA GPUs only; the
+  game loads it only there.
+- Reflex (`NvLowLatencyVk.dll`): NVIDIA SDK licence with the Reflex supplement
+  (`NVIDIA_Reflex_LICENSE.txt`).
+
+The NVIDIA licences add conditions for distributing a game that includes these
+files (notifying NVIDIA before a commercial release, NVIDIA marks on splash /
+about / credits screens with NVIDIA's approval, an "NVIDIA Reflex" reference in
+the UI). `tools/package.sh` therefore leaves them out of release zips unless
+`WEXYRON_SHIP_NVIDIA=1` is set.
+
 ## MinGW-w64 runtime libraries
 
 Location: `libgcc_s_seh-1.dll`, `libstdc++-6.dll`, `libwinpthread-1.dll` in

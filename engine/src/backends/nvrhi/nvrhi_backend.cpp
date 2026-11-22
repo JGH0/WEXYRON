@@ -194,6 +194,9 @@ public:
         frameStarted_ = false;
     }
     void setVsync(bool enabled) override { if (manager_) manager_->setVsync(enabled); }
+    void beginSimulation() override {
+        if (manager_) manager_->beginSimulation();
+    }
     void setFrameGeneration(const FrameGenSettings& settings) override {
         if (manager_) manager_->setFrameGeneration(settings);
     }
@@ -266,6 +269,7 @@ private:
     // History for motion vectors.
     bool hasHistory_ = false;
     glm::mat4 prevWorldViewProjection_{1.0f};
+    glm::mat4 prevWorldView_{1.0f}, prevWorldProjection_{1.0f};   ///< for vendor frame generation
     glm::mat4 prevViewmodelViewProjection_{1.0f};
     uint64_t frameIndex_ = 0;
     std::unordered_map<const GltfInstance*, PrevPose> prevPoses_;
@@ -787,9 +791,11 @@ void NvrhiRenderBackend::renderFrame(const FramePacket& frame) {
     }
 
     // ── Vendor frame generation inputs ──
-    if (vendorComposesUi) {
-        cl_->setTextureState(depth_, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
-        cl_->setTextureState(motion_, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
+    // Read by the vendor code during this frame's present (possibly on
+    // another queue): shader-read state, not touched again until next frame.
+    if (manager_->frameGenerationWantsInputs()) {
+        for (nvrhi::ITexture* t : {depth_.Get(), motion_.Get(), ui_.Get(), sceneColor_.Get()})
+            cl_->setTextureState(t, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
         cl_->commitBarriers();
 
         FrameGenFrame fg;
@@ -797,10 +803,16 @@ void NvrhiRenderBackend::renderFrame(const FramePacket& frame) {
         fg.depth = depth_;
         fg.motion = motion_;
         fg.ui = ui_;
+        fg.sceneColor = sceneColor_;
         fg.width = manager_->width();
         fg.height = manager_->height();
         fg.frameTimeMs = frame.frameTime > 0.0f ? frame.frameTime * 1000.0f : 16.6f;
         fg.reset = cut || !frame.has3D;
+        fg.inMenu = !frame.has3D;
+        fg.view = frame.worldView;
+        fg.projection = frame.worldProjection;
+        fg.prevView = cut ? frame.worldView : prevWorldView_;
+        fg.prevProjection = cut ? frame.worldProjection : prevWorldProjection_;
         // GL-style perspective: P[1][1] = 1/tan(fov/2); near/far from P[2][2], P[3][2].
         const glm::mat4& P = frame.worldProjection;
         if (frame.has3D && P[1][1] != 0.0f) {
@@ -820,6 +832,8 @@ void NvrhiRenderBackend::renderFrame(const FramePacket& frame) {
     // History for the next frame (glTF instances not drawn this frame drop out).
     hasHistory_ = frame.has3D;
     prevWorldViewProjection_ = frame.worldViewProjection;
+    prevWorldView_ = frame.worldView;
+    prevWorldProjection_ = frame.worldProjection;
     prevViewmodelViewProjection_ = frame.viewmodelViewProjection;
     for (auto it = prevPoses_.begin(); it != prevPoses_.end();) {
         it = (it->second.frame == frameIndex_) ? std::next(it) : prevPoses_.erase(it);

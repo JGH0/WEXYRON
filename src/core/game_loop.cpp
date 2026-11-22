@@ -199,6 +199,10 @@ void Game::frameWait() {
     }
 }
 
+void Game::beginFrame() {
+    renderer.beginSimulation();
+}
+
 void Game::endFrame(float deltaTime) {
     fpsFrameCount++;
     fpsTimer += deltaTime;

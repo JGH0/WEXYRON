@@ -166,6 +166,10 @@ public:
     /// Wait for vertical blank when presenting (true) or present immediately.
     virtual void setVsync(bool enabled) = 0;
 
+    /// A new frame starts (before input and the game update): latency
+    /// markers and the low-latency sleep (NVIDIA Reflex) where supported.
+    virtual void beginSimulation() {}
+
     /// Frame generation request; backends that cannot do it ignore it.
     virtual void setFrameGeneration(const FrameGenSettings& settings) { (void)settings; }
     virtual FrameGenStatus frameGenerationStatus() const {
