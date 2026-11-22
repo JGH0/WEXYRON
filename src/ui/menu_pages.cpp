@@ -125,6 +125,22 @@ void appendSettingRows(Page& page, const std::vector<settings::SettingDef>& defs
             case settings::ValueType::Key:
                 break;   // rebinding happens on the controls page
         }
+
+        if (v.type == settings::ValueType::Key) continue;
+        Row& row = page.rows.back();
+        row.id = static_cast<int>(index);   // registry index (see refresh rows)
+        if (options.rowEnabled) row.enabled = options.rowEnabled(def);
+        if (options.rowHelp) {
+            const std::string help = options.rowHelp(def);
+            if (!help.empty()) row.help = help;
+        }
+        if (row.kind == RowKind::Cycle && options.optionEnabled) {
+            row.optionEnabled.assign(row.options.size(), true);
+            for (size_t option = 0; option < row.options.size(); ++option) {
+                row.optionEnabled[option] =
+                    options.optionEnabled(def, static_cast<int>(option));
+            }
+        }
     }
     closeGroup();
 }
@@ -138,9 +154,13 @@ Page buildSettingsPage(const std::vector<settings::SettingDef>& defs,
 }
 
 Page buildFrameGenPage(const std::vector<settings::SettingDef>& defs,
-                       std::function<void()> onChanged) {
+                       std::function<void()> onChanged,
+                       const SettingRowsOptions& options) {
     Page page(settings::kFrameGenGroup, "CHANGES ARE SAVED AUTOMATICALLY");
-    appendSettingRows(page, defs, onChanged, std::string(settings::kFrameGenGroup));
+    SettingRowsOptions groupOptions = options;
+    groupOptions.onlyGroup = settings::kFrameGenGroup;
+    groupOptions.skipGroups.clear();
+    appendSettingRows(page, defs, onChanged, groupOptions);
     return page;
 }
 

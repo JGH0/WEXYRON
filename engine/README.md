@@ -17,6 +17,7 @@ engine/
 │   ├── camera.hpp
 │   ├── font_atlas.hpp
 │   ├── gltf_model.hpp
+│   ├── graphics_capabilities.hpp  OS/GPU support probe (renderer + frame gen)
 │   ├── map.hpp
 │   ├── map_loader.hpp
 │   ├── render_backend.hpp   API-neutral renderer <-> backend interface
@@ -102,9 +103,13 @@ and glTF draws into a `FramePacket` and hands it to an `IRenderBackend`
 - **Fallback:** if Vulkan is selected but unusable (no driver, too old, a Mac
   without MoltenVK, or a build without the submodules), the game logs why and
   starts with OpenGL. Nothing links against the Vulkan loader; GLFW loads it.
+  The RENDERER row is then greyed out (and the VIDEO page says why) so an
+  unsupported choice cannot turn into a restart that changes nothing.
 - **Building:** the Vulkan backend needs the `third_party/nvrhi` and
   `third_party/vulkan-headers` submodules (`git submodule update --init`). The
-  Makefiles and CMake detect them and otherwise build OpenGL-only.
+  Makefiles detect them and otherwise build OpenGL-only; a configuration stamp
+  also recompiles the backend objects when the submodules appear later.
+  CMake needs a re-run after initializing the submodules.
 - **Shaders:** the Vulkan shaders are HLSL in `engine/shaders/`, compiled to
   SPIR-V headers (`src/backends/nvrhi/shaders/`, committed) by
   `python tools/compile_shaders.py` (needs `dxc` from the Vulkan SDK). Keep

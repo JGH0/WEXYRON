@@ -73,6 +73,17 @@ struct Row {
     // Cycle
     std::vector<std::string> options;
     int optionIndex = 0;
+    /// Parallel to `options`; false options are greyed out and skipped when
+    /// cycling. Empty means every option is available.
+    std::vector<bool> optionEnabled;
+
+    /// Whether option `index` may be selected.
+    bool isOptionEnabled(int index) const {
+        return index < 0 || index >= static_cast<int>(optionEnabled.size()) ||
+               optionEnabled[static_cast<size_t>(index)];
+    }
+    /// Whether the value currently shown is available on this machine.
+    bool currentOptionEnabled() const { return isOptionEnabled(optionIndex); }
 
     // Keybind (kind == Keybind). `code` is a GLFW key or mouse binding
     // (see settings::bindingName); `isDefault` only drives the hint.
@@ -102,9 +113,17 @@ struct Row {
     void cycleValue(int direction) {
         if (options.empty()) return;
         const int count = static_cast<int>(options.size());
-        optionIndex = ((optionIndex + (direction >= 0 ? 1 : -1)) % count + count) % count;
-        value = options[optionIndex];
-        if (onCycle) onCycle(optionIndex);
+        const int step = direction >= 0 ? 1 : -1;
+        // Skip options this machine cannot run (e.g. DLSS on Linux); when the
+        // current option is unavailable, the first enabled one is chosen.
+        for (int offset = 1; offset <= count; ++offset) {
+            const int candidate = ((optionIndex + step * offset) % count + count) % count;
+            if (candidate == optionIndex || !isOptionEnabled(candidate)) continue;
+            optionIndex = candidate;
+            value = options[optionIndex];
+            if (onCycle) onCycle(optionIndex);
+            return;
+        }
     }
     void setBinding(int newCode) {
         if (newCode < 0) return;

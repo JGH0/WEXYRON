@@ -34,6 +34,19 @@ int main() {
     Game game(800, 600);
     game.init();
 
+    // Cycle rows skip options the platform cannot run (greyed-out entries).
+    {
+        menu::Row row = menu::cycle("TEST", {"A", "B", "C"}, 0, nullptr);
+        row.optionEnabled = {true, false, true};
+        row.cycleValue(+1);
+        CHECK(row.optionIndex == 2);
+        row.cycleValue(+1);
+        CHECK(row.optionIndex == 0);
+        row.optionIndex = 1;   // a saved value that is unavailable
+        row.cycleValue(-1);
+        CHECK(row.optionIndex == 0);
+    }
+
     // Regression: the main menu must exist as soon as init() is done. A menu
     // state without a page draws an empty screen (the "blank screen" bug).
     CHECK(game.debugMainMenuReady());

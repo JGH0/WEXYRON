@@ -23,6 +23,7 @@
 #include "game.hpp"
 #include "brand.hpp"
 #include "discord_presence.hpp"
+#include "engine/graphics_capabilities.hpp"
 #include "../ui/ui_helpers.hpp"
 #include <iostream>
 #include <algorithm>
@@ -229,6 +230,143 @@ std::string activeRenderApiName(const Renderer& renderer) {
     }
     return api;
 }
+
+/// Graphics card the running renderer uses (for the status rows).
+std::string activeGpuName(const Renderer& renderer) {
+    if (const IRenderBackend* backend = renderer.backend()) return backend->describe().renderer;
+    return graphicsCapabilities().primaryGpu;
+}
+} // namespace
+
+namespace {
+/// Frame-generation technology AUTO would pick right now (OFF if none).
+int effectiveFrameGenMode(const settings::GameSettings& s) {
+    if (s.frameGen != settings::FRAMEGEN_AUTO) return s.frameGen;
+    const GraphicsCapabilities& caps = graphicsCapabilities();
+    if (caps.frameGenDlss) return settings::FRAMEGEN_DLSS;
+    if (caps.frameGenFsr) return settings::FRAMEGEN_FSR;
+    if (caps.frameGenXess) return settings::FRAMEGEN_XESS;
+    return settings::FRAMEGEN_OFF;
+}
+
+bool frameGenModeSupported(int mode) {
+    const GraphicsCapabilities& caps = graphicsCapabilities();
+    switch (mode) {
+        case settings::FRAMEGEN_OFF:  return true;
+        case settings::FRAMEGEN_AUTO: return caps.frameGenAuto();
+        case settings::FRAMEGEN_FSR:  return caps.frameGenFsr;
+        case settings::FRAMEGEN_DLSS: return caps.frameGenDlss;
+        case settings::FRAMEGEN_XESS: return caps.frameGenXess;
+        default:                      return false;
+    }
+}
+
+/// Generated frames per rendered frame this technology can reach (1 = 2X).
+int maxGeneratedFrames(int mode) {
+    const GraphicsCapabilities& caps = graphicsCapabilities();
+    switch (mode) {
+        case settings::FRAMEGEN_DLSS: return caps.frameGenDlss ? (caps.dlssMultiFrame ? 3 : 1) : 0;
+        case settings::FRAMEGEN_FSR:  return caps.frameGenFsr ? 1 : 0;
+        case settings::FRAMEGEN_XESS: return caps.frameGenXess ? 2 : 0;
+        default:                      return 0;   // OFF / AUTO without a technology
+    }
+}
+
+bool lowLatencySupported(int mode) {
+    const GraphicsCapabilities& caps = graphicsCapabilities();
+    switch (mode) {
+        case settings::FRAMEGEN_DLSS: return caps.frameGenDlss;   // Reflex is part of DLSS-G
+        case settings::FRAMEGEN_FSR:  return caps.frameGenFsr && caps.hasAmd;  // Anti-Lag 2
+        default:                      return false;
+    }
+}
+
+std::string frameGenModeNote(int mode) {
+    const GraphicsCapabilities& caps = graphicsCapabilities();
+    switch (mode) {
+        case settings::FRAMEGEN_FSR:  return caps.fsrNote;
+        case settings::FRAMEGEN_DLSS: return caps.dlssNote;
+        case settings::FRAMEGEN_XESS: return caps.xessNote;
+        case settings::FRAMEGEN_AUTO:
+            return caps.frameGenAvailable() ? std::string() : "No frame generation technology is supported here";
+        default: return std::string();
+    }
+}
+
+bool settingRowEnabled(const settings::SettingDef& def, const settings::GameSettings& s) {
+    const int tech = effectiveFrameGenMode(s);
+    if (def.key == "frame_gen") {
+        // With nothing to choose (OFF only), grey the row out. A saved mode
+        // that this machine cannot run stays selectable so it can be turned off.
+        return graphicsCapabilities().frameGenAvailable() ||
+               !frameGenModeSupported(s.frameGen);
+    }
+    if (def.key == "frame_gen_output")
+        return tech != settings::FRAMEGEN_OFF && frameGenModeSupported(tech);
+    if (def.key == "frame_gen_low_latency")
+        return tech != settings::FRAMEGEN_OFF && frameGenModeSupported(tech) && lowLatencySupported(tech);
+    return true;
+}
+
+bool settingOptionEnabled(const settings::SettingDef& def, int index,
+                          const settings::GameSettings& s) {
+    if (def.key == "render_api") {
+        if (index == settings::RENDER_API_VULKAN) return graphicsCapabilities().vulkanAvailable;
+        return true;
+    }
+    if (def.key == "frame_gen") return frameGenModeSupported(index);
+    if (def.key == "frame_gen_output") {
+        return index >= 0 && index + 1 <= maxGeneratedFrames(effectiveFrameGenMode(s));
+    }
+    return true;
+}
+
+std::string settingRowHelp(const settings::SettingDef& def, const settings::GameSettings& s) {
+    if (def.key == "render_api" && def.value->i == settings::RENDER_API_VULKAN &&
+        !graphicsCapabilities().vulkanAvailable) {
+        return "Vulkan is unavailable here: " + graphicsCapabilities().vulkanNote +
+               ". The game runs on OPENGL.";
+    }
+    if (def.key == "frame_gen") {
+        const std::string note = frameGenModeNote(def.value->i);
+        if (!note.empty()) return note;
+    }
+    return std::string();
+}
+
+/// Filters that grey out options this OS / GPU / build cannot run.
+menu::SettingRowsOptions settingRowsOptions(const settings::GameSettings& s) {
+    menu::SettingRowsOptions options;
+    options.rowEnabled = [&s](const settings::SettingDef& def) { return settingRowEnabled(def, s); };
+    options.optionEnabled = [&s](const settings::SettingDef& def, int index) {
+        return settingOptionEnabled(def, index, s);
+    };
+    options.rowHelp = [&s](const settings::SettingDef& def) { return settingRowHelp(def, s); };
+    return options;
+}
+
+/// Re-evaluate the FRAME GENERATION rows after MODE changed (the page is kept
+/// alive while the menu is open, so its enabled flags must follow the values).
+void refreshFrameGenRows(menu::Page& page, const std::vector<settings::SettingDef>& defs,
+                        const settings::GameSettings& s) {
+    for (menu::Row& row : page.rows) {
+        if (row.kind == menu::RowKind::Separator || row.kind == menu::RowKind::Info) continue;
+        if (row.id < 0 || row.id >= static_cast<int>(defs.size())) continue;
+        const settings::SettingDef& def = defs[static_cast<size_t>(row.id)];
+        if (def.group != settings::kFrameGenGroup) continue;
+        row.enabled = settingRowEnabled(def, s);
+        if (row.kind == menu::RowKind::Cycle) {
+            row.optionEnabled.assign(row.options.size(), true);
+            for (size_t option = 0; option < row.options.size(); ++option) {
+                row.optionEnabled[option] =
+                    settingOptionEnabled(def, static_cast<int>(option), s);
+            }
+        }
+        row.help = def.help;
+        const std::string help = settingRowHelp(def, s);
+        if (!help.empty()) row.help = help;
+    }
+}
 } // namespace
 
 namespace {
@@ -273,14 +411,34 @@ void Game::openSettings() {
 }
 
 void Game::openSettingsGroup(const std::string& group) {
-    menu::SettingRowsOptions options;
+    menu::SettingRowsOptions options = settingRowsOptions(gameSettings_);
     options.onlyGroup = group;
     options.afterGroup = [this](menu::Page& page, const std::string& done) {
         if (done != "VIDEO") return;
+        const GraphicsCapabilities& caps = graphicsCapabilities();
         page.add(menu::info("ACTIVE RENDERER", activeRenderApiName(renderer),
                             "Running now; a RENDERER change applies after a restart"));
+        page.add(menu::info("GPU", activeGpuName(renderer),
+                            "Graphics card used by the running renderer"));
+        const std::string activeApi = activeRenderApiName(renderer);
+        if (!caps.vulkanAvailable) {
+            page.add(menu::info("VULKAN", "UNAVAILABLE", caps.vulkanNote));
+        } else if (vulkanFallback_) {
+            page.add(menu::info("VULKAN", "FAILED",
+                                "Vulkan is available but could not start; the game is running on OPENGL"));
+        } else {
+            const bool selectedVulkan = gameSettings_.renderApi == settings::RENDER_API_VULKAN;
+            if (selectedVulkan != (activeApi == "VULKAN")) {
+                page.add(menu::info("VULKAN", "RESTART",
+                                    "The RENDERER change applies after restarting the game"));
+            }
+        }
         page.add(menu::action(settings::kFrameGenGroup, [this]() { openFrameGenSettings(); },
                               "DLSS, FSR and XESS frame generation options"));
+        if (!caps.frameGenAvailable()) {
+            page.rows.back().value = "NOT SUPPORTED";
+            page.rows.back().help = "No frame generation technology runs on this OS and GPU";
+        }
     };
     menu::Page page(group, "CHANGES ARE SAVED AUTOMATICALLY");
     menu::appendSettingRows(page, settingDefs_, [this]() { onSettingRowChanged(); }, options);
@@ -291,16 +449,20 @@ void Game::openSettingsGroup(const std::string& group) {
 
 void Game::refreshFrameGenStatus() {
     // A MODE change takes effect with the next frame (FSR swaps the
-    // swapchain), so the ACTIVE row is refreshed every frame while visible.
+    // swapchain), so the ACTIVE row and the enabled options are refreshed
+    // every frame while visible.
     menu::Page* page = settingsMenu_.stack.current();
     if (!page || page->title != settings::kFrameGenGroup) return;
+    refreshFrameGenRows(*page, settingDefs_, gameSettings_);
     const FrameGenStatus status = renderer.frameGenerationStatus();
     std::string active = status.active.empty() ? std::string("OFF") : status.active;
     for (char& c : active) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
     for (menu::Row& row : page->rows) {
         if (row.kind != menu::RowKind::Info || row.label != "ACTIVE") continue;
         row.value = active;
-        row.help = status.note.empty() ? std::string("Frame generation running now") : status.note;
+        row.help = !status.note.empty() ? status.note
+                 : (active == "OFF" ? std::string("Frame generation is off")
+                                    : std::string("Frame generation running now"));
     }
 }
 
@@ -315,12 +477,35 @@ void Game::openControlsSettings() {
 }
 
 void Game::openFrameGenSettings() {
-    menu::Page page = menu::buildFrameGenPage(settingDefs_, [this]() { onSettingRowChanged(); });
+    const GraphicsCapabilities& caps = graphicsCapabilities();
+    menu::Page page = menu::buildFrameGenPage(settingDefs_,
+                                              [this]() { onSettingRowChanged(); },
+                                              settingRowsOptions(gameSettings_));
 
     // What runs right now and, when nothing does, why (renderer, GPU, files).
     const std::string api = activeRenderApiName(renderer);
+    std::string supported;
+    auto addSupported = [&supported](const char* name) {
+        if (!supported.empty()) supported += " + ";
+        supported += name;
+    };
+    if (caps.frameGenDlss) addSupported("DLSS");
+    if (caps.frameGenFsr) addSupported("FSR");
+    if (caps.frameGenXess) addSupported("XESS");
+    if (supported.empty()) supported = "NONE";
+
     page.add(menu::separator("STATUS"));
     page.add(menu::info("RENDERER", api, "Graphics API the game is running on"));
+    page.add(menu::info("GPU", activeGpuName(renderer),
+                        "Graphics card used by the running renderer"));
+    page.add(menu::info("PLATFORM", caps.os,
+                        "Frame generation support depends on the OS and GPU"));
+    page.add(menu::info("SUPPORT", supported,
+                        supported == "NONE"
+                            ? "No frame generation technology is available on this system"
+                            : "Technologies this OS and GPU can run"));
+    page.add(menu::info("VULKAN", caps.vulkanAvailable ? "AVAILABLE" : "UNAVAILABLE",
+                        caps.vulkanNote));
     page.add(menu::info("ACTIVE", "", ""));   // filled by refreshFrameGenStatus()
 
     menu::push(settingsMenu_, std::move(page));

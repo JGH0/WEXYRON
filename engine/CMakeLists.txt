@@ -12,6 +12,7 @@ add_library(cube_engine STATIC
     src/map_loader.cpp
     src/renderer.cpp
     src/render_window.cpp
+    src/graphics_capabilities.cpp
     src/backends/gl/gl_backend.cpp
     src/backends/nvrhi/nvrhi_backend.cpp
     src/backends/nvrhi/vulkan_device.cpp

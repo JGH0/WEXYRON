@@ -4,7 +4,7 @@
  *
  * The engine contains only game-agnostic code:
  *   - rendering: Renderer (+ IRenderBackend), window creation, glTF models,
- *     Shader (GL backend), Texture (decoded images)
+ *     Shader (GL backend), Texture (decoded images), graphics capabilities
  *   - scene/math: Camera
  *   - world: Map, MapLoader
  *   - utilities: ThreadPool, FontAtlas
@@ -22,6 +22,7 @@
 #include "engine/camera.hpp"
 #include "engine/font_atlas.hpp"
 #include "engine/gltf_model.hpp"
+#include "engine/graphics_capabilities.hpp"
 #include "engine/map.hpp"
 #include "engine/map_loader.hpp"
 #include "engine/render_backend.hpp"

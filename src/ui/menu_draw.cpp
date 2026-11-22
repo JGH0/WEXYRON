@@ -377,7 +377,8 @@ void draw(MenuView& view, Renderer& r, GLFWwindow* window) {
                  glm::vec3(1.0f));
         }
 
-        const glm::vec3 labelInk = isSelected ? t.selectionInk : (row.enabled ? t.label : t.off);
+        const bool rowSupported = row.enabled && row.currentOptionEnabled();
+        const glm::vec3 labelInk = isSelected ? t.selectionInk : (rowSupported ? t.label : t.off);
         const float textY = centredTextY(y0, y0 + m.rowHeight, m.textScale);
         float valueLeft = rowX1 - 14.0f;
 
@@ -409,7 +410,7 @@ void draw(MenuView& view, Renderer& r, GLFWwindow* window) {
             if (row.kind == RowKind::Toggle) valueInk = row.on ? t.on : t.off;
             if (row.kind == RowKind::Info) valueInk = t.label;
             if (isSelected) valueInk = t.selectionInk;
-            if (!row.enabled) valueInk = t.off;
+            if (!row.enabled || !row.currentOptionEnabled()) valueInk = t.off;
             const float vw = r.getTextWidth(row.value, m.valueScale);
             textRight(r, row.value, rowX1 - 14.0f, textY, m.valueScale, valueInk,
                       rowX1 - rowX0 - 40.0f);

@@ -520,6 +520,9 @@ private:
     Camera camera;
     /// Renderer for drawing objects
     Renderer renderer;
+    /// True when this launch requested Vulkan but had to fall back to OpenGL
+    /// (shown on VIDEO so a restart that changed nothing is explained).
+    bool vulkanFallback_ = false;
     
     // New weapon system
     Weapon* currentWeaponInstance;

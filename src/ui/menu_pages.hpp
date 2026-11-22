@@ -25,6 +25,12 @@ struct SettingRowsOptions {
     std::vector<std::string> skipGroups;  ///< groups that live on their own page
     /// Called after the last row of each group (e.g. to add a submenu link).
     std::function<void(Page&, const std::string& group)> afterGroup;
+    /// Optional platform filter: false greys the row out and skips it.
+    std::function<bool(const settings::SettingDef&)> rowEnabled;
+    /// Optional per-option filter for Cycle rows (false options are skipped).
+    std::function<bool(const settings::SettingDef&, int optionIndex)> optionEnabled;
+    /// Optional help override (e.g. why the current value is unavailable).
+    std::function<std::string(const settings::SettingDef&)> rowHelp;
 };
 
 /// Settings screen: one row per setting the registry describes, grouped by
@@ -36,7 +42,8 @@ Page buildSettingsPage(const std::vector<settings::SettingDef>& defs,
 
 /// FRAME GENERATION sub-screen: the rows of settings::kFrameGenGroup.
 Page buildFrameGenPage(const std::vector<settings::SettingDef>& defs,
-                       std::function<void()> onChanged = nullptr);
+                       std::function<void()> onChanged = nullptr,
+                       const SettingRowsOptions& options = SettingRowsOptions());
 
 /// Only the VIDEO group (for a future "video" sub-screen).
 Page buildVideoGroupPage(const std::vector<settings::SettingDef>& defs,

@@ -47,6 +47,12 @@ NVRHI_SOURCES = $(filter-out %/dxgi-format.cpp,$(wildcard $(NVRHI_DIR)/src/commo
                 $(NVRHI_DIR)/src/vulkan/*.cpp $(NVRHI_DIR)/src/validation/*.cpp))
 endif
 NVRHI_OBJECTS = $(patsubst $(NVRHI_DIR)/src/%.cpp,$(BUILD_DIR)/nvrhi/%.o,$(NVRHI_SOURCES))
+# Presence of the submodules changes CXXFLAGS, not the sources. Make does not
+# notice that by itself: after `git submodule update --init` an existing build
+# kept the OpenGL-only objects (so selecting VULKAN silently did nothing).
+# This stamp forces a rebuild whenever the backend configuration changes.
+CONFIG_STAMP = $(BUILD_DIR)/build-config.stamp
+CONFIG_KEY = vulkan=$(if $(findstring -DCUBE_WITH_VULKAN,$(CXXFLAGS)),on,off)
 # Third-party code: optimised, warnings off (not ours to fix).
 NVRHI_CXXFLAGS = -std=c++17 -O2 -w -I$(NVRHI_DIR)/include -I$(VULKAN_HEADERS_DIR)/include \
                  -DNVRHI_WITH_AFTERMATH=0
@@ -90,7 +96,7 @@ GAME_BOT_SOURCES = $(GAME_DIR)/bot.cpp
 LOCAL_BOT_SOURCES = $(GAME_DIR)/local_bots.cpp
 SERVER_BOT_SOURCES = $(NETWORK_DIR)/server_bots.cpp $(NETWORK_DIR)/server_bomb.cpp
 UI_SOURCES = $(UI_DIR)/menu_core.cpp $(UI_DIR)/menu_draw.cpp $(UI_DIR)/menu_input.cpp $(UI_DIR)/menu_pages.cpp
-ENGINE_LIB_SOURCES = $(ENGINE_SRC_DIR)/audio_manager.cpp $(ENGINE_SRC_DIR)/camera.cpp $(ENGINE_SRC_DIR)/gltf_model.cpp $(ENGINE_SRC_DIR)/map.cpp $(ENGINE_SRC_DIR)/map_loader.cpp $(ENGINE_SRC_DIR)/renderer.cpp $(ENGINE_SRC_DIR)/render_window.cpp $(ENGINE_SRC_DIR)/backends/gl/gl_backend.cpp $(ENGINE_SRC_DIR)/backends/nvrhi/nvrhi_backend.cpp $(ENGINE_SRC_DIR)/backends/nvrhi/vulkan_device.cpp $(ENGINE_SRC_DIR)/backends/nvrhi/fsr_vulkan.cpp $(ENGINE_SRC_DIR)/backends/nvrhi/streamline_vulkan.cpp $(ENGINE_SRC_DIR)/shader.cpp $(ENGINE_SRC_DIR)/texture.cpp
+ENGINE_LIB_SOURCES = $(ENGINE_SRC_DIR)/audio_manager.cpp $(ENGINE_SRC_DIR)/camera.cpp $(ENGINE_SRC_DIR)/gltf_model.cpp $(ENGINE_SRC_DIR)/map.cpp $(ENGINE_SRC_DIR)/map_loader.cpp $(ENGINE_SRC_DIR)/renderer.cpp $(ENGINE_SRC_DIR)/render_window.cpp $(ENGINE_SRC_DIR)/graphics_capabilities.cpp $(ENGINE_SRC_DIR)/backends/gl/gl_backend.cpp $(ENGINE_SRC_DIR)/backends/nvrhi/nvrhi_backend.cpp $(ENGINE_SRC_DIR)/backends/nvrhi/vulkan_device.cpp $(ENGINE_SRC_DIR)/backends/nvrhi/fsr_vulkan.cpp $(ENGINE_SRC_DIR)/backends/nvrhi/streamline_vulkan.cpp $(ENGINE_SRC_DIR)/shader.cpp $(ENGINE_SRC_DIR)/texture.cpp
 MINIAUDIO_SOURCES = third_party/miniaudio/miniaudio.c
 MAIN_SOURCES = $(SRC_DIR)/main.cpp
 SERVER_SOURCES = server_main.cpp $(NETWORK_SOURCES) $(GAME_BOT_SOURCES) $(SERVER_BOT_SOURCES)
@@ -152,17 +158,18 @@ $(BIN_DIR)/%_test: tests/%_test.cpp $(GAME_TEST_OBJECTS) $(ENGINE_LIB) | $(BIN_D
 
 # Reusable engine library
 $(ENGINE_LIB): $(ENGINE_LIB_OBJECTS) | $(LIB_DIR)
+	rm -f $@
 	ar rcs $@ $(ENGINE_LIB_OBJECTS)
 
-$(BUILD_DIR)/engine_lib/%.o: $(ENGINE_SRC_DIR)/%.cpp | $(BUILD_DIR)/engine_lib
+$(BUILD_DIR)/engine_lib/%.o: $(ENGINE_SRC_DIR)/%.cpp $(CONFIG_STAMP) | $(BUILD_DIR)/engine_lib
 	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
 
 # Render backends (object names are flattened like the other engine sources)
-$(BUILD_DIR)/engine_lib/%.o: $(ENGINE_SRC_DIR)/backends/gl/%.cpp | $(BUILD_DIR)/engine_lib
+$(BUILD_DIR)/engine_lib/%.o: $(ENGINE_SRC_DIR)/backends/gl/%.cpp $(CONFIG_STAMP) | $(BUILD_DIR)/engine_lib
 	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
 
 # Vulkan backend sources (compiled empty when the submodules are missing)
-$(BUILD_DIR)/engine_lib/%.o: $(ENGINE_SRC_DIR)/backends/nvrhi/%.cpp | $(BUILD_DIR)/engine_lib
+$(BUILD_DIR)/engine_lib/%.o: $(ENGINE_SRC_DIR)/backends/nvrhi/%.cpp $(CONFIG_STAMP) | $(BUILD_DIR)/engine_lib
 	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
 
 # NVRHI (third_party/nvrhi), Vulkan backend only
@@ -207,6 +214,16 @@ $(BUILD_DIR)/main.o: $(SRC_DIR)/main.cpp | $(BUILD_DIR)
 # Server main object file
 $(BUILD_DIR)/server_main.o: server_main.cpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
+
+# Build configuration stamp: rewrites itself only when the Vulkan/FSR/
+# Streamline availability changes, so the objects built with the old flags are
+# recompiled (see CONFIG_KEY above).
+.PHONY: FORCE
+FORCE:
+
+$(CONFIG_STAMP): FORCE | $(BUILD_DIR)
+	@printf '%s\n' '$(CONFIG_KEY)' > $@.tmp
+	@if cmp -s $@.tmp $@; then rm -f $@.tmp; else mv $@.tmp $@; fi
 
 # Create directories
 $(BUILD_DIR):

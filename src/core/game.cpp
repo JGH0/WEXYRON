@@ -477,6 +477,7 @@ Game::Game(int width, int height)
     if (wantVulkan) {
         if (!vulkanBackendCompiledIn()) {
             std::cerr << "Vulkan renderer not part of this build - using OpenGL" << std::endl;
+            vulkanFallback_ = true;
         } else if ((window = createRenderWindow(RenderApi::Vulkan, width, height, brand::kFullName))) {
             std::unique_ptr<IRenderBackend> vulkan = createVulkanRenderBackend(window);
             if (vulkan && vulkan->init()) {
@@ -485,7 +486,10 @@ Game::Game(int width, int height)
                 if (vulkan) vulkan->shutdown();
                 glfwDestroyWindow(window);
                 window = nullptr;
+                vulkanFallback_ = true;
             }
+        } else {
+            vulkanFallback_ = true;
         }
         if (!window) std::cerr << "Vulkan renderer unavailable - falling back to OpenGL" << std::endl;
     }
