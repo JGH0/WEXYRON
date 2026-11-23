@@ -16,13 +16,16 @@ public:
         PUMP_SHOTGUN,
         SNIPER,
         GRENADE,
-        FLASHBANG
+        FLASHBANG,
+        KNIFE
     };
 
 protected:
     WeaponType type;
     float cooldown;
     int ammo;
+    /// Ammo a fresh round / respawn starts with (see refill()).
+    int initialAmmo;
     bool infiniteAmmo;
     float cooldownTimer;
 
@@ -38,8 +41,13 @@ public:
     WeaponType getType() const { return type; }
     float getCooldown() const { return cooldown; }
     int getAmmo() const { return ammo; }
+    int getInitialAmmo() const { return initialAmmo; }
     bool isInfiniteAmmo() const { return infiniteAmmo; }
     void setInfiniteAmmo(bool val) { infiniteAmmo = val; }
+    /// Restore the ammo a fresh round starts with.
+    void refill() { ammo = initialAmmo; }
+    /// Replace the current count (buying / resetting an owned grenade).
+    void setAmmo(int count) { ammo = count; }
     /// Force at least `seconds` of cycling before the next shot (bolt rack).
     void startCycle(float seconds) {
         if (seconds > cooldownTimer) cooldownTimer = seconds;
@@ -88,6 +96,19 @@ public:
 class Flashbang : public Weapon {
 public:
     Flashbang(int count = 2, bool infiniteAmmo = false);
+    void shoot(Game* game) override;
+};
+
+/**
+ * @brief Plain close-range knife (melee slot).
+ *
+ * The melee slot is meant to hold several purchasable melee weapons later;
+ * this is the always-owned starter knife.
+ */
+class Knife : public Weapon {
+public:
+    Knife();
+    bool canShoot() const override;
     void shoot(Game* game) override;
 };
 

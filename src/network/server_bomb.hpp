@@ -34,6 +34,8 @@ public:
         float explodeTime = 20.0f;
         /// Seconds to plant before the defenders win on time (CS-style).
         float roundTime = 115.0f;
+        /// Round-start freeze: movement is blocked and the buy window starts.
+        float freezeTime = 10.0f;
         /// Horizontal/vertical distance from the site/bomb that counts as
         /// "at" the objective. A little generous so bots standing on a nearby
         /// navigation node can use it.
@@ -61,6 +63,7 @@ public:
         float timeLeft = 0.0f;
         float roundTimeLeft = 0.0f;
         float roundAge = 0.0f;          ///< seconds since the round started
+        float freezeTime = 10.0f;       ///< round-start freeze duration
         bool matchOver = false;         ///< round target reached
         float plantProgress = 0.0f;
         float defuseProgress = 0.0f;
@@ -99,6 +102,10 @@ public:
     /// The server side uses this to revive the players and restart the bots
     /// for that map (unlike onRoundStart, the round is already reset here).
     std::function<void(const std::string& mapName, int gameMode)> onRoundRestart;
+
+    /// A round just produced a winner (255 = draw). Used by the server to pay
+    /// the round win / loss bonus into each player's economy.
+    std::function<void(const std::string& mapName, int winner)> onRoundFinished;
 
 private:
     struct MapState {
@@ -169,7 +176,8 @@ private:
     void explode(MapState& state, const std::string& mapName, NetworkServer& server);
 
     /// Finalise a round once (swap sides for the next round, mark dirty).
-    void finishRound(MapState& state, int winner, RoundEndReason reason);
+    void finishRound(MapState& state, int winner, RoundEndReason reason,
+                     const std::string& mapName);
     /// Check elimination / time win conditions for one map.
     void checkRoundOutcome(MapState& state, const std::string& mapName,
                            NetworkServer& server);

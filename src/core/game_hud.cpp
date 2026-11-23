@@ -338,13 +338,50 @@ void Game::renderGameHUD() {
               fillW, healthBarH - 4.0f, healthColor);
     }
 
+    // ── Economy / buy prompt (above the health panel) ───────────────────────
+    if (isEconomyMode() || armor_ > 0 || defuseKit_) {
+        const float moneyW = 220.0f, moneyH = 30.0f;
+        const float moneyX = left + 14.0f;
+        const float moneyY = healthY - moneyH - 6.0f;
+        panel(moneyX + moneyW * 0.5f, moneyY + moneyH * 0.5f, moneyW, moneyH, kPanel);
+        renderer.drawTextColored(isEconomyMode() ? "MONEY" : "LOADOUT",
+                                 moneyX + 10.0f, moneyY + 5.0f, 0.32f, kLabel);
+        if (isEconomyMode()) {
+            textRight("$" + std::to_string(money_), moneyX + moneyW - 10.0f,
+                      moneyY + 2.0f, 0.55f, kGreen);
+        } else {
+            textRight("FREE", moneyX + moneyW - 10.0f, moneyY + 2.0f, 0.55f, kGreen);
+        }
+        std::string gear = "ARMOR " + std::to_string(armor_);
+        if (defuseKit_) gear += "   KIT";
+        renderer.drawTextColored(gear, moneyX + 10.0f, moneyY + 18.0f, 0.26f, kGold);
+    }
+
+    // "PRESS B TO BUY" hint while the window is open.
+    if (canOpenBuyMenu()) {
+        const float shownLeft = isRoundFrozen() ? (freezeTime_ - roundAge_)
+                                                : buyTimeLeft_;
+        const int secondsLeft = static_cast<int>(std::max(0.0f, shownLeft) + 0.999f);
+        const std::string hint = isEconomyMode()
+            ? std::string(isRoundFrozen() ? "PRESS B TO BUY   FREEZE "
+                                          : "PRESS B TO BUY   ") +
+                  std::to_string(secondsLeft) + "S"
+            : "PRESS B TO BUY";
+        const float hintScale = 0.30f;
+        const float hintW = renderer.getTextWidth(hint, hintScale);
+        renderer.drawTextColored(hint, (left + right) * 0.5f - hintW * 0.5f,
+                                 bottom - 22.0f, hintScale, kGold);
+    }
+
     // ── Weapon + ammo (bottom-right) ────────────────────────────────────────
-    static const char* const kWeaponNames[5] = {"PISTOL", "SHOTGUN", "SNIPER", "GRENADE", "FLASHBANG"};
-    static const char* const kSlotNames[5]   = {"PISTOL", "SHOTGUN", "SNIPER", "GRENADE", "FLASH"};
-    const int weaponIndex = static_cast<int>(currentWeapon);
+    static const char* const kWeaponNames[6] = {"PISTOL", "SHOTGUN", "SNIPER",
+                                                "GRENADE", "FLASHBANG", "KNIFE"};
+    static const char* const kSlotNames[5]   = {"PRIMARY", "SIDEARM", "KNIFE",
+                                                "GRENADE", "FLASH"};
+    const int weaponIndex = glm::clamp(static_cast<int>(currentWeapon), 0, 5);
 
     // Three rows of two slots (the fifth slot sits alone in the last row).
-    const float weaponW = 250.0f, weaponH = 132.0f;
+    const float weaponW = 250.0f, weaponH = 152.0f;
     const float weaponX = right - weaponW - 14.0f;
     const float weaponY = bottom - weaponH - 14.0f;
     panel(weaponX + weaponW * 0.5f, weaponY + weaponH * 0.5f, weaponW, weaponH, kPanel);
@@ -354,7 +391,9 @@ void Game::renderGameHUD() {
                          weaponW - 24.0f, 0.46f);
 
     std::string ammoStr;
-    if (infiniteAmmoMode) {
+    if (weaponIndex == static_cast<int>(KNIFE)) {
+        ammoStr = "--";
+    } else if (infiniteAmmoMode) {
         ammoStr = "INF";
     } else if (weaponIndex == static_cast<int>(PISTOL) ||
                weaponIndex == static_cast<int>(PUMP_SHOTGUN) ||
@@ -366,14 +405,26 @@ void Game::renderGameHUD() {
     renderer.drawTextColored("AMMO", weaponX + 12.0f, weaponY + 33.0f, 0.32f, kLabel);
     textRight(ammoStr, weaponX + weaponW - 12.0f, weaponY + 23.0f, 0.90f, kGold);
 
-    // 2 x 3 weapon slots (the keys 1-5 work exactly like this list).
+    // 2 x 3 weapon slots (the keys 1-5 select this list; the primary key
+    // cycles between the owned shotgun / sniper).
+    const int selectedSlot =
+        (currentWeapon == PUMP_SHOTGUN || currentWeapon == SNIPER) ? 0 :
+        (currentWeapon == PISTOL)  ? 1 :
+        (currentWeapon == KNIFE)   ? 2 :
+        (currentWeapon == GRENADE) ? 3 : 4;
     for (int i = 0; i < 5; ++i) {
         const float slotW = 112.0f, slotH = 18.0f;
         const float slotX = weaponX + 10.0f + static_cast<float>(i % 2) * 116.0f;
         const float slotY = weaponY + 68.0f + static_cast<float>(i / 2) * 20.0f;
-        const bool selected = (i == weaponIndex);
+        const bool selected = (i == selectedSlot);
+        const bool owned =
+            (i == 0) ? (hasPrimaryShotgun_ || hasPrimarySniper_) :
+            (i == 1) ? true :
+            (i == 2) ? true :
+            (i == 3) ? hasHEGrenade_ : hasFlashbang_;
         panel(slotX + slotW * 0.5f, slotY + slotH * 0.5f, slotW, slotH,
-              selected ? glm::vec3(0.30f, 0.24f, 0.07f) : kPanelLine);
+              selected ? glm::vec3(0.30f, 0.24f, 0.07f)
+                       : (owned ? kPanelLine : glm::vec3(0.06f, 0.07f, 0.09f)));
         if (selected) {
             panel(slotX + 2.0f, slotY + slotH * 0.5f, 3.0f, slotH - 4.0f, kGold);
         }
@@ -532,6 +583,10 @@ void Game::updateWeaponViewmodel(float deltaTime) {
     if (weaponInspect_ > 0.0f) {
         weaponInspect_ = std::max(0.0f, weaponInspect_ - deltaTime);
     }
+    // Knife slash runs on its own clock as well.
+    if (knifeSwing_ > 0.0f) {
+        knifeSwing_ = std::max(0.0f, knifeSwing_ - deltaTime);
+    }
 
     // Walk bob follows the actual horizontal speed, and only while grounded.
     const float speed = std::sqrt(playerVelocity.x * playerVelocity.x +
@@ -592,13 +647,23 @@ void Game::renderWeaponViewmodel() {
     const float inspectEnv = std::sin(3.14159265358979f *
                                       glm::clamp(inspectP, 0.0f, 1.0f));
 
+    // Knife slash: a quick sweep across the view instead of the muzzle kick
+    // used by firearms. The envelope is zero at both ends, so the blade returns
+    // to the idle pose without snapping.
+    float knifeSlash = 0.0f;
+    if (currentWeapon == KNIFE && knifeSwing_ > 0.0f) {
+        const float p = glm::clamp(1.0f - knifeSwing_ / kKnifeSwingDuration, 0.0f, 1.0f);
+        knifeSlash = std::sin(3.14159265358979f * p);
+    }
+
     // The gun sits in the lower-right quadrant but above the weapon HUD panel,
     // so both stay readable. The slight inward yaw shows the side of the model
     // instead of looking straight down the barrel.
     const glm::vec3 base(
-        0.23f + bobX + weaponSwayX_ - inspectEnv * 0.175f,
-        -0.11f + bobY + weaponSwayY_ - weaponSwitch_ * 0.18f + inspectEnv * 0.075f,
-        -0.64f + weaponRecoil_ * 0.07f + inspectEnv * 0.075f);
+        0.23f + bobX + weaponSwayX_ - inspectEnv * 0.175f - knifeSlash * 0.02f,
+        -0.11f + bobY + weaponSwayY_ - weaponSwitch_ * 0.18f + inspectEnv * 0.075f
+            - knifeSlash * 0.13f,
+        -0.64f + weaponRecoil_ * 0.07f + inspectEnv * 0.075f - knifeSlash * 0.20f);
 
     glm::mat4 model = glm::translate(glm::mat4(1.0f), base);
     model = glm::rotate(model, glm::radians(18.0f + inspectEnv * 105.0f),
@@ -607,6 +672,16 @@ void Game::renderWeaponViewmodel() {
                         glm::vec3(1.0f, 0.0f, 0.0f));
     model = glm::rotate(model, glm::radians(weaponRecoil_ * 2.5f + inspectEnv * 20.0f),
                         glm::vec3(0.0f, 0.0f, 1.0f));
+    if (knifeSlash > 0.0f) {
+        // Forward-down chop: the blade pitches down and thrusts forward rather
+        // than sweeping sideways.
+        model = glm::rotate(model, glm::radians(-8.0f * knifeSlash),
+                            glm::vec3(0.0f, 1.0f, 0.0f));
+        model = glm::rotate(model, glm::radians(-80.0f * knifeSlash),
+                            glm::vec3(1.0f, 0.0f, 0.0f));
+        model = glm::rotate(model, glm::radians(12.0f * knifeSlash),
+                            glm::vec3(0.0f, 0.0f, 1.0f));
+    }
     // The model is authored roughly at world scale; shrink it as a whole so it
     // reads as a held first-person weapon instead of a wall-sized prop. It
     // grows slightly while being inspected so the details are readable.
@@ -789,6 +864,22 @@ void Game::renderWeaponViewmodel() {
             add(glm::vec3(0.075f, 0.062f, -0.060f), glm::vec3(0.013f, 0.013f, 0.055f),
                 glm::vec3(0.62f));
             addHands(false);
+            break;
+        }
+        case KNIFE: {
+            const glm::vec3 steel(0.62f, 0.65f, 0.70f);
+            const glm::vec3 edge(0.82f, 0.85f, 0.90f);
+            const glm::vec3 grip(0.12f, 0.11f, 0.10f);
+            // Blade: a flat, slightly tapered block pointing forward.
+            add(glm::vec3(0.0f, 0.020f, -0.34f), glm::vec3(0.022f, 0.075f, 0.42f), steel,
+                glm::vec3(0.0f, 0.0f, 2.0f));
+            add(glm::vec3(0.0f, 0.020f, -0.55f), glm::vec3(0.018f, 0.040f, 0.08f), edge);
+            // Guard + handle + pommel.
+            add(glm::vec3(0.0f, -0.005f, -0.12f), glm::vec3(0.110f, 0.022f, 0.035f), steel);
+            add(glm::vec3(0.0f, -0.010f, -0.02f), glm::vec3(0.055f, 0.060f, 0.20f), grip,
+                glm::vec3(0.0f, 0.0f, 0.0f));
+            add(glm::vec3(0.0f, -0.010f, 0.090f), glm::vec3(0.070f, 0.075f, 0.035f), steel);
+            // No hands/arms: the knife is just a blade and a handle.
             break;
         }
     }
@@ -1042,33 +1133,6 @@ void Game::renderBombDefusalHUD() {
     if (bomb.planted && !bomb.defused && bomb.active && !isDefusing && !isDead) {
         if (isNearBomb() && playerTeam != bomb.plantingTeam) {
             renderer.drawTextCentered("[E] Defuse Bomb", (left + right) * 0.5f, (top + bottom) * 0.5f + 40.0f, 0.7f);
-        }
-    }
-    
-    // ── Distance markers ──
-    {
-        // Show distance to nearest bomb site if not carrying bomb
-        if (!bomb.planted) {
-            float minDist = 999.0f;
-            int nearestSite = -1;
-            for (int i = 0; i < activeBombSites; i++) {
-                if (bombSites[i].active) {
-                    float d = glm::length(playerPos - bombSites[i].position);
-                    if (d < minDist) { minDist = d; nearestSite = i; }
-                }
-            }
-            if (nearestSite >= 0 && minDist > 5.0f && !isDead) {
-                char distStr[32];
-                snprintf(distStr, sizeof(distStr), "Site %c  %.0fm", bombSites[nearestSite].label, minDist);
-                renderer.drawText(distStr, left + 14.0f, bottom - 104.0f, 0.5f);
-            }
-        } else if (bomb.planted && !bomb.defused && bomb.active && !isDead) {
-            float dist = glm::length(playerPos - bomb.position);
-            if (dist > 3.0f) {
-                char bombDistStr[32];
-                snprintf(bombDistStr, sizeof(bombDistStr), "Bomb %.0fm", dist);
-                renderer.drawText(bombDistStr, left + 14.0f, bottom - 104.0f, 0.5f);
-            }
         }
     }
     

@@ -324,9 +324,11 @@ void ServerBotManager::tick(float deltaTime, NetworkServer& server) {
         const BombInfo bomb = bombInfoProvider_
                                   ? bombInfoProvider_(runtime.mapName)
                                   : BombInfo{};
-        // Round ended / intermission: freeze the bot completely. No movement,
-        // aiming, shooting or throwables until the next round starts.
-        if (targetMode == 2 && bomb.valid && !bomb.roundActive) {
+        // Round ended / intermission or round-start freeze: hold the bot
+        // completely. No movement, aiming, shooting or throwables until the
+        // freeze / next round releases it.
+        if (targetMode == 2 && bomb.valid &&
+            (!bomb.roundActive || bomb.movementFrozen)) {
             runtime.ai->idle(deltaTime, map);
             player->position = runtime.ai->position();
             player->velocity = runtime.ai->velocity();

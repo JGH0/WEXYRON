@@ -321,7 +321,9 @@ ServerPlayer* ServerBombManager::chooseActor(const MapState& state, NetworkServe
     return best;
 }
 
-void ServerBombManager::finishRound(MapState& state, int winner, RoundEndReason reason) {
+void ServerBombManager::finishRound(MapState& state, int winner,
+                                    RoundEndReason reason,
+                                    const std::string& mapName) {
     if (!state.roundActive) return;
 
     state.roundActive = false;
@@ -406,21 +408,21 @@ void ServerBombManager::checkRoundOutcome(MapState& state, const std::string& ma
     // All defenders dead: attackers win, with or without the bomb. The bomb
     // itself can still be defused only while a defender is alive.
     if (present[defenders] > 0 && alive[defenders] == 0) {
-        finishRound(state, attackers, ROUND_END_DEFENDERS_ELIMINATED);
+        finishRound(state, attackers, ROUND_END_DEFENDERS_ELIMINATED, mapName);
         return;
     }
 
     // All attackers dead ends the round only when the bomb is NOT planted:
     // after a plant the defenders still have to defuse it (CS rules).
     if (!state.planted && present[attackers] > 0 && alive[attackers] == 0) {
-        finishRound(state, defenders, ROUND_END_ATTACKERS_ELIMINATED);
+        finishRound(state, defenders, ROUND_END_ATTACKERS_ELIMINATED, mapName);
         return;
     }
 
     // Plant time expired: defenders win. Once the bomb is planted the fuse
     // replaces the round clock.
     if (!state.planted && state.roundTimeLeft <= 0.0f) {
-        finishRound(state, defenders, ROUND_END_TIME_EXPIRED);
+        finishRound(state, defenders, ROUND_END_TIME_EXPIRED, mapName);
     }
 }
 
@@ -453,7 +455,7 @@ void ServerBombManager::explode(MapState& state, const std::string& mapName,
 
     std::cout << "[Bomb] Exploded on team " << static_cast<int>(state.plantingTeam)
               << "'s site" << std::endl;
-    finishRound(state, state.plantingTeam, ROUND_END_BOMB_EXPLODED);
+    finishRound(state, state.plantingTeam, ROUND_END_BOMB_EXPLODED, mapName);
 }
 
 void ServerBombManager::update(float deltaTime, NetworkServer& server) {
@@ -552,7 +554,12 @@ void ServerBombManager::update(float deltaTime, NetworkServer& server) {
                     } else {
                         state.defuseActor = actor->id;
                         state.defuseProgress += deltaTime;
-                        if (state.defuseProgress >= config_.defuseTime) {
+                        // A defuse kit halves the time (humans only; bots never
+                        // own one). Keep the configured time as the base.
+                        const float defuseTime = (!actor->isBot && actor->defuseKit)
+                                                     ? config_.defuseTime * 0.5f
+                                                     : config_.defuseTime;
+                        if (state.defuseProgress >= defuseTime) {
                             state.defused = true;
                             state.defuseProgress = 0.0f;
                             state.defuseActor = 0;
@@ -562,7 +569,7 @@ void ServerBombManager::update(float deltaTime, NetworkServer& server) {
                                       << " (team " << static_cast<int>(actor->team)
                                       << ") on " << mapName << std::endl;
                             finishRound(state, 1 - state.plantingTeam,
-                                        ROUND_END_BOMB_DEFUSED);
+                                        ROUND_END_BOMB_DEFUSED, mapName);
                         }
                     }
                 }
@@ -613,6 +620,8 @@ void ServerBombManager::broadcastState(const std::string& mapName, MapState& sta
                           ? std::max(0.0f, config_.explodeTime - state.plantedTime)
                           : 0.0f;
     packet.roundTimeLeft = state.roundTimeLeft;
+    packet.roundAge = state.roundAge;
+    packet.freezeTime = config_.freezeTime;
     packet.plantProgress = state.plantProgress;
     packet.defuseProgress = state.defuseProgress;
     packet.planted = state.planted ? 1 : 0;
@@ -660,6 +669,7 @@ ServerBombManager::Snapshot ServerBombManager::snapshot(const std::string& mapNa
                           : 0.0f;
     result.roundTimeLeft = state.roundTimeLeft;
     result.roundAge = state.roundAge;
+    result.freezeTime = config_.freezeTime;
     result.matchOver = state.matchOver;
     result.plantProgress = state.plantProgress;
     result.defuseProgress = state.defuseProgress;

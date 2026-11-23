@@ -389,14 +389,16 @@ std::vector<SettingDef> makeGameSettingDefs(GameSettings& s) {
            "Scope with the sniper (hold)", &GameSettings::bindScope);
     addKey("bind_inspect", "INSPECT WEAPON", "COMBAT",
            "Play the weapon inspect animation", &GameSettings::bindInspect);
-    addKey("bind_weapon1", "WEAPON 1 (PISTOL)", "COMBAT",
-           "Select the pistol", &GameSettings::bindWeapon1);
-    addKey("bind_weapon2", "WEAPON 2 (SHOTGUN)", "COMBAT",
-           "Select the pump shotgun", &GameSettings::bindWeapon2);
-    addKey("bind_weapon3", "WEAPON 3 (SNIPER)", "COMBAT",
-           "Select the sniper rifle", &GameSettings::bindWeapon3);
+    addKey("bind_buy", "BUY MENU", "COMBAT",
+           "Open the buy menu during the buy phase", &GameSettings::bindBuy);
+    addKey("bind_weapon1", "WEAPON 1 (PRIMARY)", "COMBAT",
+           "Select / cycle the primary weapon", &GameSettings::bindWeapon1);
+    addKey("bind_weapon2", "WEAPON 2 (SIDEARM)", "COMBAT",
+           "Select the pistol", &GameSettings::bindWeapon2);
+    addKey("bind_weapon3", "WEAPON 3 (KNIFE)", "COMBAT",
+           "Select the knife", &GameSettings::bindWeapon3);
     addKey("bind_weapon4", "WEAPON 4 (GRENADE)", "COMBAT",
-           "Select the grenade", &GameSettings::bindWeapon4);
+           "Select the HE grenade", &GameSettings::bindWeapon4);
     addKey("bind_weapon5", "WEAPON 5 (FLASHBANG)", "COMBAT",
            "Select the flashbang", &GameSettings::bindWeapon5);
     addKey("bind_grenade", "GRENADE", "COMBAT",

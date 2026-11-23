@@ -387,6 +387,7 @@ Game::Game(int width, int height)
     sniper    = new Sniper(infiniteAmmoMode);
     grenade   = new Grenade(3, infiniteAmmoMode);
     flashbang = new Flashbang(2, infiniteAmmoMode);
+    knife     = new Knife();
     currentWeaponInstance = pistol;
 
     // Physics
@@ -549,6 +550,7 @@ Game::~Game() {
     delete sniper;
     delete grenade;
     delete flashbang;
+    delete knife;
     if (currentMap) delete currentMap;
 
     // glTF models own GPU buffers/textures (via the render backend): release
@@ -896,6 +898,10 @@ void Game::refreshBombSitesForMode() {
     matchWinner_ = -1;
     matchEnterHeld_ = false;
 
+    // A new map / mode is a new economy: fresh money, clean loadout and the
+    // round-1 grenades. Also forces infinite ammo off in economic modes.
+    resetEconomyForMatch();
+
     // Only bomb defusal is round-based. Team vs team is a team deathmatch:
     // it uses the normal respawn flow and never owns bomb sites.
     const bool roundBased = currentGameMode == BOMB_DEFUSAL;
@@ -1176,12 +1182,12 @@ void Game::resetGame() {
     weaponBobAmount_ = 0.0f;
     weaponSwayX_     = 0.0f;
     weaponSwayY_     = 0.0f;
+    knifeSwing_      = 0.0f;
 
-    // Ammo
-    pistolAmmo    = 999;
-    shotgunAmmo   = 24;
-    grenadeCount  = 3;
-    flashbangCount= 2;
+    // Ammo: every round starts with full magazines. Economic rounds keep the
+    // pistol/knife and whatever was bought; other modes own everything.
+    refillAllAmmo();
+    resetRoundLoadout();
 
     // Effects
     flashEffectTime = 0.0f;
@@ -1209,6 +1215,203 @@ void Game::resetGame() {
     capturePlayCursor(true);
 
     std::cout << "Game reset. HP=" << playerHealth << "/" << playerMaxHealth << std::endl;
+}
+
+// ---------------------------------------------------------------------------
+// Economy, loadouts and ammo
+// ---------------------------------------------------------------------------
+
+bool Game::weaponOwned(WeaponType weapon) const {
+    switch (weapon) {
+        case PUMP_SHOTGUN: return hasPrimaryShotgun_;
+        case SNIPER:       return hasPrimarySniper_;
+        case GRENADE:      return hasHEGrenade_;
+        case FLASHBANG:    return hasFlashbang_;
+        case PISTOL:
+        case KNIFE:
+        default:           return true;   // always-owned starter gear
+    }
+}
+
+void Game::refreshWeaponInfiniteAmmo() {
+    // The economic mode owns its ammo economy: the infinite-ammo option must
+    // never turn it into a sandbox. Everywhere else the option applies.
+    infiniteAmmoMode = gameSettings_.infiniteAmmo && !isEconomyMode();
+    if (pistol)    pistol->setInfiniteAmmo(infiniteAmmoMode);
+    if (shotgun)   shotgun->setInfiniteAmmo(infiniteAmmoMode);
+    if (sniper)    sniper->setInfiniteAmmo(infiniteAmmoMode);
+    if (grenade)   grenade->setInfiniteAmmo(infiniteAmmoMode);
+    if (flashbang) flashbang->setInfiniteAmmo(infiniteAmmoMode);
+    if (knife)     knife->setInfiniteAmmo(true);   // melee has no ammo
+}
+
+void Game::refillAllAmmo() {
+    if (pistol)    pistol->refill();
+    if (shotgun)   shotgun->refill();
+    if (sniper)    sniper->refill();
+    if (grenade)   grenade->refill();
+    if (flashbang) flashbang->refill();
+    // Legacy mirrors used by the old per-weapon helpers and the console log.
+    pistolAmmo     = pistol ? pistol->getAmmo() : 0;
+    shotgunAmmo    = shotgun ? shotgun->getAmmo() : 0;
+    grenadeCount   = grenade ? grenade->getAmmo() : 0;
+    flashbangCount = flashbang ? flashbang->getAmmo() : 0;
+}
+
+void Game::resetRoundLoadout() {
+    if (isEconomyMode()) {
+        // The loadout carries over between rounds: if you die you keep the
+        // weapons, grenades, armor and kit you had. Only the very first round
+        // of a fresh match hands out the free grenades.
+        if (firstEconomyRound_) {
+            hasHEGrenade_ = true;
+            hasFlashbang_ = true;
+            firstEconomyRound_ = false;
+        }
+    } else {
+        // Non-economic modes: the buy menu is a free loadout screen.
+        hasPrimaryShotgun_ = true;
+        hasPrimarySniper_ = true;
+        hasHEGrenade_ = true;
+        hasFlashbang_ = true;
+        armor_ = 0;
+        defuseKit_ = false;
+    }
+
+    if (grenade && !hasHEGrenade_) grenade->setAmmo(0);
+    if (flashbang && !hasFlashbang_) flashbang->setAmmo(0);
+    grenadeCount = grenade ? grenade->getAmmo() : 0;
+    flashbangCount = flashbang ? flashbang->getAmmo() : 0;
+
+    // Spawn with the primary that was last held, if it is still owned.
+    if (isEconomyMode() && weaponOwned(lastPrimary_)) {
+        currentWeapon = lastPrimary_;
+        currentWeaponInstance = lastPrimary_ == SNIPER ? static_cast<Weapon*>(sniper)
+                                                       : static_cast<Weapon*>(shotgun);
+    }
+
+    // Never keep holding gear the new round did not grant.
+    if (!weaponOwned(currentWeapon)) {
+        currentWeapon = PISTOL;
+        currentWeaponInstance = pistol;
+    }
+}
+
+void Game::resetEconomyForMatch() {
+    const bool economic = isEconomyMode();
+    money_ = economic ? economy::kStartingMoney : 0;
+    armor_ = 0;
+    defuseKit_ = false;
+    lossStreak_ = 0;
+    firstEconomyRound_ = true;
+    if (!(networkClient && networkClient->isConnected())) {
+        freezeTime_ = economy::kSinglePlayerFreezeTime;
+    }
+    buyTimeLeft_ = freezeTime_ + economy::kBuyGraceSeconds;
+    roundAge_ = 0.0f;
+    buyWindowClosed_ = false;
+    hasPrimaryShotgun_ = !economic;
+    hasPrimarySniper_ = !economic;
+    hasHEGrenade_ = !economic;
+    hasFlashbang_ = !economic;
+    lastPrimary_ = PUMP_SHOTGUN;
+    refreshWeaponInfiniteAmmo();
+}
+
+void Game::absorbArmor(float& damage) {
+    if (damage <= 0.0f || armor_ <= 0) return;
+    const float absorbed = std::min(damage * 0.5f, static_cast<float>(armor_));
+    damage -= absorbed;
+    armor_ = std::max(0, armor_ - static_cast<int>(std::ceil(absorbed)));
+}
+
+void Game::awardKillMoney() {
+    if (!isEconomyMode()) return;
+    money_ = std::min(economy::kMaxMoney, money_ + economy::kKillReward);
+}
+
+void Game::awardRoundMoney(int winner) {
+    if (!isEconomyMode()) return;
+    if (winner == (playerTeam & 1)) {
+        money_ = std::min(economy::kMaxMoney, money_ + economy::kRoundWinReward);
+        lossStreak_ = 0;
+    } else if (winner == 0 || winner == 1) {
+        ++lossStreak_;
+        money_ = std::min(economy::kMaxMoney,
+                          money_ + economy::lossBonus(lossStreak_));
+    }
+}
+
+bool Game::applyBuyItem(economy::Item item, bool free) {
+    if (item == economy::ITEM_NONE) return false;
+    if (!free) {
+        // Online economic purchases are only applied from the server's
+        // authoritative EconomyStatePacket (see buyItem).
+        if (!isEconomyMode() || !canOpenBuyMenu()) return false;
+        const int cost = economy::price(item);
+        if (money_ < cost) return false;
+    }
+
+    const bool economic = isEconomyMode() && !free;
+    switch (item) {
+        case economy::ITEM_KEVLAR:
+            if (economic && armor_ >= 100) return false;
+            armor_ = 100;
+            break;
+        case economy::ITEM_DEFUSE_KIT:
+            if (economic && defuseKit_) return false;
+            defuseKit_ = true;
+            break;
+        case economy::ITEM_PRIMARY_SHOTGUN: {
+            if (economic && hasPrimaryShotgun_) return false;
+            hasPrimaryShotgun_ = true;
+            if (economic) hasPrimarySniper_ = false;   // one primary slot
+            lastPrimary_ = PUMP_SHOTGUN;
+            if (shotgun) shotgun->refill();
+            switchWeapon(PUMP_SHOTGUN);
+            break;
+        }
+        case economy::ITEM_PRIMARY_SNIPER: {
+            if (economic && hasPrimarySniper_) return false;
+            hasPrimarySniper_ = true;
+            if (economic) hasPrimaryShotgun_ = false;
+            lastPrimary_ = SNIPER;
+            if (sniper) sniper->refill();
+            switchWeapon(SNIPER);
+            break;
+        }
+        case economy::ITEM_HE_GRENADE:
+            if (economic && hasHEGrenade_) return false;
+            hasHEGrenade_ = true;
+            if (grenade) grenade->setAmmo(free ? grenade->getInitialAmmo() : 1);
+            grenadeCount = grenade ? grenade->getAmmo() : 0;
+            break;
+        case economy::ITEM_FLASHBANG:
+            if (economic && hasFlashbang_) return false;
+            hasFlashbang_ = true;
+            if (flashbang) flashbang->setAmmo(free ? flashbang->getInitialAmmo() : 1);
+            flashbangCount = flashbang ? flashbang->getAmmo() : 0;
+            break;
+        default:
+            return false;
+    }
+
+    if (!free) money_ = std::max(0, money_ - economy::price(item));
+    playUiSound("pickup");
+    return true;
+}
+
+void Game::buyItem(economy::Item item) {
+    // Online: ask the server. It validates money, loadout and the buy phase,
+    // then sends back the authoritative economy state. Free modes are also
+    // server-tracked (cost 0) so armor/loadout behave for every player.
+    if (networkClient && networkClient->isConnected()) {
+        networkClient->sendBuyAction(static_cast<uint8_t>(item));
+        playUiSound("ui_select");
+        return;
+    }
+    applyBuyItem(item, !isEconomyMode());
+    refreshBuyMenuRows();
 }
 
 // ---------------------------------------------------------------------------

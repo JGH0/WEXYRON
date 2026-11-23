@@ -139,7 +139,8 @@ struct GameSettings {
     int bindShoot = 1000 + 0;       ///< GLFW_MOUSE_BUTTON_LEFT
     int bindScope = 1000 + 1;       ///< GLFW_MOUSE_BUTTON_RIGHT (sniper)
     int bindInspect = 73;           ///< GLFW_KEY_I (weapon inspect animation)
-    int bindWeapon1 = 49;           ///< GLFW_KEY_1 (pistol)
+    int bindBuy = 66;               ///< GLFW_KEY_B (buy menu)
+    int bindWeapon1 = 49;           ///< GLFW_KEY_1 (primary)
     int bindWeapon2 = 50;           ///< GLFW_KEY_2 (shotgun)
     int bindWeapon3 = 51;           ///< GLFW_KEY_3 (sniper)
     int bindWeapon4 = 52;           ///< GLFW_KEY_4 (grenade)

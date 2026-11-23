@@ -20,6 +20,7 @@
 #include "../src/network/server_config.hpp"
 #include "../src/network/server_bomb.hpp"
 #include "../src/network/server_bots.hpp"
+#include "../src/game/economy.hpp"
 
 NetworkServer* g_server = nullptr;
 
@@ -156,6 +157,11 @@ int main(int argc, char* argv[]) {
     float timeout = settingFloat(config, "TIMEOUT", "network", "timeout", 10.0f);
     // Round time to plant the bomb (defenders win when it expires unplanted).
     float roundTime = settingFloat(config, "ROUND_TIME", "gameplay", "roundTime", 115.0f);
+    // Round-start freeze: no movement/buying for this long, then 20 s of
+    // buy grace while the player has not moved.
+    float freezeTime = settingFloat(config, "FREEZE_TIME", "gameplay", "freezeTime", 10.0f);
+    if (freezeTime < 0.0f) freezeTime = 0.0f;
+    if (freezeTime > 60.0f) freezeTime = 60.0f;
 
     // Bots (server-controlled players).
     int botCount = settingInt(config, "BOTS_COUNT", "bots", "count", 0, &srcBots);
@@ -204,6 +210,7 @@ int main(int argc, char* argv[]) {
     std::cout << "Bot Accuracy: " << botAccuracy << "   (" << srcBotAccuracy.origin << ")" << std::endl;
     std::cout << "Bots World: " << defaultMap << std::endl;
     std::cout << "Round Time: " << roundTime << "s" << std::endl;
+    std::cout << "Freeze Time: " << freezeTime << "s" << std::endl;
     std::cout << "Region: " << region << std::endl;
     std::cout << "Description: " << description << std::endl;
     if (configLoaded) {
@@ -378,6 +385,11 @@ int main(int argc, char* argv[]) {
     };
 
     // Set up callbacks
+    // The authoritative economy sender is installed after the bomb manager
+    // exists (it needs the round age for the buy phase); this indirection also
+    // lets the input handler sync a player who joins a running round.
+    std::function<void(ServerPlayer*)> sendEconomy;
+
     // The server has no map geometry, so it never invents spawn positions:
     // the client (which knows the map) spawns, and its first input tells the
     // server where that is.
@@ -406,7 +418,7 @@ int main(int argc, char* argv[]) {
                   << server.getMaxPlayers() << ")" << std::endl;
     };
     
-    server.onPlayerInput = [&server, &bombManager](uint32_t id, const PlayerInputPacket& input) {
+    server.onPlayerInput = [&server, &bombManager, &sendEconomy](uint32_t id, const PlayerInputPacket& input) {
         // Process player input on server (authoritative)
         ServerPlayer* player = server.getPlayer(id);
         if (!player) return;
@@ -416,7 +428,40 @@ int main(int argc, char* argv[]) {
         player->gameMode = input.gameMode;
         player->matchFormat = input.matchFormat;
         player->stance = input.stance <= 2 ? input.stance : 0;
-        player->weaponId = input.weaponId % 5;
+        player->weaponId = input.weaponId % 6;
+
+        // A client that joins a running bomb round did not see the round-start
+        // reset; send the authoritative starting economy once so it drops the
+        // locally guessed round-1 grenades.
+        if (player->gameMode == 2 && !player->economyInitialised) {
+            player->economyInitialised = true;
+            player->buyWindowClosed = false;
+            if (sendEconomy) sendEconomy(player);
+        }
+
+        // Moving after the round-start freeze ends the buy window for the
+        // rest of the round (the client applies the same rule; this enforces
+        // it on the authoritative side).
+        if (player->gameMode == 2) {
+            const ServerBombManager::Snapshot bomb = bombManager.snapshot(player->mapName);
+            const bool afterFreeze = bomb.valid && bomb.roundActive &&
+                                     bomb.roundAge >= bomb.freezeTime;
+            const bool moved = std::abs(input.moveX) + std::abs(input.moveZ) > 0.01f ||
+                               input.jump;
+            if (afterFreeze && moved) player->buyWindowClosed = true;
+        }
+
+        // The server owns the economic loadout: reject a held weapon the
+        // player has not bought (the client normally prevents this already).
+        if (player->gameMode == 2) {
+            const uint8_t w = player->weaponId;
+            const bool invalid =
+                (w == 1 && player->primary != 1) ||
+                (w == 2 && player->primary != 2) ||
+                (w == 3 && !player->hasHEGrenade) ||
+                (w == 4 && !player->hasFlashbang);
+            if (invalid) player->weaponId = 0;
+        }
 
         // The client is on a menu page over a running match. Keep its player
         // record (and its body on the map) exactly as it is: no movement, no
@@ -584,7 +629,7 @@ int main(int argc, char* argv[]) {
     //
     // Damage is clamped so a bad packet cannot deal more than a hit is worth;
     // grenade / flashbang blasts stay lethal but are not stacked.
-    auto applyDamage = [&server, &teamKills, &broadcastMatchState](
+    auto applyDamage = [&server, &teamKills, &broadcastMatchState, &sendEconomy](
                                  uint32_t shooterId, uint32_t victimId,
                                  float damage, uint8_t weaponId) {
         ServerPlayer* victim = server.getPlayer(victimId);
@@ -603,10 +648,26 @@ int main(int argc, char* argv[]) {
         }
         if (damage <= 0.0f) return;
 
+        // Kevlar absorbs half of each hit and is worn down by the absorbed
+        // amount. It works in every mode (the free buy menu can grant it).
+        if (victim->armor > 0) {
+            const float absorbed = std::min(damage * 0.5f, static_cast<float>(victim->armor));
+            damage -= absorbed;
+            victim->armor = static_cast<uint8_t>(
+                std::max(0, victim->armor - static_cast<int>(std::ceil(absorbed))));
+        }
+        if (damage <= 0.0f) return;
+
         victim->health -= damage;
         victim->velocity = glm::vec3(0.0f);
         if (victim->health < 0.0f) victim->health = 0.0f;
         if (victim->health <= 0.0f) victim->isDead = true;
+        if (victim->isDead && victim->gameMode != 2) {
+            // Free modes are per-life; the economic mode keeps its loadout
+            // across rounds (including a death).
+            victim->armor = 0;
+            victim->defuseKit = false;
+        }
 
         ServerPlayer* shooter = server.getPlayer(shooterId);
 
@@ -628,6 +689,20 @@ int main(int argc, char* argv[]) {
             if (shooter->team == 0) ++score.first;
             else                    ++score.second;
             broadcastMatchState(victim->mapName, score.first, score.second);
+        }
+
+        // Economic kill reward: every kill of an enemy in bomb defusal pays
+        // the shooter. Bots do not have money, so only humans are updated.
+        if (victim->isDead && victim->gameMode == 2 && shooter &&
+            !shooter->isBot && shooter->id != victim->id &&
+            shooter->team != victim->team) {
+            shooter->money = static_cast<uint16_t>(std::min<int>(
+                economy::kMaxMoney, shooter->money + economy::kKillReward));
+            if (sendEconomy) sendEconomy(shooter);
+        }
+        // Armor was consumed (any mode): keep the victim's HUD in sync.
+        if (!victim->isBot && sendEconomy) {
+            sendEconomy(victim);
         }
 
         std::cout << "[Server] " << (victim->isBot ? "Bot " : "Player ")
@@ -652,10 +727,149 @@ int main(int argc, char* argv[]) {
     ServerBombManager::Config bombConfig;
     bombConfig.mapDirectory = "assets/maps";
     bombConfig.roundTime = roundTime;
+    bombConfig.freezeTime = freezeTime;
     bombManager.init(server, bombConfig);
     bombManager.onDamage = [applyDamage](uint32_t shooterId, uint32_t victimId,
                                          uint16_t damage, uint8_t weaponId) {
         applyDamage(shooterId, victimId, static_cast<float>(damage), weaponId);
+    };
+
+    // ── Server-authoritative economy ─────────────────────────────────────────
+    // The buy menu only sends an intent. Money, the buy window, duplicate
+    // checks and the resulting loadout all live here; clients receive the
+    // authoritative balance/loadout in PACKET_ECONOMY_STATE.
+    auto buyPhaseOpen = [&bombManager](const ServerPlayer& player) {
+        if (player.gameMode != 2) return true;   // free modes have no window
+        if (player.buyWindowClosed) return false;
+        const ServerBombManager::Snapshot bomb = bombManager.snapshot(player.mapName);
+        return bomb.valid && bomb.roundActive && !bomb.roundEnded &&
+               bomb.roundAge <= bomb.freezeTime + economy::kBuyGraceSeconds;
+    };
+
+    sendEconomy = [&server, &bombManager, &buyPhaseOpen](ServerPlayer* player) {
+        if (!player || player->isBot) return;
+        EconomyStatePacket state{};
+        state.header.magic = PACKET_MAGIC;
+        state.header.type = PACKET_ECONOMY_STATE;
+        state.header.sequence = 0;
+        state.header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        state.header.clientId = 0;
+        state.money = player->money;
+        state.armor = player->armor;
+        state.defuseKit = player->defuseKit ? 1 : 0;
+        state.primary = player->primary;
+        state.grenades = static_cast<uint8_t>((player->hasHEGrenade ? 1 : 0) |
+                                              (player->hasFlashbang ? 2 : 0));
+        state.economic = player->gameMode == 2 ? 1 : 0;
+        state.buyAllowed = buyPhaseOpen(*player) ? 1 : 0;
+        server.sendToPlayer(player->id, &state, sizeof(state));
+    };
+
+    // Every round starts with pistol + knife. The first round of a fresh match
+    // also hands out the two grenades; later rounds must buy them again.
+    auto resetHumanEconomyOnMap = [&server, &sendEconomy](const std::string& mapName,
+                                                         bool freshMatch) {
+        for (ServerPlayer* player : server.getPlayers()) {
+            if (!player->active || player->isBot) continue;
+            if (mapName != std::string(player->mapName)) continue;
+            // Called only from bomb-defusal round transitions; make sure the
+            // server knows the mode even when the round-start packet arrived
+            // before the client's first input.
+            player->gameMode = 2;
+            if (freshMatch || !player->economyInitialised) {
+                player->money = economy::kStartingMoney;
+                player->lossStreak = 0;
+                player->economyInitialised = true;
+                player->primary = 0;
+                player->armor = 0;
+                player->defuseKit = false;
+                player->hasHEGrenade = freshMatch;
+                player->hasFlashbang = freshMatch;
+            }
+            // Otherwise the current loadout (primary, grenades, armor, kit)
+            // carries over, even when the player did not survive the round.
+            player->buyWindowClosed = false;
+            if (sendEconomy) sendEconomy(player);
+        }
+    };
+
+    // Round payouts. A win pays the round bonus; a loss pays an escalating
+    // loss bonus so a losing side can still buy the next round.
+    bombManager.onRoundFinished = [&server, &sendEconomy](const std::string& mapName,
+                                                          int winner) {
+        for (ServerPlayer* player : server.getPlayers()) {
+            if (!player->active || player->isBot) continue;
+            if (mapName != std::string(player->mapName)) continue;
+            if (player->gameMode != 2) continue;
+            if (winner == (player->team & 1)) {
+                player->money = static_cast<uint16_t>(std::min<int>(
+                    economy::kMaxMoney, player->money + economy::kRoundWinReward));
+                player->lossStreak = 0;
+            } else if (winner == 0 || winner == 1) {
+                player->lossStreak = std::min(economy::kLossBonusMaxStreak,
+                                              player->lossStreak + 1);
+                player->money = static_cast<uint16_t>(std::min<int>(
+                    economy::kMaxMoney,
+                    player->money + economy::lossBonus(player->lossStreak)));
+            } else {
+                continue;   // draw: no payout
+            }
+            if (sendEconomy) sendEconomy(player);
+        }
+    };
+
+    server.onBuyAction = [&server, &buyPhaseOpen, &sendEconomy](
+                                 uint32_t playerId, const BuyActionPacket& request) {
+        ServerPlayer* player = server.getPlayer(playerId);
+        if (!player || !player->active) return;
+        const bool economic = player->gameMode == 2;
+        if (economic) {
+            if (player->isDead) return;
+            if (!buyPhaseOpen(*player)) return;
+        }
+
+        const economy::Item item = static_cast<economy::Item>(request.item);
+        const int cost = economic ? economy::price(item) : 0;
+        if (economic && (cost <= 0 || player->money < cost)) return;
+
+        switch (item) {
+            case economy::ITEM_KEVLAR:
+                if (economic && player->armor >= 100) return;
+                player->armor = 100;
+                break;
+            case economy::ITEM_DEFUSE_KIT:
+                if (economic && player->defuseKit) return;
+                player->defuseKit = true;
+                break;
+            case economy::ITEM_PRIMARY_SHOTGUN:
+                if (economic && player->primary == 1) return;
+                player->primary = 1;
+                break;
+            case economy::ITEM_PRIMARY_SNIPER:
+                if (economic && player->primary == 2) return;
+                player->primary = 2;
+                break;
+            case economy::ITEM_HE_GRENADE:
+                if (economic && player->hasHEGrenade) return;
+                player->hasHEGrenade = true;
+                break;
+            case economy::ITEM_FLASHBANG:
+                if (economic && player->hasFlashbang) return;
+                player->hasFlashbang = true;
+                break;
+            default:
+                return;
+        }
+
+        if (economic) {
+            player->money = static_cast<uint16_t>(std::max(0, player->money - cost));
+        }
+        if (sendEconomy) sendEconomy(player);
+        std::cout << "[Economy] Player " << player->id << " bought item "
+                  << static_cast<int>(item)
+                  << (economic ? " ($" + std::to_string(player->money) + " left)" : " (free)")
+                  << std::endl;
     };
     server.onBombInteract = [&bombManager](uint32_t playerId, uint8_t action) {
         bombManager.onBombInteract(playerId, action);
@@ -673,6 +887,7 @@ int main(int argc, char* argv[]) {
         info.position = bomb.position;
         info.plantingTeam = bomb.plantingTeam;
         info.attackingTeam = bomb.attackingTeam;
+        info.movementFrozen = bomb.roundActive && bomb.roundAge < bomb.freezeTime;
         return info;
     });
     botManager.onDamage = [applyDamage](uint32_t shooterId, uint32_t victimId,
@@ -684,13 +899,15 @@ int main(int argc, char* argv[]) {
         botManager.onProjectileSpawned(ownerId, packet);
     };
     server.onRoundStarted = [&botManager, &bombManager,
-                             &reviveHumansOnMap](const std::string& mapName,
-                                                 int gameMode, int attackingTeam,
-                                                 int matchFormat,
-                                                 bool freshMatch) {
+                             &reviveHumansOnMap, &resetHumanEconomyOnMap](
+                                const std::string& mapName,
+                                int gameMode, int attackingTeam,
+                                int matchFormat,
+                                bool freshMatch) {
         bombManager.onRoundStart(mapName, gameMode, attackingTeam, matchFormat,
                                  freshMatch);
         reviveHumansOnMap(mapName);
+        resetHumanEconomyOnMap(mapName, freshMatch);
         botManager.startRound(mapName, gameMode);
     };
 
@@ -705,9 +922,11 @@ int main(int argc, char* argv[]) {
 
     // Server-owned round transitions: revive the humans on that map and let
     // the bots start the new round too. Clients follow the BombState packet.
-    bombManager.onRoundRestart = [&botManager, &reviveHumansOnMap](
+    bombManager.onRoundRestart = [&botManager, &reviveHumansOnMap,
+                                  &resetHumanEconomyOnMap](
                                      const std::string& mapName, int gameMode) {
         reviveHumansOnMap(mapName);
+        resetHumanEconomyOnMap(mapName, false);
         botManager.startRound(mapName, gameMode);
     };
 
@@ -813,6 +1032,10 @@ int main(int argc, char* argv[]) {
             player->health = 100.0f;
             player->isDead = false;
             player->spawnProtection = 1.0f;
+            if (player->gameMode != 2) {
+                player->armor = 0;
+                player->defuseKit = false;
+            }
             deadSince.erase(player->id);
 
             std::cout << "[Server] Player " << player->id << " respawned" << std::endl;

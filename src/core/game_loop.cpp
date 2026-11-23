@@ -43,6 +43,28 @@ void Game::update(float deltaTime) {
         if (spawnProtectionTimer_ < 0.0f) spawnProtectionTimer_ = 0.0f;
     }
 
+    // Round age + buy window. The economic mode freezes movement for the
+    // configured time; after that the menu stays available for the grace
+    // period unless the player moves (see processGameInput).
+    if (isEconomyMode() && roundActive) {
+        roundAge_ += deltaTime;
+        buyTimeLeft_ = std::max(0.0f, freezeTime_ + economy::kBuyGraceSeconds - roundAge_);
+        if (gameState == BUY_MENU && buyTimeLeft_ <= 0.0f) {
+            closeBuyMenu();
+        }
+    }
+
+    // Offline bomb-defusal round clock keeps running while the buy menu is
+    // open (the online server owns it and the HUD follows BombState packets).
+    if (gameState == BUY_MENU && bombDefusalMode && roundActive &&
+        !(networkClient && networkClient->isConnected()) && !bomb.planted) {
+        roundTime += deltaTime;
+        roundTimeLeft = std::max(0.0f, roundTimeLeft - deltaTime);
+        if (roundTimeLeft <= 0.0f) {
+            endRound(1 - attackingTeam, ROUND_END_TIME_EXPIRED);
+        }
+    }
+
     if (gameState == PLAYING) {
         // Deathmatch and team deathmatch have no round cycle; the HUD shows
         // elapsed match time. Bomb defusal advances its own clock in updateBomb().
@@ -79,8 +101,9 @@ void Game::update(float deltaTime) {
         }
 
         // Single-player bot AI runs before projectiles so a shot fired this
-        // frame can already collide with the body's new position.
-        if (localBots_ && !matchOver_) updateLocalBots(deltaTime);
+        // frame can already collide with the body's new position. Bots hold
+        // their spawns during the round-start freeze too.
+        if (localBots_ && !matchOver_ && !isRoundFrozen()) updateLocalBots(deltaTime);
 
         // Update projectiles
         updateProjectiles(deltaTime);
@@ -143,7 +166,7 @@ void Game::update(float deltaTime) {
             matchOver_ || (roundEndTimer > 0.0f && currentGameMode == BOMB_DEFUSAL);
         const bool interacting = isPlanting || isDefusing;
         float moveX = 0.0f, moveZ = 0.0f;
-        if (alive && !interacting) {
+        if (alive && !interacting && !isRoundFrozen()) {
             if (keyDown(keyBindings.forward)) {
                 moveX += cos(glm::radians(camera.Yaw));
                 moveZ += sin(glm::radians(camera.Yaw));
@@ -162,9 +185,11 @@ void Game::update(float deltaTime) {
             }
         }
 
-        const bool jump  = alive && !interacting &&
+        const bool jump  = alive && !interacting && !isRoundFrozen() &&
                            keyDown(keyBindings.jump);
-        const bool shoot = alive && !roundFrozen && !interacting &&
+        const bool buyPhaseBlocksShooting = isEconomyMode() && canOpenBuyMenu();
+        const bool shoot = alive && !roundFrozen && !isRoundFrozen() && !interacting &&
+                           !buyPhaseBlocksShooting &&
                            bindingDown(gameSettings_.bindShoot);
 
         // Send eye-level position for projectile spawning (playerPos + eye height)
@@ -354,7 +379,7 @@ void Game::render() {
 
     } else if (gameState == MENU || gameState == SETTINGS ||
                gameState == MAP_SELECTION || gameState == SERVER_CONNECT ||
-               gameState == TEAM_SETUP) {
+               gameState == TEAM_SETUP || gameState == BUY_MENU) {
         // All menu screens are drawn by the menu framework (ui/menu.hpp);
         // the view decides title, rows and footer.
         UIHelpers::setProjection(renderer, window);

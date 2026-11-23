@@ -63,6 +63,8 @@ public:
         glm::vec3 position{0.0f};
         int plantingTeam = -1;
         int attackingTeam = 0;
+        /// Round-start freeze: hold position (move/aim/shoot) like a human.
+        bool movementFrozen = false;
     };
     using BombInfoProvider = std::function<BombInfo(const std::string&)>;
 

@@ -65,7 +65,9 @@ enum PacketType : uint8_t {
     PACKET_LOBBY_SETUP = 22,       // Client -> server team / bot allocation
     PACKET_LOBBY_STATE = 23,       // Server -> clients open match setup / rosters
     PACKET_MATCH_STATE = 24,       // Server -> clients team kill scores
-    PACKET_LOBBY_START = 25        // Server -> lobby players: match is starting
+    PACKET_LOBBY_START = 25,       // Server -> lobby players: match is starting
+    PACKET_BUY_ACTION = 26,        // Client -> server buy-menu request (validated)
+    PACKET_ECONOMY_STATE = 27      // Server -> client authoritative money/loadout
 };
 
 /// Client action in BombInteractPacket.
@@ -178,7 +180,7 @@ struct PlayerStatePacket {
     bool isDead;
     uint8_t team;                  ///< 0 = Team A, 1 = Team B
     uint8_t stance;                ///< 0 standing, 1 crouching, 2 prone
-    uint8_t weaponId;              ///< held weapon (0 pistol ... 4 flashbang)
+    uint8_t weaponId;              ///< held weapon (0 pistol ... 4 flashbang, 5 knife)
 };
 
 /// A hit one client scored on another player (client -> server -> victim and
@@ -277,6 +279,26 @@ struct BombInteractPacket {
     uint8_t action;            ///< BombInteractAction
 };
 
+/// Client asks the server to buy one item (economy::Item). The server checks
+/// money, the buy phase, duplicates and the mode before applying it.
+struct BuyActionPacket {
+    PacketHeader header;
+    uint8_t item;              ///< economy::Item
+};
+
+/// Authoritative per-player economy state. Sent after every round/result and
+/// after an accepted purchase; the client never invents money online.
+struct EconomyStatePacket {
+    PacketHeader header;
+    uint16_t money;            ///< current balance
+    uint8_t armor;             ///< 0..100
+    uint8_t defuseKit;         ///< 1 = owned
+    uint8_t primary;           ///< 0 = none, 1 = shotgun, 2 = sniper
+    uint8_t grenades;          ///< bit 0 = HE, bit 1 = flashbang
+    uint8_t buyAllowed;        ///< 1 = buy phase still open
+    uint8_t economic;          ///< 1 = money/loadout is authoritative
+};
+
 /// Server-authoritative bomb state for a map. Broadcast on changes and a few
 /// times per second so joins and lost packets converge on the same state.
 struct BombStatePacket {
@@ -286,6 +308,8 @@ struct BombStatePacket {
     float plantProgress;       ///< 0 .. plantTime, server-side planting progress
     float defuseProgress;      ///< 0 .. defuseTime, server-side defusing progress
     float roundTimeLeft;       ///< seconds left to plant (frozen after planting)
+    float roundAge;            ///< seconds since this round started
+    float freezeTime;          ///< round-start freeze duration (server config)
     uint8_t planted;
     uint8_t defused;
     uint8_t exploded;
@@ -424,6 +448,8 @@ public:
     std::function<void(const LobbyStartPacket&)> onLobbyStart;
     /// Authoritative team kill scores (team deathmatch).
     std::function<void(const MatchStatePacket&)> onMatchState;
+    /// Authoritative money / armor / loadout for this client (bomb defusal).
+    std::function<void(const EconomyStatePacket&)> onEconomyState;
 
     // Send map change request to server
     void sendMapChange(const std::string& mapName);
@@ -447,6 +473,9 @@ public:
 
     /// Ask the server to start planting / defusing the bomb (BombInteractAction).
     void sendBombInteract(uint8_t action);
+
+    /// Ask the server to buy one buy-menu item (economy::Item).
+    void sendBuyAction(uint8_t item);
 
     // Send a keepalive PING (update() does this on its own every second)
     void sendPing();
@@ -527,6 +556,17 @@ struct ServerPlayer {
     uint8_t weaponId = 0; ///< held weapon reported by the client / bot
     uint32_t stateSequence = 0; ///< monotonic PlayerState sequence
     bool isBot = false;   ///< server-controlled player (no socket / timeout)
+    /// Server-authoritative economy (bomb defusal). Updated by kills, round
+    /// results and validated buy requests.
+    uint16_t money = 800;
+    uint8_t armor = 0;
+    bool defuseKit = false;
+    uint8_t primary = 0;  ///< 0 = none, 1 = shotgun, 2 = sniper
+    bool hasHEGrenade = false;
+    bool hasFlashbang = false;
+    int lossStreak = 0;
+    bool economyInitialised = false; ///< round-1 loadout was applied
+    bool buyWindowClosed = false;    ///< moved after the freeze: no more buys
     /// Seconds of invulnerability left after a spawn / respawn.
     float spawnProtection = 0.0f;
     /// The client is browsing a menu over a running match; keep it in the
@@ -638,6 +678,8 @@ public:
     std::function<void(const std::string&, int, int, int, bool)> onRoundStarted;
     /// A client asked to plant / defuse (validated sender id, action).
     std::function<void(uint32_t, uint8_t)> onBombInteract;
+    /// A client asked to buy an item (validated sender id, packet).
+    std::function<void(uint32_t, const BuyActionPacket&)> onBuyAction;
     /// A client sent its pre-match team / bot setup.
     std::function<void(uint32_t, const LobbySetupPacket&)> onLobbySetup;
     

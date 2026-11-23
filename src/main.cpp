@@ -210,7 +210,8 @@ static void runMenuTest(Game& game, const char* script) {
             game.debugStartMapForTest(step.substr(4));
             game.debugRunFrames(30);
         } else if (step.rfind("weapon:", 0) == 0) {
-            // Select the held weapon (0 pistol .. 4 flashbang) for a screenshot.
+            // Select the held weapon (0 pistol, 1 shotgun, 2 sniper,
+            // 3 grenade, 4 flashbang, 5 knife) for a screenshot.
             game.debugSelectWeaponForTest(std::atoi(step.c_str() + 7));
             game.debugRunFrames(10);
         } else if (step == "dump") {

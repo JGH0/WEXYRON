@@ -139,6 +139,7 @@ menu::MenuView& Game::activeMenuView() {
         case MAP_SELECTION:   return mapMenu_;
         case SERVER_CONNECT:  return serverMenu_;
         case TEAM_SETUP:      return teamMenu_;
+        case BUY_MENU:        return buyMenu_;
         case MENU:
         default:              return mainMenu_;
     }
@@ -150,6 +151,7 @@ const menu::MenuView& Game::activeMenuViewConst() const {
         case MAP_SELECTION:   return mapMenu_;
         case SERVER_CONNECT:  return serverMenu_;
         case TEAM_SETUP:      return teamMenu_;
+        case BUY_MENU:        return buyMenu_;
         case MENU:
         default:              return mainMenu_;
     }
@@ -209,6 +211,132 @@ void Game::openMainMenu() {
     openMenuView(mainMenu_, std::move(page));
     mainMenu_.legend = {{"UP/DOWN", "SELECT"}, {"ENTER", "CONFIRM"}, {"ESC", "CLOSE"}};
     menuSelection = mainMenu_.stack.selection();
+}
+
+// ---------------------------------------------------------------------------
+// Buy menu
+// ---------------------------------------------------------------------------
+
+bool Game::canOpenBuyMenu() const {
+    if (!window || !gameInProgress_ || isDead || spectatorMode || matchOver_) return false;
+    if (isPlanting || isDefusing) return false;   // finish the objective first
+    if (!isEconomyMode()) return true;   // free loadout menu in every other mode
+    // Economic mode: only while the round is live and the freeze + grace
+    // window has not run out. Moving after the freeze closes it early.
+    return roundActive && buyTimeLeft_ > 0.0f && !buyWindowClosed_;
+}
+
+void Game::openBuyMenu() {
+    inp.resetNavKeys();
+    inp.gameplayBuyPressed = bindingDown(keyBindings.buy);
+    menuJustEntered = true;
+
+    buyMenu_.theme = menu::Theme();
+    buyMenu_.legend = {{"UP/DOWN", "SELECT"}, {"ENTER", "BUY"}, {"ESC", "CLOSE"}};
+    buyMenu_.onClose = [this]() { closeBuyMenu(); };
+    buyMenu_.hits.clear();
+    buyMenu_.hoverIndex = -1;
+
+    refreshBuyMenuRows();
+    gameState = BUY_MENU;
+}
+
+void Game::closeBuyMenu() {
+    if (gameState != BUY_MENU) return;
+    gameState = PLAYING;
+    inp.resetNavKeys();
+    // The B press that closed the menu is still physically held; do not let
+    // the gameplay input see it as a fresh edge and reopen the menu.
+    inp.gameplayBuyPressed = bindingDown(keyBindings.buy);
+    menuJustEntered = true;
+    capturePlayCursor(true);
+}
+
+void Game::refreshBuyMenuRows() {
+    const bool economic = isEconomyMode();
+    const bool buyOpen = canOpenBuyMenu();
+    const float shownLeft = isRoundFrozen() ? (freezeTime_ - roundAge_)
+                                            : buyTimeLeft_;
+    const int secondsLeft = static_cast<int>(std::max(0.0f, shownLeft) + 0.999f);
+
+    std::string subtitle;
+    if (economic) {
+        const char* phase = isRoundFrozen() ? "FREEZE " : "BUY ";
+        subtitle = "BOMB DEFUSAL   $" + std::to_string(money_) + "   " +
+                   (buyOpen ? phase + std::to_string(secondsLeft) + "S"
+                            : std::string("BUY WINDOW CLOSED"));
+    } else {
+        subtitle = "FREE LOADOUT   EVERY ITEM IS FREE";
+    }
+
+    menu::Page page("BUY MENU", subtitle);
+
+    auto addItem = [&](economy::Item item, const std::string& label,
+                       bool owned, const std::string& ownedText) {
+        const int cost = economy::price(item);
+        const bool canAfford = money_ >= cost;
+        const bool available = !economic || (buyOpen && !owned && canAfford);
+
+        menu::Row row = menu::action(label, [this, item]() { buyItem(item); },
+                                     economic
+                                         ? (buyOpen
+                                                ? (canAfford ? "Buy this item"
+                                                             : "Not enough money")
+                                                : "The buy window is closed")
+                                         : "Free loadout item");
+        if (!economic) {
+            row.value = cost > 0 ? "FREE" : std::string();
+        } else if (owned) {
+            row.value = ownedText;
+        } else {
+            row.value = "$" + std::to_string(cost);
+        }
+        row.enabled = available;
+        page.add(std::move(row));
+    };
+
+    if (economic) {
+        page.add(menu::info("MONEY", "$" + std::to_string(money_),
+                            "Kills and round results earn money"));
+    } else {
+        page.add(menu::info("MONEY", "FREE",
+                            "Only Bomb Defusal uses the economy"));
+    }
+
+    page.add(menu::separator("ARMOR"));
+    addItem(economy::ITEM_KEVLAR, "KEVLAR VEST", armor_ >= 100,
+            armor_ >= 100 ? "EQUIPPED" : ("ARMOR " + std::to_string(armor_)));
+    addItem(economy::ITEM_DEFUSE_KIT, "DEFUSE KIT", defuseKit_,
+            defuseKit_ ? "EQUIPPED" : std::string());
+
+    page.add(menu::separator("PRIMARY  (1)"));
+    addItem(economy::ITEM_PRIMARY_SHOTGUN, "PUMP SHOTGUN", hasPrimaryShotgun_,
+            hasPrimaryShotgun_ ? "OWNED" : std::string());
+    addItem(economy::ITEM_PRIMARY_SNIPER, "SNIPER RIFLE", hasPrimarySniper_,
+            hasPrimarySniper_ ? "OWNED" : std::string());
+
+    page.add(menu::separator("GRENADES  (4 / 5)"));
+    addItem(economy::ITEM_HE_GRENADE, "HE GRENADE", hasHEGrenade_,
+            hasHEGrenade_ ? "OWNED" : std::string());
+    addItem(economy::ITEM_FLASHBANG, "FLASHBANG", hasFlashbang_,
+            hasFlashbang_ ? "OWNED" : std::string());
+
+    page.add(menu::separator("ALWAYS EQUIPPED"));
+    page.add(menu::info("SIDEARM  (2)", "PISTOL"));
+    page.add(menu::info("MELEE  (3)", "KNIFE"));
+
+    page.add(menu::action("CLOSE", [this]() { closeBuyMenu(); },
+                          "Return to the match"));
+    page.rows.back().value = "ESC / B";
+
+    if (!buyMenu_.stack.current()) {
+        menu::begin(buyMenu_, std::move(page));
+    } else {
+        menu::replaceCurrent(buyMenu_, std::move(page));
+    }
+    lastBuyMenuMoney_ = money_;
+    lastBuyMenuSeconds_ = secondsLeft;
+    lastBuyMenuCanBuy_ = buyOpen;
 }
 
 // ---------------------------------------------------------------------------
@@ -1024,13 +1152,8 @@ void Game::applySettings() {
     // mirrored into every weapon (their own canShoot()/shoot() check is what
     // stops ammo loss). Do not guard this with "value changed": weapons are
     // created after loadSettings(), so grenades/flashbangs used to stay on
-    // their finite count while the HUD showed INF.
-    infiniteAmmoMode = gameSettings_.infiniteAmmo;
-    if (pistol)    pistol->setInfiniteAmmo(infiniteAmmoMode);
-    if (shotgun)   shotgun->setInfiniteAmmo(infiniteAmmoMode);
-    if (sniper)    sniper->setInfiniteAmmo(infiniteAmmoMode);
-    if (grenade)   grenade->setInfiniteAmmo(infiniteAmmoMode);
-    if (flashbang) flashbang->setInfiniteAmmo(infiniteAmmoMode);
+    // their finite count while the HUD showed INF. Economic modes force it off.
+    refreshWeaponInfiniteAmmo();
 
     // Audio: volumes apply live (the menu previews them through the mixer).
     audio.setMasterVolume(gameSettings_.masterVolume / 100.0f);
@@ -1061,6 +1184,7 @@ void Game::applySettings() {
     keyBindings.weaponSlot[4] = gameSettings_.bindWeapon5;
     keyBindings.grenade  = gameSettings_.bindGrenade;
     keyBindings.inspect  = gameSettings_.bindInspect;
+    keyBindings.buy      = gameSettings_.bindBuy;
     keyBindings.use      = gameSettings_.bindUse;
     keyBindings.unstuck  = gameSettings_.bindUnstuck;
     keyBindings.menu     = gameSettings_.bindMenu;
@@ -1316,6 +1440,17 @@ bool Game::debugStartMapForTest(const std::string& mapFile) {
     currentGameMode = DEATHMATCH;
     std::unique_ptr<Map> map = std::make_unique<Map>("assets/maps/" + mapFile);
     installMap(std::move(map));      // handles bomb sites + GPU state
+    menuJustEntered = true;
+    gameInProgress_ = true;
+    gameState = PLAYING;
+    capturePlayCursor(true);
+    return currentMap != nullptr;
+}
+
+bool Game::debugStartMapWithModeForTest(const std::string& mapFile, int mode) {
+    currentGameMode = static_cast<GameMode>(mode);
+    std::unique_ptr<Map> map = std::make_unique<Map>("assets/maps/" + mapFile);
+    installMap(std::move(map));
     menuJustEntered = true;
     gameInProgress_ = true;
     gameState = PLAYING;

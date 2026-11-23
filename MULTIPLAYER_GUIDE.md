@@ -213,6 +213,11 @@ Round results are server-authoritative and CS-style:
 - After a plant, killing all attackers does **not** end the round: the
   defenders still have to defuse the bomb. The plant-time clock stops once the
   bomb is planted and the fuse takes over.
+- Each round starts with a freeze period (`FREEZE_TIME` /
+  `gameplay.freezeTime`, default 10 s) where movement, jumping and shooting are
+  blocked and the buy menu is open. After the freeze the buy menu stays open for
+  20 more seconds while the player has not moved; moving ends it early. Shooting
+  stays disabled while that buy window is open.
 
 Overrides, highest precedence first: command line (`./build/bin/server 7777
 name -1 6 0.8`), environment (`BOTS_COUNT`, `BOTS_ACCURACY`),

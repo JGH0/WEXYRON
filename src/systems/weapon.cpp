@@ -14,7 +14,8 @@ constexpr float kShotgunPelletSpeed  = 110.0f;
 } // namespace
 
 Weapon::Weapon(WeaponType type, float cooldown, int ammo, bool infiniteAmmo)
-    : type(type), cooldown(cooldown), ammo(ammo), infiniteAmmo(infiniteAmmo), cooldownTimer(0.0f) {
+    : type(type), cooldown(cooldown), ammo(ammo), initialAmmo(ammo),
+      infiniteAmmo(infiniteAmmo), cooldownTimer(0.0f) {
 }
 
 bool Weapon::canShoot() const {
@@ -142,4 +143,21 @@ void Flashbang::shoot(Game* game) {
         cooldownTimer = cooldown;
         std::cout << "Threw flashbang! Flashbangs left: " << (infiniteAmmo ? "∞" : std::to_string(ammo)) << std::endl;
     }
+}
+
+// Knife Implementation
+Knife::Knife()
+    : Weapon(KNIFE, 0.55f, 1, true) {
+}
+
+bool Knife::canShoot() const {
+    // Melee has no ammunition: only the swing cooldown gates it.
+    return cooldownTimer <= 0.0f;
+}
+
+void Knife::shoot(Game* game) {
+    if (!canShoot()) return;
+    // The hit resolution lives in Game (bodies, bots and hit zones).
+    game->meleeAttack();
+    cooldownTimer = cooldown;
 }

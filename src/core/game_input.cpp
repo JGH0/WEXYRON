@@ -95,12 +95,13 @@ void Game::processInput(float deltaTime) {
     // key edges and must not run on every frame.)
     const bool inMenuState = (gameState == MENU || gameState == SETTINGS ||
                               gameState == MAP_SELECTION || gameState == SERVER_CONNECT ||
-                              gameState == TEAM_SETUP);
+                              gameState == TEAM_SETUP || gameState == BUY_MENU);
     if (inMenuState && !activeMenuView().stack.current()) {
         if (gameState == MENU) openMainMenu();
         else if (gameState == SETTINGS) openSettings();
         else if (gameState == MAP_SELECTION) openMapSelection();
         else if (gameState == TEAM_SETUP) openTeamSetup();
+        else if (gameState == BUY_MENU) openBuyMenu();
         else openServerConnect();
     }
 
@@ -128,7 +129,18 @@ void Game::processInput(float deltaTime) {
         processGameInput(deltaTime);
     } else if (gameState == MENU || gameState == SETTINGS ||
                gameState == MAP_SELECTION || gameState == SERVER_CONNECT ||
-               gameState == TEAM_SETUP) {
+               gameState == TEAM_SETUP || gameState == BUY_MENU) {
+        // B closes the buy menu like ESC. The same key opens it, so the edge
+        // flag is kept until the key is released to avoid an instant reopen.
+        if (gameState == BUY_MENU && bindingDown(keyBindings.buy)) {
+            if (!inp.gameplayBuyPressed) {
+                inp.gameplayBuyPressed = true;
+                closeBuyMenu();
+                return;
+            }
+        } else if (gameState == BUY_MENU) {
+            inp.gameplayBuyPressed = false;
+        }
         processMenuInput();
     } else if (gameState == MAP_EDITOR) {
         // The editor handles ESC itself so it can warn about unsaved changes.
@@ -184,6 +196,7 @@ bool Game::isInMatchMenu() const {
         case MAP_SELECTION:
         case SERVER_CONNECT:
         case TEAM_SETUP:
+        case BUY_MENU:
             return true;
         default:
             return false;
@@ -253,6 +266,11 @@ void Game::processMenuInput() {
     if (menuJustEntered) {
         inp.resetNavKeys();   // clears the edges and re-arms the key re-sync
         menuJustEntered = false;
+        // The B press that opened the buy menu is still held: keep it marked
+        // as consumed so the close-on-B check does not fire on the next frame.
+        if (gameState == BUY_MENU) {
+            inp.gameplayBuyPressed = bindingDown(keyBindings.buy);
+        }
         if (gameState == SERVER_CONNECT) refreshServerRows();
         if (gameState == TEAM_SETUP) sendLobbySetup();
         return;
@@ -298,6 +316,18 @@ void Game::processMenuInput() {
             refreshTeamSetupRows();
         } else if (gameState == MAP_SELECTION) {
             refreshMapSelectionRows();
+        }
+    }
+
+    if (gameState == BUY_MENU) {
+        // Live updates while the page is open: a server economy packet or the
+        // buy-phase clock expiring must disable/enable rows immediately.
+        const int secondsLeft = static_cast<int>(std::max(
+            0.0f, isRoundFrozen() ? freezeTime_ - roundAge_ : buyTimeLeft_) + 0.999f);
+        const bool buyOpen = canOpenBuyMenu();
+        if (money_ != lastBuyMenuMoney_ || secondsLeft != lastBuyMenuSeconds_ ||
+            buyOpen != lastBuyMenuCanBuy_) {
+            refreshBuyMenuRows();
         }
     }
 
@@ -393,6 +423,20 @@ void Game::processGameInput(float deltaTime) {
         const int direction = pendingWeaponScroll_ > 0 ? 1 : -1;
         pendingWeaponScroll_ = 0;
         cycleWeapon(direction);
+    }
+
+    // Buy menu (B by default, rebindable). The buy phase owns the economic
+    // mode; the free modes can open it at any time.
+    if (bindingDown(keyBindings.buy)) {
+        if (!inp.gameplayBuyPressed) {
+            inp.gameplayBuyPressed = true;
+            if (canOpenBuyMenu()) {
+                openBuyMenu();
+                return;
+            }
+        }
+    } else {
+        inp.gameplayBuyPressed = false;
     }
 
     // Unstuck (U by default, rebindable) - move player to a safe centre spot.
@@ -535,6 +579,16 @@ void Game::processGameInput(float deltaTime) {
         movement = glm::normalize(movement);
     }
 
+    // Round-start freeze: movement and jumping are blocked until the
+    // configured time runs out. Moving after that closes the buy window for
+    // the rest of the round.
+    const bool roundFrozen = isRoundFrozen();
+    if (roundFrozen) {
+        movement = glm::vec3(0.0f);
+    } else if (moving || debugKeyDownForTest(keyBindings.jump)) {
+        buyWindowClosed_ = true;
+    }
+
     float moveSpeed = 5.0f;
     switch (stance_) {
         case STANCE_CROUCHING: moveSpeed = 2.6f; break;
@@ -545,8 +599,9 @@ void Game::processGameInput(float deltaTime) {
             break;
     }
 
-    // Apply movement to velocity. A bomb interaction locks the body in place.
-    if (moving && !bombInteraction) {
+    // Apply movement to velocity. A bomb interaction locks the body in place,
+    // and the round-start freeze holds it at the spawn.
+    if (moving && !bombInteraction && !roundFrozen) {
         playerVelocity.x = movement.x * moveSpeed;
         playerVelocity.z = movement.z * moveSpeed;
     } else {
@@ -559,26 +614,26 @@ void Game::processGameInput(float deltaTime) {
     // from the ground, so the press jumps at once and a held key jumps again the
     // moment the feet touch the floor (bunny-hop), never mid-air.
     inp.jumpHeld = debugKeyDownForTest(keyBindings.jump) &&
-                   stance_ != STANCE_PRONE && !bombInteraction;
+                   stance_ != STANCE_PRONE && !bombInteraction && !roundFrozen;
     if (inp.jumpHeld) {
         if (isOnGround()) handleJump();   // no point above the floor
     }
     
     // Shoot input: mouse button by default, rebindable in Settings > Controls
-    // (the binding may also be a key). No firing between rounds or mid-plant.
+    // (the binding may also be a key). No firing between rounds, mid-plant, or
+    // while the economic buy window is open (move to leave the buy phase).
     const bool shootDown = bindingDown(gameSettings_.bindShoot);
-    if (shootDown && !roundIntermission && !bombInteraction) {
+    const bool buyPhaseBlocksShooting = isEconomyMode() && canOpenBuyMenu();
+    if (shootDown && !roundIntermission && !bombInteraction && !roundFrozen &&
+        !buyPhaseBlocksShooting) {
         shoot();
     }
     
     // Weapon switching input.
-    // Key 1..5 selects the weapon in array order (1 pistol, 2 shotgun,
-    // 3 sniper, 4 grenade, 5 flashbang); the grenade key toggles
-    // grenade/flashbang. Only the press edge is handled, so holding a key
-    // doesn't re-trigger it.
-    static const WeaponType weaponForKey[5] = {
-        PISTOL, PUMP_SHOTGUN, SNIPER, GRENADE, FLASHBANG
-    };
+    // Key 1 = primary, 2 = sidearm, 3 = knife, 4 = grenade, 5 = flashbang.
+    // The primary key cycles the owned primaries (shotgun / sniper); the
+    // grenade key toggles grenade/flashbang. Only the press edge is handled,
+    // so holding a key doesn't re-trigger it.
     for (int key = 0; key < 5; key++) {
         if (!bindingDown(keyBindings.weaponSlot[key])) {
             inp.gameplayWeaponPressed[key] = false;
@@ -586,7 +641,7 @@ void Game::processGameInput(float deltaTime) {
         }
         if (!inp.gameplayWeaponPressed[key]) {
             inp.gameplayWeaponPressed[key] = true;
-            switchWeapon(weaponForKey[key]);
+            selectWeaponSlot(key);
         }
     }
 

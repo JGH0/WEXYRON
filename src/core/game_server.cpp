@@ -146,7 +146,7 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
                     remotePlayers[i].active   = true;
                     remotePlayers[i].team     = packet.team;
                     remotePlayers[i].stance   = packet.stance <= 2 ? packet.stance : 0;
-                    remotePlayers[i].weaponId = packet.weaponId < 5 ? packet.weaponId : 0;
+                    remotePlayers[i].weaponId = packet.weaponId < 6 ? packet.weaponId : 0;
                     remotePlayers[i].stateSequence = packet.header.sequence;
                     // A health drop caused by anyone's shot flinches the body.
                     if (!isNew && packet.health < oldHealth - 0.5f) {
@@ -278,6 +278,41 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
         }
     };
 
+    networkClient->onEconomyState = [this](const EconomyStatePacket& packet) {
+        // Economic packets own money/loadout; free-mode packets still sync the
+        // free armor the server accepted (all weapons stay free there).
+        if (packet.economic != 0) {
+            const bool hadHE = hasHEGrenade_;
+            const bool hadFlash = hasFlashbang_;
+            money_ = std::min<int>(economy::kMaxMoney, packet.money);
+            hasPrimaryShotgun_ = packet.primary == 1;
+            hasPrimarySniper_ = packet.primary == 2;
+            hasHEGrenade_ = (packet.grenades & 1u) != 0;
+            hasFlashbang_ = (packet.grenades & 2u) != 0;
+            // Newly bought grenades get one round; an already-owned grenade
+            // keeps its current count (round-1 freebies start full).
+            if (grenade) {
+                if (hasHEGrenade_ && (!hadHE || grenade->getAmmo() <= 0)) grenade->setAmmo(1);
+                if (!hasHEGrenade_) grenade->setAmmo(0);
+            }
+            if (flashbang) {
+                if (hasFlashbang_ && (!hadFlash || flashbang->getAmmo() <= 0)) flashbang->setAmmo(1);
+                if (!hasFlashbang_) flashbang->setAmmo(0);
+            }
+            grenadeCount = grenade ? grenade->getAmmo() : 0;
+            flashbangCount = flashbang ? flashbang->getAmmo() : 0;
+        } else {
+            money_ = 0;
+        }
+        armor_ = std::min<int>(100, packet.armor);
+        defuseKit_ = packet.defuseKit != 0;
+        if (!weaponOwned(currentWeapon)) {
+            currentWeapon = PISTOL;
+            currentWeaponInstance = pistol;
+        }
+        if (gameState == BUY_MENU) refreshBuyMenuRows();
+    };
+
     networkClient->onBombState = [this](const BombStatePacket& packet) {
         if (!bombDefusalMode) return;
         // A map is still loading: packets from the map we are leaving must not
@@ -297,6 +332,7 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
             serverRoundEnded = false;
             roundWinner = -1;
             roundEndReason = ROUND_END_NONE;
+            buyWindowClosed_ = false;
         }
 
         // The server owns the bomb. Keep the local HUD/render state in sync;
@@ -311,6 +347,8 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
                              : 0.0f;
         bomb.defuseProgress = packet.defuseProgress;
         roundTimeLeft = packet.roundTimeLeft;
+        roundAge_ = packet.roundAge;
+        if (packet.freezeTime > 0.0f) freezeTime_ = packet.freezeTime;
 
         if (packet.roundActive) roundActive = true;
 

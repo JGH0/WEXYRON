@@ -11,9 +11,13 @@ the game, open an issue describing the idea and how it would improve gameplay.
 
 ### Single Player
 - 3D first-person shooter gameplay
-- Multiple weapons (Pistol, Shotgun, Sniper, Grenade, Flashbang)
+- Weapon slots: 1 primary (shotgun / sniper), 2 sidearm (pistol), 3 knife,
+  4 HE grenade, 5 flashbang
+- Bomb Defusal economy: money for kills and round results, loss bonus, a
+  time-limited buy phase (B), kevlar armor, defuse kits and primary/grenade
+  purchases; every other mode uses the same menu with free items
 - First-person glTF weapon viewmodels with bob/sway, recoil and switch animation
-- HUD with health, current weapon + ammo, round details, team score and K/D
+- HUD with health, armor, money, current weapon + ammo, round details, team score and K/D
 - Blocky animated humanoid enemies/teammates (skinned glTF model) with hit zones
 - Hit zones: head shots deal 2x, body 1x, arms/legs/feet 0.5x; explosions deal fixed damage
 - Physics-based movement and collisions
@@ -113,16 +117,17 @@ make clean && make
 - **C**: Lie down / get up (crawl while lying down; toggle or hold in Settings)
 
 ### Weapons
-- **Left Mouse**: Shoot
+- **Left Mouse**: Shoot / swing / throw
 - **Right Mouse (hold)**: Scope with the sniper rifle
 - **Mouse wheel**: Previous / next weapon (the wheel no longer zooms)
-- **1**: Pistol
-- **2**: Pump Shotgun
-- **3**: Sniper Rifle
-- **4**: Grenade
+- **1**: Primary (cycles the owned shotgun / sniper)
+- **2**: Sidearm (pistol)
+- **3**: Knife (melee)
+- **4**: HE Grenade
 - **5**: Flashbang
-- **G**: Toggle Grenade/Flashbang
+- **G**: Toggle Grenade / Flashbang
 - **I**: Inspect the held weapon (animation; cancelled by firing)
+- **B**: Buy menu (during the freeze + 20 s grace in Bomb Defusal; free items elsewhere)
 
 The sniper is bolt-action: selecting it racks the bolt first, and each shot
 must be cycled before the next round can be fired.
@@ -133,8 +138,8 @@ must be cycled before the next round can be fired.
 - **U**: Unstuck (reset position)
 
 Movement, sprint, sneak, lying down, shooting, scoping, the weapon slots, the
-grenade toggle, planting/defusing and the menu key can all be rebound in
-**Settings → Controls**. The current binding
+buy menu, the grenade toggle, planting/defusing and the menu key can all be
+rebound in **Settings → Controls**. The current binding
 is shown on the right of each row; press ENTER on a row and then the new key (or
 mouse button). Bindings and the other settings are saved to
 `assets/settings.cfg` automatically.

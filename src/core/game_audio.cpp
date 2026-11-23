@@ -165,7 +165,8 @@ void Game::updateMusicForState() {
     if (gameState == MENU || gameState == SETTINGS ||
         gameState == MAP_SELECTION || gameState == SERVER_CONNECT) {
         wanted = "menu";
-    } else if (gameState == PLAYING || gameState == DEAD) {
+    } else if (gameState == PLAYING || gameState == DEAD ||
+               gameState == BUY_MENU) {
         wanted = "game";
     }
 

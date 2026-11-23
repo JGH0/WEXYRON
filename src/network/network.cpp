@@ -513,6 +513,20 @@ void NetworkClient::sendBombInteract(uint8_t action) {
     sendPacket(&packet, sizeof(packet));
 }
 
+void NetworkClient::sendBuyAction(uint8_t item) {
+    if (!connected) return;
+
+    BuyActionPacket packet{};
+    packet.header.magic = PACKET_MAGIC;
+    packet.header.type = PACKET_BUY_ACTION;
+    packet.header.sequence = sequence++;
+    packet.header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    packet.header.clientId = clientId;
+    packet.item = item;
+    sendPacket(&packet, sizeof(packet));
+}
+
 void NetworkClient::update() {
     if ((!connected && !connecting) || socketFd == SOCKET_INVALID) return;
 
@@ -659,6 +673,12 @@ void NetworkClient::update() {
             case PACKET_MATCH_STATE:
                 if (connected && received >= sizeof(MatchStatePacket) && onMatchState) {
                     onMatchState(*(MatchStatePacket*)buffer);
+                }
+                break;
+
+            case PACKET_ECONOMY_STATE:
+                if (connected && received >= sizeof(EconomyStatePacket) && onEconomyState) {
+                    onEconomyState(*(EconomyStatePacket*)buffer);
                 }
                 break;
 
@@ -1174,6 +1194,15 @@ void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_
             break;
         }
 
+        case PACKET_BUY_ACTION: {
+            if (size < sizeof(BuyActionPacket)) return;
+            const BuyActionPacket* request = (const BuyActionPacket*)data;
+            ServerPlayer* player = findPlayerByAddress(from);
+            if (!player || !player->active) break;
+            if (onBuyAction) onBuyAction(player->id, *request);
+            break;
+        }
+
         case PACKET_MAP_CHANGE: {
             if (size < sizeof(MapChangePacket)) return;
 
@@ -1255,7 +1284,7 @@ void NetworkServer::broadcastPlayerState(uint32_t playerId, const glm::vec3& pos
     auto stateIt = players.find(playerId);
     packet.team = (stateIt != players.end()) ? stateIt->second.team : 0;
     packet.stance = (stateIt != players.end()) ? stateIt->second.stance : 0;
-    packet.weaponId = (stateIt != players.end()) ? (stateIt->second.weaponId % 5) : 0;
+    packet.weaponId = (stateIt != players.end()) ? (stateIt->second.weaponId % 6) : 0;
     if (stateIt != players.end()) {
         packet.header.sequence = ++stateIt->second.stateSequence;
     }
@@ -1403,7 +1432,7 @@ void NetworkServer::broadcastPlayerStateToMap(uint32_t playerId, const std::stri
     auto stateIt = players.find(playerId);
     packet.team = (stateIt != players.end()) ? stateIt->second.team : 0;
     packet.stance = (stateIt != players.end()) ? stateIt->second.stance : 0;
-    packet.weaponId = (stateIt != players.end()) ? (stateIt->second.weaponId % 5) : 0;
+    packet.weaponId = (stateIt != players.end()) ? (stateIt->second.weaponId % 6) : 0;
     if (stateIt != players.end()) {
         packet.header.sequence = ++stateIt->second.stateSequence;
     }

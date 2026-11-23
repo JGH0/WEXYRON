@@ -497,6 +497,10 @@ bool Game::getRemotePlayerFeet(uint32_t id, glm::vec3& feet) const {
 void Game::applyPlayerDamage(float damage) {
     if (isDead || damage <= 0.0f || spawnProtectionTimer_ > 0.0f) return;
 
+    // Online the server owns armor too (health arrives in PlayerState), so
+    // only the offline damage path applies the local vest.
+    if (!isConnectedToServer()) absorbArmor(damage);
+    if (damage <= 0.0f) return;
     playerHealth -= damage;
     damageEffectTime = std::max(damageEffectTime, 1.0f);
     playSoundEffect("player_damage", playerPos + glm::vec3(0.0f, currentEyeHeight(), 0.0f), 0.9f);
@@ -831,9 +835,11 @@ void Game::shoot() {
         float kick = 0.45f;
         if (currentWeapon == PUMP_SHOTGUN)      kick = 0.95f;
         else if (currentWeapon == SNIPER)       kick = 1.0f;
+        else if (currentWeapon == KNIFE)        kick = 0.12f;
         else if (currentWeapon == GRENADE ||
                  currentWeapon == FLASHBANG)    kick = 0.25f;
         weaponRecoil_ = std::min(1.0f, weaponRecoil_ + kick);
+        if (currentWeapon == KNIFE) knifeSwing_ = kKnifeSwingDuration;
     }
 }
 
@@ -844,13 +850,22 @@ void Game::switchWeapon(WeaponType weapon) {
     if (currentWeapon == weapon) {
         return;
     }
+    // The buy-menu loadout owns which slots exist. Selecting a slot the player
+    // does not own (empty primary, no grenade) does nothing.
+    if (!weaponOwned(weapon)) {
+        playDryFire();
+        return;
+    }
 
     currentWeapon = weapon;
     weaponSwitch_ = 1.0f;   // lower the old gun / raise the new one
     weaponInspect_ = 0.0f;  // a switch always returns to the normal pose
+    if (weapon == PUMP_SHOTGUN || weapon == SNIPER) lastPrimary_ = weapon;
 
     // Leaving the sniper cancels a queued bolt rattle from a shot.
     if (weapon != SNIPER) sniperBoltSoundPending_ = false;
+    // A weapon switch cancels a running knife slash.
+    if (weapon != KNIFE) knifeSwing_ = 0.0f;
 
     switch (weapon) {
         case PISTOL:
@@ -879,21 +894,116 @@ void Game::switchWeapon(WeaponType weapon) {
             currentWeaponInstance = flashbang;
             std::cout << "Switched to Flashbang! Count: " << (infiniteAmmoMode ? "∞" : std::to_string(flashbangCount)) << std::endl;
             break;
+        case KNIFE:
+            currentWeaponInstance = knife;
+            std::cout << "Switched to Knife!" << std::endl;
+            break;
     }
 }
 
 void Game::cycleWeapon(int direction) {
-    // Mouse-wheel order follows the number keys (1..5). Wrapping keeps the
-    // wheel useful in both directions.
-    static const WeaponType kOrder[5] = {
-        PISTOL, PUMP_SHOTGUN, SNIPER, GRENADE, FLASHBANG
+    // Mouse-wheel order: pistol, shotgun, sniper, knife, grenade, flashbang.
+    // Weapons the current loadout does not own are skipped.
+    static const WeaponType kOrder[6] = {
+        PISTOL, PUMP_SHOTGUN, SNIPER, KNIFE, GRENADE, FLASHBANG
     };
     int index = 0;
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 0; i < 6; ++i) {
         if (kOrder[i] == currentWeapon) { index = i; break; }
     }
-    index = (index + (direction >= 0 ? 1 : -1) + 5) % 5;
-    switchWeapon(kOrder[index]);
+    const int step = direction >= 0 ? 1 : -1;
+    for (int offset = 1; offset <= 6; ++offset) {
+        const int candidate = ((index + step * offset) % 6 + 6) % 6;
+        if (kOrder[candidate] == currentWeapon) continue;
+        if (!weaponOwned(kOrder[candidate])) continue;
+        switchWeapon(kOrder[candidate]);
+        return;
+    }
+}
+
+void Game::selectWeaponSlot(int slot) {
+    switch (slot) {
+        case 0: {   // primary: cycle owned primaries (shotgun / sniper)
+            const bool wantSniper =
+                (currentWeapon == PUMP_SHOTGUN && hasPrimarySniper_) ||
+                (!hasPrimaryShotgun_ && hasPrimarySniper_);
+            if (wantSniper) {
+                switchWeapon(SNIPER);
+            } else if (hasPrimaryShotgun_) {
+                switchWeapon(PUMP_SHOTGUN);
+            } else if (hasPrimarySniper_) {
+                switchWeapon(SNIPER);
+            } else {
+                playDryFire();
+            }
+            break;
+        }
+        case 1: switchWeapon(PISTOL); break;
+        case 2: switchWeapon(KNIFE); break;
+        case 3: switchWeapon(GRENADE); break;
+        case 4: switchWeapon(FLASHBANG); break;
+        default: break;
+    }
+}
+
+void Game::meleeAttack() {
+    // Short-range swing in front of the camera. One body per swing, mirrors
+    // the projectile hit path (bots and remote players use the same body box).
+    constexpr float kMeleeRange = 2.2f;
+    const glm::vec3 origin = playerPos + glm::vec3(0.0f, currentEyeHeight(), 0.0f);
+    const glm::vec3 forward = camera.Front;
+    constexpr float kMeleeDamage = 55.0f;
+
+    auto facing = [&](const glm::vec3& target) {
+        glm::vec3 to = target - origin;
+        const float len = glm::length(to);
+        if (len < 0.001f || len > kMeleeRange) return false;
+        to /= len;
+        return glm::dot(to, forward) > 0.35f;
+    };
+
+    // Remote players (online) / local bots copied into the remote slots.
+    float bestDistance = kMeleeRange + 1.0f;
+    RemotePlayer* best = nullptr;
+    for (int i = 0; i < MAX_REMOTE_PLAYERS; ++i) {
+        RemotePlayer& remote = remotePlayers[i];
+        if (!remote.active || remote.isDead) continue;
+        if (networkClient && remote.id == networkClient->getClientId()) continue;
+        const glm::vec3 chest = remote.position +
+            glm::vec3(0.0f, stanceBodyHeight(remote.stance) * 0.55f, 0.0f);
+        if (!facing(chest)) continue;
+        const float distance = glm::length(chest - origin);
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            best = &remote;
+        }
+    }
+    if (best) {
+        if (networkClient && networkClient->isConnected()) {
+            networkClient->sendPlayerDamage(best->id, static_cast<uint16_t>(kMeleeDamage),
+                                            static_cast<uint8_t>(KNIFE));
+        } else {
+            damageLocalBot(best->id, kMeleeDamage);
+        }
+        best->anim.damage = 1.0f;
+        playSoundEffect("hit_flesh", best->position +
+                         glm::vec3(0.0f, stanceBodyHeight(best->stance) * 0.55f, 0.0f), 0.9f);
+        playUiSound("hitmarker");
+        return;
+    }
+
+    // Legacy practice targets (only present on maps that spawn them).
+    for (int i = 0; i < MAX_ENEMIES; ++i) {
+        if (!enemies[i].active || !enemies[i].alive) continue;
+        const glm::vec3 chest(enemies[i].x, enemies[i].y + 0.9f, enemies[i].z);
+        if (!facing(chest)) continue;
+        enemies[i].health -= kMeleeDamage;
+        enemies[i].anim.damage = 1.0f;
+        playSoundEffect("hit_flesh", chest, 0.9f);
+        playUiSound("hitmarker");
+        if (enemies[i].health <= 0.0f) killEnemy(enemies[i]);
+        return;
+    }
 }
 
 void Game::updateScope(float deltaTime) {
@@ -1875,6 +1985,8 @@ bool Game::checkProjectilePlayerBody(Projectile& projectile) {
 void Game::damagePlayer(float damage) {
     if (isDead || spawnProtectionTimer_ > 0.0f) return; // Dead or spawn-protected
     
+    if (!isConnectedToServer()) absorbArmor(damage);
+    if (damage <= 0.0f) return;
     playerHealth -= damage;
     if (playerHealth < 0.0f) playerHealth = 0.0f;
     
@@ -2299,10 +2411,12 @@ void Game::updateBomb(float deltaTime) {
         }
     }
     
-    // Update defusing progress
+    // Update defusing progress. A defuse kit halves the time, like the
+    // server-side check (ServerBombManager uses the actor's kit).
     if (isDefusing) {
+        const float defuseTime = defuseKit_ ? 2.0f : 4.0f;
         defuseProgress += deltaTime;
-        if (defuseProgress >= 4.0f) { // 4 seconds to defuse
+        if (defuseProgress >= defuseTime) {
             defuseProgress = 0.0f;
             isDefusing = false;
             
@@ -2431,6 +2545,9 @@ void Game::endRound(int winner, RoundEndReason reason) {
     roundEndTimer = (currentGameMode == BOMB_DEFUSAL) ? 3.0f : 5.0f;
     if (winner == 0)      teamAScore_++;
     else if (winner == 1) teamBScore_++;
+    // Offline economy: the round result pays the local player. Online the
+    // dedicated server pays every participant and sends EconomyStatePacket.
+    if (!isConnectedToServer() && isEconomyMode()) awardRoundMoney(winner);
     playUiSound("round_end");
     
     if (winner == 0) {
@@ -2547,6 +2664,9 @@ void Game::startRound() {
     roundActive = true;
     roundTime = 0.0f;
     roundTimeLeft = kLocalBombRoundTime;
+    buyTimeLeft_ = freezeTime_ + economy::kBuyGraceSeconds;
+    roundAge_ = 0.0f;
+    buyWindowClosed_ = false;
     roundNumber_++;
     teamADeaths = 0;
     teamBDeaths = 0;
@@ -2589,6 +2709,9 @@ void Game::beginServerRound() {
     roundTime = 0.0f;
     roundActive = true;
     roundEndTimer = 0.0f;
+    buyTimeLeft_ = freezeTime_ + economy::kBuyGraceSeconds;
+    roundAge_ = 0.0f;
+    buyWindowClosed_ = false;
     roundWinner = -1;
     roundEndReason = ROUND_END_NONE;
     serverRoundEnded = false;
@@ -2758,9 +2881,11 @@ void Game::updateLocalBots(float deltaTime) {
 
 bool Game::damageLocalBot(uint32_t id, float damage) {
     if (!localBots_) return false;
+    const int killsBefore = localBots_->playerKills();
     const bool hit = localBots_->damageBot(id, damage, playerTeam & 1);
     if (hit) {
         kills_ = localBots_->playerKills();
+        if (kills_ > killsBefore) awardKillMoney();
         if (currentGameMode == TEAM_VS_TEAM) {
             teamAScore_ = localBots_->teamAKills();
             teamBScore_ = localBots_->teamBKills();

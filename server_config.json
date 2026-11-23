@@ -12,7 +12,8 @@
     "allowMapChange": true,
     "friendlyFire": false,
     "respawnTime": 5.0,
-    "roundTime": 115.0
+    "roundTime": 115.0,
+    "freezeTime": 10.0
   },
   "bots": {
     "count": 0,

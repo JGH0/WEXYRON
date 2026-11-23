@@ -154,7 +154,7 @@ int main() {
         game.debugScrollWeaponForTest(1);   // one notch down -> next weapon
         game.debugStepWithKeysForTest(kDt, {});
         std::printf("weapon wheel: %d -> %d\n", startWeapon, game.debugWeaponForTest());
-        CHECK(game.debugWeaponForTest() == (startWeapon + 1) % 5);
+        CHECK(game.debugWeaponForTest() == (startWeapon + 1) % 6);
         game.debugScrollWeaponForTest(-1);  // and back
         game.debugStepWithKeysForTest(kDt, {});
         CHECK(game.debugWeaponForTest() == startWeapon);
@@ -220,6 +220,105 @@ int main() {
         std::printf("grenade %-22s (%.1f units): damage %.1f\n", c.label, c.distance, damage);
         CHECK(damage >= c.minDamage - 0.01f);
         CHECK(damage <= c.maxDamage + 0.01f);
+    }
+
+    // ── Economy: bomb defusal is economic, other modes are free ──────────────
+    if (game.debugStartMapWithModeForTest("large.map", 2)) {
+        std::printf("economy start: money=%d armor=%d kit=%d\n",
+                    game.debugMoneyForTest(), game.debugArmorForTest(),
+                    game.debugHasDefuseKitForTest() ? 1 : 0);
+        CHECK(game.debugMoneyForTest() == economy::kStartingMoney);
+        CHECK(game.debugArmorForTest() == 0);
+        CHECK(!game.debugHasDefuseKitForTest());
+        // Round 1 loadout: pistol + knife + the two free grenades, no primary.
+        CHECK(game.debugWeaponOwnedForTest(0));   // pistol
+        CHECK(game.debugWeaponOwnedForTest(5));   // knife
+        CHECK(!game.debugWeaponOwnedForTest(1));  // shotgun
+        CHECK(!game.debugWeaponOwnedForTest(2));  // sniper
+        CHECK(game.debugWeaponOwnedForTest(3));   // HE (round 1)
+        CHECK(game.debugWeaponOwnedForTest(4));   // flash (round 1)
+        CHECK(game.debugCanOpenBuyMenuForTest());
+
+        // Round-start freeze: movement is blocked until the freeze expires.
+        glm::vec3 frozenFeet, frozenVel;
+        bool frozenOnGround = false;
+        game.debugPlayerState(frozenFeet, frozenVel, frozenOnGround);
+        for (int i = 0; i < 10; ++i) {
+            game.debugStepWithKeysForTest(kDt, {game.debugForwardKey()});
+        }
+        glm::vec3 afterFreezeFeet, afterFreezeVel;
+        bool afterFreezeOnGround = false;
+        game.debugPlayerState(afterFreezeFeet, afterFreezeVel, afterFreezeOnGround);
+        CHECK(glm::length(afterFreezeFeet - frozenFeet) < 0.05f);
+
+        // The page builds and draws over the match (B opens it in real play).
+        game.debugOpenBuyMenuForTest();
+        CHECK(game.debugBuyMenuOpenForTest());
+        game.render();
+        game.debugCloseBuyMenuForTest();
+        CHECK(!game.debugBuyMenuOpenForTest());
+
+        // The infinite-ammo option must never apply in the economic mode.
+        game.gameSettings().infiniteAmmo = true;
+        game.applySettingsForTest();
+        game.debugSelectWeaponForTest(0);
+        CHECK(!game.debugWeaponInfiniteForTest());
+        game.gameSettings().infiniteAmmo = false;
+        game.applySettingsForTest();
+
+        // Buy a vest: $800 -> $150, armor 100, then a 65 blast is halved.
+        game.debugBuyItemForTest(economy::ITEM_KEVLAR);
+        std::printf("after kevlar: money=%d armor=%d\n",
+                    game.debugMoneyForTest(), game.debugArmorForTest());
+        CHECK(game.debugMoneyForTest() == economy::kStartingMoney - 650);
+        CHECK(game.debugArmorForTest() == 100);
+        glm::vec3 feet, velocity;
+        bool onGround = false;
+        game.debugPlayerState(feet, velocity, onGround);
+        game.debugExplodeForTest(feet);
+        const float armoredDamage = 100.0f - game.debugPlayerHealth();
+        std::printf("armored blast damage: %.1f (armor %d)\n",
+                    armoredDamage, game.debugArmorForTest());
+        CHECK(armoredDamage > 25.0f && armoredDamage < 40.0f);
+
+        // Ammo is refilled at the next round start.
+        game.debugSelectWeaponForTest(0);
+        const int ammoAtRoundStart = game.debugCurrentAmmo();
+        game.debugShootAndStepForTest();
+        CHECK(game.debugCurrentAmmo() < ammoAtRoundStart);
+
+        // Round result pays the winner. The loadout (including grenades and
+        // armor) carries over to the next round; ammo is refilled.
+        game.debugEndRoundForTest(0, ROUND_END_DEFENDERS_ELIMINATED);
+        for (int i = 0; i < 400; ++i) game.debugStepForTest(1, kDt);
+        std::printf("next round: money=%d grenades=%d/%d armor=%d buy=%.1f ammo=%d\n",
+                    game.debugMoneyForTest(),
+                    game.debugWeaponOwnedForTest(3) ? 1 : 0,
+                    game.debugWeaponOwnedForTest(4) ? 1 : 0,
+                    game.debugArmorForTest(),
+                    game.debugBuyTimeLeftForTest(),
+                    game.debugCurrentAmmo());
+        CHECK(game.debugMoneyForTest() == 150 + economy::kRoundWinReward);
+        CHECK(game.debugWeaponOwnedForTest(3));
+        CHECK(game.debugWeaponOwnedForTest(4));
+        CHECK(game.debugArmorForTest() == 67);
+        CHECK(game.debugCanOpenBuyMenuForTest());
+        CHECK(game.debugBuyTimeLeftForTest() > 10.0f);
+        CHECK(game.debugCurrentAmmo() == ammoAtRoundStart);
+
+        // Once the freeze has expired, the first step closes the buy window.
+        for (int i = 0; i < 700; ++i) game.debugStepForTest(1, kDt);
+        CHECK(game.debugCanOpenBuyMenuForTest());
+        game.debugStepWithKeysForTest(kDt, {game.debugForwardKey()});
+        CHECK(!game.debugCanOpenBuyMenuForTest());
+    }
+
+    // Free modes use the same menu with no cost and the full loadout.
+    if (game.debugStartMapForTest("large.map")) {
+        game.debugBuyItemForTest(economy::ITEM_PRIMARY_SNIPER);
+        CHECK(game.debugWeaponOwnedForTest(2));
+        CHECK(game.debugMoneyForTest() == 0);
+        CHECK(game.debugCanOpenBuyMenuForTest());
     }
 
     std::printf(failures ? "GAMEPLAY TEST: %d FAILURES\n" : "GAMEPLAY TEST: ALL OK\n", failures);

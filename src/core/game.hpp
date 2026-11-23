@@ -35,6 +35,7 @@
 #include "../systems/input.hpp"
 #include "../systems/enemy.hpp"
 #include "../network/network.hpp"
+#include "../game/economy.hpp"
 #include "engine/audio_manager.hpp"
 
 class LocalBotHost;
@@ -73,6 +74,7 @@ struct LobbyView {
  */
 class Game {
 public:
+    friend class Knife;   ///< the melee weapon resolves hits through Game
     /**
      * @brief Construct a new Game object
      * 
@@ -241,6 +243,16 @@ public:
     /// Start a real match on `mapFile` exactly like the map menu does
     /// (installMap -> resetGame -> PLAYING).
     bool debugStartMapForTest(const std::string& mapFile);
+    /// Same, but on a specific GameMode (0 deathmatch, 1 team, 2 bomb).
+    bool debugStartMapWithModeForTest(const std::string& mapFile, int mode);
+    /// Economy / buy-menu state for tests.
+    bool debugCanOpenBuyMenuForTest() const { return canOpenBuyMenu(); }
+    float debugBuyTimeLeftForTest() const { return buyTimeLeft_; }
+    void debugOpenBuyMenuForTest() { openBuyMenu(); }
+    void debugCloseBuyMenuForTest() { closeBuyMenu(); }
+    bool debugWeaponOwnedForTest(int weapon) const {
+        return weaponOwned(static_cast<WeaponType>(weapon));
+    }
     /// Step real gameplay frames without input, with the current map loaded.
     void debugStepForTest(int frames, float dt);
     /// Put the camera at a fixed eye position / yaw / pitch (degrees) so a
@@ -304,7 +316,15 @@ public:
     }
     /// Switch the held weapon like pressing 1-5 (viewmodel screenshots/tests).
     void debugSelectWeaponForTest(int index) {
-        switchWeapon(static_cast<WeaponType>(index % 5));
+        switchWeapon(static_cast<WeaponType>(index % 6));
+    }
+    /// Economy state (tests / HUD).
+    int debugMoneyForTest() const { return money_; }
+    int debugArmorForTest() const { return armor_; }
+    bool debugHasDefuseKitForTest() const { return defuseKit_; }
+    bool debugBuyMenuOpenForTest() const { return gameState == BUY_MENU; }
+    void debugBuyItemForTest(int item) {
+        buyItem(static_cast<economy::Item>(item));
     }
     /// Force the sniper scope on/off for screenshots and tests (bypasses RMB).
     void debugSetScopedForTest(bool scoped) {
@@ -323,7 +343,7 @@ public:
     float debugEyeHeightForTest() const { return eyeHeightCurrent_; }
     /// Queue wheel notches exactly like scrollCallback (tests).
     void debugScrollWeaponForTest(int direction) { pendingWeaponScroll_ = direction; }
-    /// Held weapon index (0 pistol, 1 shotgun, 2 sniper, 3 grenade, 4 flash).
+    /// Held weapon index (0 pistol, 1 shotgun, 2 sniper, 3 grenade, 4 flash, 5 knife).
     int debugWeaponForTest() const { return static_cast<int>(currentWeapon); }
     /// Infinite-ammo flag actually used by the held weapon.
     bool debugWeaponInfiniteForTest() const {
@@ -534,6 +554,7 @@ private:
     Sniper* sniper;
     Grenade* grenade;
     Flashbang* flashbang;
+    Knife* knife;
 
     /// Sniper scope (held SCOPE binding, right mouse by default): zooms the
     /// camera and draws the scope overlay while the sniper is held.
@@ -584,7 +605,8 @@ private:
         SERVER_CONNECT,
         TEAM_SETUP,
         MAP_EDITOR,
-        DEAD
+        DEAD,
+        BUY_MENU         ///< buy phase overlay over the running match
     } gameState;
     
     /// Weapon types
@@ -593,7 +615,8 @@ private:
         PUMP_SHOTGUN,
         SNIPER,
         GRENADE,
-        FLASHBANG
+        FLASHBANG,
+        KNIFE            ///< melee slot (the always-owned starter knife)
     };
     
     /// Current weapon
@@ -683,6 +706,7 @@ private:
         bool gameplayGPressed  = false;
         bool gameplayPronePressed = false;
         bool gameplayInspectPressed = false;
+        bool gameplayBuyPressed = false;
         bool gameplayWeaponPressed[5] = {false, false, false, false, false}; // indices 0-4
 
         InputState() {
@@ -718,6 +742,7 @@ private:
             gameplayGPressed = false;
             gameplayPronePressed = false;
             gameplayInspectPressed = false;
+            gameplayBuyPressed = false;
             for (int i = 0; i < 5; i++) gameplayWeaponPressed[i] = false;
         }
     } inp;
@@ -746,9 +771,10 @@ private:
         int shootButton;  ///< mouse button for shooting (-1 when bound to a key)
         int scopeKey;     ///< scope as a key code (-1 when bound to the mouse)
         int scopeButton;  ///< mouse button for scoping (-1 when bound to a key)
-        int weaponSlot[5];///< select pistol/shotgun/sniper/grenade/flashbang
+        int weaponSlot[5];///< select primary/sidearm/knife/grenade/flashbang
         int grenade;
         int inspect;      ///< play the weapon inspect animation
+        int buy;          ///< open the buy menu
         int use;          ///< plant / defuse
         int unstuck;
     } keyBindings;
@@ -772,6 +798,7 @@ private:
     menu::MenuView mapMenu_;      ///< map selection
     menu::MenuView serverMenu_;   ///< connect to server
     menu::MenuView teamMenu_;     ///< pre-match team / bot setup
+    menu::MenuView buyMenu_;      ///< in-game buy menu (B)
     /// Set while the current state shows one of the menu views.
     bool menuActive_ = false;
 
@@ -1011,6 +1038,9 @@ private:
     /// cancels it so it never delays gameplay.
     float weaponInspect_ = 0.0f;
     static constexpr float kWeaponInspectDuration = 2.4f;
+    /// Knife slash animation clock (seconds left, 0 = idle).
+    float knifeSwing_ = 0.0f;
+    static constexpr float kKnifeSwingDuration = 0.34f;
     float lastViewYaw_ = 0.0f;       ///< previous frame's look direction
     float lastViewPitch_ = 0.0f;
 
@@ -1516,6 +1546,69 @@ private:
     int  fpsDisplayValue;
     GameMode currentGameMode;
     int playerTeam; // 0 = Team A/Red, 1 = Team B/Blue (team-based modes)
+
+    // ── Economy / buy menu (bomb defusal only; free elsewhere) ─────────────
+    /// True when money, the buy phase and round loadouts are active.
+    bool isEconomyMode() const { return economy::isEconomicMode(static_cast<int>(currentGameMode)); }
+    int money_ = economy::kStartingMoney;
+    int armor_ = 0;                 ///< 0..100 kevlar vest
+    bool defuseKit_ = false;
+    int lossStreak_ = 0;            ///< consecutive losses (loss bonus)
+    /// Owned loadout. In non-economic modes every weapon is always owned.
+    bool hasPrimaryShotgun_ = true;
+    bool hasPrimarySniper_ = true;
+    bool hasHEGrenade_ = true;
+    bool hasFlashbang_ = true;
+    /// The first round of a fresh economic match hands out grenades.
+    bool firstEconomyRound_ = true;
+    /// Seconds left in the current round's buy window.
+    float buyTimeLeft_ = economy::kSinglePlayerFreezeTime + economy::kBuyGraceSeconds;
+    /// Freeze duration before a round starts (server-configured online, 10 s
+    /// offline).
+    float freezeTime_ = economy::kSinglePlayerFreezeTime;
+    /// Seconds since the current round started (server-authoritative online).
+    float roundAge_ = 0.0f;
+    /// The player moved after the freeze period: the buy window is closed for
+    /// the rest of the round.
+    bool buyWindowClosed_ = false;
+    /// True while the round-start freeze blocks movement / jumping.
+    bool isRoundFrozen() const {
+        return isEconomyMode() && roundActive && roundAge_ < freezeTime_;
+    }
+    /// Last values rendered on the buy page (lightweight live refresh).
+    int lastBuyMenuMoney_ = -1;
+    int lastBuyMenuSeconds_ = -1;
+    bool lastBuyMenuCanBuy_ = false;
+    /// Last weapon held in the primary slot (key 1 cycles owned primaries).
+    WeaponType lastPrimary_ = PUMP_SHOTGUN;
+
+    /// True when the held / requested weapon belongs to the player loadout.
+    bool weaponOwned(WeaponType weapon) const;
+    /// Live infinite-ammo flag for the current mode (forced off when economic).
+    void refreshWeaponInfiniteAmmo();
+    /// Refill every weapon to the ammo a fresh round starts with.
+    void refillAllAmmo();
+    /// Reset the per-round loadout (pistol + knife, plus round-1 grenades).
+    void resetRoundLoadout();
+    /// Reset money / ownership for a brand-new match or mode change.
+    void resetEconomyForMatch();
+    /// Open / close / rebuild the buy menu.
+    bool canOpenBuyMenu() const;
+    void openBuyMenu();
+    void closeBuyMenu();
+    void refreshBuyMenuRows();
+    /// Buy one item (free in every non-economic mode). Online economic buys
+    /// are validated by the server: the request is sent and the authoritative
+    /// EconomyStatePacket updates the local state.
+    void buyItem(economy::Item item);
+    /// Apply a purchase locally (offline / free mode). False when it is not
+    /// possible (not owned money, buy phase over, already owned).
+    bool applyBuyItem(economy::Item item, bool free);
+    /// Credit a kill / round result to the local economy (offline only).
+    void awardKillMoney();
+    void awardRoundMoney(int winner);
+    /// Apply kevlar to incoming damage (damage is reduced in place).
+    void absorbArmor(float& damage);
     
     /**
      * @brief Update player physics including gravity and collisions
@@ -1535,6 +1628,10 @@ private:
      * @brief Shoot projectile from current weapon
      */
     void shoot();
+    /// Resolve one knife swing against bodies/bots in front of the player.
+    void meleeAttack();
+    /// Select one of the five number-key slots (0 = primary ... 4 = flash).
+    void selectWeaponSlot(int slot);
     
     /**
      * @brief Switch to the given weapon (no-op if already holding it)
