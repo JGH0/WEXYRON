@@ -74,7 +74,10 @@ struct LobbyView {
  */
 class Game {
 public:
-    friend class Knife;   ///< the melee weapon resolves hits through Game
+    friend class Knife;       ///< melee weapons resolve hits through Game
+    friend class BattleAxe;
+    friend class Mace;
+    friend class LungeMine;
     /**
      * @brief Construct a new Game object
      * 
@@ -316,8 +319,10 @@ public:
     }
     /// Switch the held weapon like pressing 1-5 (viewmodel screenshots/tests).
     void debugSelectWeaponForTest(int index) {
-        switchWeapon(static_cast<WeaponType>(index % 6));
+        switchWeapon(static_cast<WeaponType>(index % 10));
     }
+    /// Resolve a number-key slot (0 primary, 1 sidearm, 2 melee, ...) for tests.
+    void debugSelectWeaponSlotForTest(int slot) { selectWeaponSlot(slot); }
     /// Economy state (tests / HUD).
     int debugMoneyForTest() const { return money_; }
     int debugArmorForTest() const { return armor_; }
@@ -550,11 +555,15 @@ private:
     // New weapon system
     Weapon* currentWeaponInstance;
     Pistol* pistol;
+    ProPistol* proPistol;
     PumpShotgun* shotgun;
     Sniper* sniper;
     Grenade* grenade;
     Flashbang* flashbang;
     Knife* knife;
+    BattleAxe* battleAxe;
+    Mace* mace;
+    LungeMine* lungeMine;
 
     /// Sniper scope (held SCOPE binding, right mouse by default): zooms the
     /// camera and draws the scope overlay while the sniper is held.
@@ -616,7 +625,11 @@ private:
         SNIPER,
         GRENADE,
         FLASHBANG,
-        KNIFE            ///< melee slot (the always-owned starter knife)
+        KNIFE,           ///< melee slot: always-owned starter knife
+        BATTLE_AXE,      ///< melee slot: bought heavy axe
+        MACE,            ///< melee slot: bought heavy mace
+        LUNGE_MINE,      ///< melee slot: one-use forward blast
+        PRO_PISTOL       ///< sidearm: semi-automatic pistol (one shot per click)
     };
     
     /// Current weapon
@@ -707,6 +720,7 @@ private:
         bool gameplayPronePressed = false;
         bool gameplayInspectPressed = false;
         bool gameplayBuyPressed = false;
+        bool gameplayShootPressed = false; // shot-trigger edge (semi-automatic)
         bool gameplayWeaponPressed[5] = {false, false, false, false, false}; // indices 0-4
 
         InputState() {
@@ -743,6 +757,7 @@ private:
             gameplayPronePressed = false;
             gameplayInspectPressed = false;
             gameplayBuyPressed = false;
+            gameplayShootPressed = false;
             for (int i = 0; i < 5; i++) gameplayWeaponPressed[i] = false;
         }
     } inp;
@@ -798,7 +813,6 @@ private:
     menu::MenuView mapMenu_;      ///< map selection
     menu::MenuView serverMenu_;   ///< connect to server
     menu::MenuView teamMenu_;     ///< pre-match team / bot setup
-    menu::MenuView buyMenu_;      ///< in-game buy menu (B)
     /// Set while the current state shows one of the menu views.
     bool menuActive_ = false;
 
@@ -1038,9 +1052,12 @@ private:
     /// cancels it so it never delays gameplay.
     float weaponInspect_ = 0.0f;
     static constexpr float kWeaponInspectDuration = 2.4f;
-    /// Knife slash animation clock (seconds left, 0 = idle).
-    float knifeSwing_ = 0.0f;
-    static constexpr float kKnifeSwingDuration = 0.34f;
+    /// Knife / melee light-attack animation clock (seconds left, 0 = idle).
+    float meleeLight_ = 0.0f;
+    static constexpr float kMeleeLightDuration = 0.34f;
+    /// Knife / melee heavy-attack animation clock (seconds left, 0 = idle).
+    float meleeHeavy_ = 0.0f;
+    static constexpr float kMeleeHeavyDuration = 0.52f;
     float lastViewYaw_ = 0.0f;       ///< previous frame's look direction
     float lastViewPitch_ = 0.0f;
 
@@ -1559,6 +1576,12 @@ private:
     bool hasPrimarySniper_ = true;
     bool hasHEGrenade_ = true;
     bool hasFlashbang_ = true;
+    /// The bought pro pistol in the sidearm slot (the starter pistol is always
+    /// owned). Both sidearms remain selectable; key 2 toggles between them.
+    bool hasProPistol_ = false;
+    /// The melee slot holds exactly one weapon (knife by default). Buying an
+    /// axe / mace / lunge mine replaces it, like the primary slot.
+    WeaponType meleeWeapon_ = KNIFE;
     /// The first round of a fresh economic match hands out grenades.
     bool firstEconomyRound_ = true;
     /// Seconds left in the current round's buy window.
@@ -1575,12 +1598,10 @@ private:
     bool isRoundFrozen() const {
         return isEconomyMode() && roundActive && roundAge_ < freezeTime_;
     }
-    /// Last values rendered on the buy page (lightweight live refresh).
-    int lastBuyMenuMoney_ = -1;
-    int lastBuyMenuSeconds_ = -1;
-    bool lastBuyMenuCanBuy_ = false;
     /// Last weapon held in the primary slot (key 1 cycles owned primaries).
     WeaponType lastPrimary_ = PUMP_SHOTGUN;
+    /// Last weapon held in the sidearm slot (key 2 toggles pistol / pro pistol).
+    WeaponType lastSidearm_ = PISTOL;
 
     /// True when the held / requested weapon belongs to the player loadout.
     bool weaponOwned(WeaponType weapon) const;
@@ -1592,15 +1613,37 @@ private:
     void resetRoundLoadout();
     /// Reset money / ownership for a brand-new match or mode change.
     void resetEconomyForMatch();
-    /// Open / close / rebuild the buy menu.
+    /// Open / close the buy screen.
     bool canOpenBuyMenu() const;
     void openBuyMenu();
     void closeBuyMenu();
-    void refreshBuyMenuRows();
     /// Buy one item (free in every non-economic mode). Online economic buys
     /// are validated by the server: the request is sent and the authoritative
     /// EconomyStatePacket updates the local state.
     void buyItem(economy::Item item);
+
+    /// One tile of the Counter-Strike-style buy screen.
+    struct BuyEntry {
+        economy::Item item = economy::ITEM_NONE;
+        std::string label;
+        std::string value;      ///< "$1500", "OWNED", "FREE"
+        bool owned = false;
+        bool available = true;
+        int column = 0;
+        int row = 0;
+        float x = 0.0f, y = 0.0f, w = 0.0f, h = 0.0f;  ///< screen rect
+    };
+    /// Recompute the grid entries (prices / owned flags / tile rects).
+    void buildBuyMenuEntries();
+    /// Move the selection within the grid (column / row steps).
+    void moveBuySelection(int deltaColumn, int deltaRow);
+    /// Draw the buy screen (call with the UI projection active).
+    void renderBuyMenu();
+    /// Keyboard / mouse input while the buy screen is open.
+    void processBuyMenuInput(float deltaTime);
+    std::vector<BuyEntry> buyEntries_;
+    int buySelection_ = 0;
+
     /// Apply a purchase locally (offline / free mode). False when it is not
     /// possible (not owned money, buy phase over, already owned).
     bool applyBuyItem(economy::Item item, bool free);
@@ -1628,8 +1671,16 @@ private:
      * @brief Shoot projectile from current weapon
      */
     void shoot();
-    /// Resolve one knife swing against bodies/bots in front of the player.
-    void meleeAttack();
+    /// True for the melee slot weapons (knife, axe, mace, lunge mine).
+    static bool isMeleeWeapon(WeaponType weapon) {
+        return weapon == KNIFE || weapon == BATTLE_AXE ||
+               weapon == MACE || weapon == LUNGE_MINE;
+    }
+    /// Resolve one melee attack against bodies/bots in front of the player.
+    /// `heavy` picks the slower, harder right-mouse attack (and its animation).
+    void meleeAttack(float damage, float range, float facingDot, bool heavy);
+    /// One-use lunge mine: forward blast that hurts the user a little.
+    void lungeMineAttack();
     /// Select one of the five number-key slots (0 = primary ... 4 = flash).
     void selectWeaponSlot(int slot);
     

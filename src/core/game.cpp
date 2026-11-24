@@ -235,6 +235,7 @@ Game::Game(int width, int height)
       camera(glm::vec3(0.0f, 0.0f, 3.0f)),
       currentWeaponInstance(nullptr),
       pistol(nullptr),
+      proPistol(nullptr),
       shotgun(nullptr),
       sniper(nullptr),
       grenade(nullptr),
@@ -383,11 +384,15 @@ Game::Game(int width, int height)
 
     // Weapons
     pistol    = new Pistol(infiniteAmmoMode);
+    proPistol = new ProPistol(infiniteAmmoMode);
     shotgun   = new PumpShotgun(infiniteAmmoMode);
     sniper    = new Sniper(infiniteAmmoMode);
     grenade   = new Grenade(3, infiniteAmmoMode);
     flashbang = new Flashbang(2, infiniteAmmoMode);
     knife     = new Knife();
+    battleAxe = new BattleAxe();
+    mace      = new Mace();
+    lungeMine = new LungeMine();
     currentWeaponInstance = pistol;
 
     // Physics
@@ -546,11 +551,15 @@ Game::~Game() {
         discoverySocketFd = SOCKET_INVALID;
     }
     delete pistol;
+    delete proPistol;
     delete shotgun;
     delete sniper;
     delete grenade;
     delete flashbang;
     delete knife;
+    delete battleAxe;
+    delete mace;
+    delete lungeMine;
     if (currentMap) delete currentMap;
 
     // glTF models own GPU buffers/textures (via the render backend): release
@@ -1182,7 +1191,8 @@ void Game::resetGame() {
     weaponBobAmount_ = 0.0f;
     weaponSwayX_     = 0.0f;
     weaponSwayY_     = 0.0f;
-    knifeSwing_      = 0.0f;
+    meleeLight_      = 0.0f;
+    meleeHeavy_       = 0.0f;
 
     // Ammo: every round starts with full magazines. Economic rounds keep the
     // pistol/knife and whatever was bought; other modes own everything.
@@ -1227,8 +1237,12 @@ bool Game::weaponOwned(WeaponType weapon) const {
         case SNIPER:       return hasPrimarySniper_;
         case GRENADE:      return hasHEGrenade_;
         case FLASHBANG:    return hasFlashbang_;
+        case BATTLE_AXE:   return meleeWeapon_ == BATTLE_AXE;
+        case MACE:         return meleeWeapon_ == MACE;
+        case LUNGE_MINE:   return meleeWeapon_ == LUNGE_MINE;
+        case KNIFE:        return meleeWeapon_ == KNIFE;
+        case PRO_PISTOL:   return hasProPistol_;
         case PISTOL:
-        case KNIFE:
         default:           return true;   // always-owned starter gear
     }
 }
@@ -1238,19 +1252,26 @@ void Game::refreshWeaponInfiniteAmmo() {
     // never turn it into a sandbox. Everywhere else the option applies.
     infiniteAmmoMode = gameSettings_.infiniteAmmo && !isEconomyMode();
     if (pistol)    pistol->setInfiniteAmmo(infiniteAmmoMode);
+    if (proPistol) proPistol->setInfiniteAmmo(infiniteAmmoMode);
     if (shotgun)   shotgun->setInfiniteAmmo(infiniteAmmoMode);
     if (sniper)    sniper->setInfiniteAmmo(infiniteAmmoMode);
     if (grenade)   grenade->setInfiniteAmmo(infiniteAmmoMode);
     if (flashbang) flashbang->setInfiniteAmmo(infiniteAmmoMode);
     if (knife)     knife->setInfiniteAmmo(true);   // melee has no ammo
+    if (battleAxe) battleAxe->setInfiniteAmmo(true);
+    if (mace)      mace->setInfiniteAmmo(true);
+    // The lunge mine is a one-use item: never infinite.
+    if (lungeMine) lungeMine->setInfiniteAmmo(false);
 }
 
 void Game::refillAllAmmo() {
     if (pistol)    pistol->refill();
+    if (proPistol) proPistol->refill();
     if (shotgun)   shotgun->refill();
     if (sniper)    sniper->refill();
     if (grenade)   grenade->refill();
     if (flashbang) flashbang->refill();
+    if (lungeMine) lungeMine->refill();
     // Legacy mirrors used by the old per-weapon helpers and the console log.
     pistolAmmo     = pistol ? pistol->getAmmo() : 0;
     shotgunAmmo    = shotgun ? shotgun->getAmmo() : 0;
@@ -1269,9 +1290,8 @@ void Game::resetRoundLoadout() {
             firstEconomyRound_ = false;
         }
     } else {
-        // Non-economic modes: the buy menu is a free loadout screen.
-        hasPrimaryShotgun_ = true;
-        hasPrimarySniper_ = true;
+        // Non-economic modes: the buy menu is a free loadout screen. Keep the
+        // primary the player picked (only one is carried at a time).
         hasHEGrenade_ = true;
         hasFlashbang_ = true;
         armor_ = 0;
@@ -1288,6 +1308,10 @@ void Game::resetRoundLoadout() {
         currentWeapon = lastPrimary_;
         currentWeaponInstance = lastPrimary_ == SNIPER ? static_cast<Weapon*>(sniper)
                                                        : static_cast<Weapon*>(shotgun);
+    } else if (hasProPistol_ && lastSidearm_ == PRO_PISTOL) {
+        // No primary: respawn with the sidearm last carried.
+        currentWeapon = PRO_PISTOL;
+        currentWeaponInstance = proPistol;
     }
 
     // Never keep holding gear the new round did not grant.
@@ -1311,9 +1335,15 @@ void Game::resetEconomyForMatch() {
     roundAge_ = 0.0f;
     buyWindowClosed_ = false;
     hasPrimaryShotgun_ = !economic;
-    hasPrimarySniper_ = !economic;
+    hasPrimarySniper_ = false;   // only one primary at a time
     hasHEGrenade_ = !economic;
     hasFlashbang_ = !economic;
+    // The starter pistol is always owned; the pro pistol is a purchase.
+    hasProPistol_ = false;
+    lastSidearm_ = PISTOL;
+    // A new match starts with the default knife; melee upgrades are bought.
+    meleeWeapon_ = KNIFE;
+    if (lungeMine) lungeMine->setAmmo(1);
     lastPrimary_ = PUMP_SHOTGUN;
     refreshWeaponInfiniteAmmo();
 }
@@ -1365,7 +1395,7 @@ bool Game::applyBuyItem(economy::Item item, bool free) {
         case economy::ITEM_PRIMARY_SHOTGUN: {
             if (economic && hasPrimaryShotgun_) return false;
             hasPrimaryShotgun_ = true;
-            if (economic) hasPrimarySniper_ = false;   // one primary slot
+            hasPrimarySniper_ = false;   // one primary slot
             lastPrimary_ = PUMP_SHOTGUN;
             if (shotgun) shotgun->refill();
             switchWeapon(PUMP_SHOTGUN);
@@ -1374,7 +1404,7 @@ bool Game::applyBuyItem(economy::Item item, bool free) {
         case economy::ITEM_PRIMARY_SNIPER: {
             if (economic && hasPrimarySniper_) return false;
             hasPrimarySniper_ = true;
-            if (economic) hasPrimaryShotgun_ = false;
+            hasPrimaryShotgun_ = false;  // one primary slot
             lastPrimary_ = SNIPER;
             if (sniper) sniper->refill();
             switchWeapon(SNIPER);
@@ -1391,6 +1421,37 @@ bool Game::applyBuyItem(economy::Item item, bool free) {
             hasFlashbang_ = true;
             if (flashbang) flashbang->setAmmo(free ? flashbang->getInitialAmmo() : 1);
             flashbangCount = flashbang ? flashbang->getAmmo() : 0;
+            break;
+        case economy::ITEM_SIDEARM_PISTOL:
+            // The starter pistol is always owned: this row just re-equips it.
+            switchWeapon(PISTOL);
+            break;
+        case economy::ITEM_SIDEARM_PRO_PISTOL:
+            if (economic && hasProPistol_) return false;
+            hasProPistol_ = true;
+            if (proPistol) proPistol->refill();
+            switchWeapon(PRO_PISTOL);
+            break;
+        case economy::ITEM_MELEE_KNIFE:
+            if (economic && meleeWeapon_ == KNIFE) return false;
+            meleeWeapon_ = KNIFE;
+            switchWeapon(KNIFE);
+            break;
+        case economy::ITEM_MELEE_AXE:
+            if (economic && meleeWeapon_ == BATTLE_AXE) return false;
+            meleeWeapon_ = BATTLE_AXE;
+            switchWeapon(BATTLE_AXE);
+            break;
+        case economy::ITEM_MELEE_MACE:
+            if (economic && meleeWeapon_ == MACE) return false;
+            meleeWeapon_ = MACE;
+            switchWeapon(MACE);
+            break;
+        case economy::ITEM_MELEE_LUNGE:
+            if (economic && meleeWeapon_ == LUNGE_MINE) return false;
+            meleeWeapon_ = LUNGE_MINE;
+            if (lungeMine) lungeMine->setAmmo(1);   // one fresh charge
+            switchWeapon(LUNGE_MINE);
             break;
         default:
             return false;
@@ -1411,7 +1472,7 @@ void Game::buyItem(economy::Item item) {
         return;
     }
     applyBuyItem(item, !isEconomyMode());
-    refreshBuyMenuRows();
+    buildBuyMenuEntries();
 }
 
 // ---------------------------------------------------------------------------

@@ -49,6 +49,30 @@ void Pistol::shoot(Game* game) {
     }
 }
 
+// Pro Pistol Implementation
+ProPistol::ProPistol(bool infiniteAmmo)
+    : Weapon(PRO_PISTOL, 0.0f, infiniteAmmo ? 999 : 1000, infiniteAmmo) {
+}
+
+void ProPistol::shoot(Game* game) {
+    if (!canShoot()) { game->playDryFire(); return; }
+
+    // Same round as the starter pistol: type 0 (25 damage), 150 u/s.
+    if (game->createProjectile(game->getCamera().Position,
+                               game->getCamera().Front * kPistolBulletSpeed,
+                               2.0f, 0, 0)) {
+        game->playGunshot("pistol_fire", 1.0f);
+        if (!infiniteAmmo) {
+            ammo--;
+        }
+        // No cooldown: the trigger is click-edge driven in Game::handleInput,
+        // so rapid clicking fires as fast as the player can click.
+        cooldownTimer = cooldown;
+        std::cout << "Pro pistol shot! Active: " << game->getActiveProjectiles()
+                  << " Ammo: " << (infiniteAmmo ? "∞" : std::to_string(ammo)) << std::endl;
+    }
+}
+
 // Pump Shotgun Implementation
 PumpShotgun::PumpShotgun(bool infiniteAmmo)
     : Weapon(PUMP_SHOTGUN, 0.8f, infiniteAmmo ? 999 : 25, infiniteAmmo) {
@@ -147,7 +171,7 @@ void Flashbang::shoot(Game* game) {
 
 // Knife Implementation
 Knife::Knife()
-    : Weapon(KNIFE, 0.55f, 1, true) {
+    : Weapon(KNIFE, kSlashCooldown, 1, true) {
 }
 
 bool Knife::canShoot() const {
@@ -158,6 +182,66 @@ bool Knife::canShoot() const {
 void Knife::shoot(Game* game) {
     if (!canShoot()) return;
     // The hit resolution lives in Game (bodies, bots and hit zones).
-    game->meleeAttack();
-    cooldownTimer = cooldown;
+    game->meleeAttack(55.0f, 2.2f, 0.35f, false);
+    cooldownTimer = kSlashCooldown;
 }
+
+void Knife::altAttack(Game* game) {
+    if (!canShoot()) return;
+    game->meleeAttack(90.0f, 2.5f, 0.45f, true);
+    cooldownTimer = kStabCooldown;
+}
+
+// Battle axe: one heavy swing, one crushing overhead.
+BattleAxe::BattleAxe()
+    : Weapon(BATTLE_AXE, kSwingCooldown, 1, true) {
+}
+
+bool BattleAxe::canShoot() const { return cooldownTimer <= 0.0f; }
+
+void BattleAxe::shoot(Game* game) {
+    if (!canShoot()) return;
+    game->meleeAttack(70.0f, 2.4f, 0.30f, false);
+    cooldownTimer = kSwingCooldown;
+}
+
+void BattleAxe::altAttack(Game* game) {
+    if (!canShoot()) return;
+    game->meleeAttack(100.0f, 2.7f, 0.40f, true);
+    cooldownTimer = kHeavyCooldown;
+}
+
+// Mace: blunt swings with a crushing heavy hit.
+Mace::Mace()
+    : Weapon(MACE, kSwingCooldown, 1, true) {
+}
+
+bool Mace::canShoot() const { return cooldownTimer <= 0.0f; }
+
+void Mace::shoot(Game* game) {
+    if (!canShoot()) return;
+    game->meleeAttack(65.0f, 2.2f, 0.35f, false);
+    cooldownTimer = kSwingCooldown;
+}
+
+void Mace::altAttack(Game* game) {
+    if (!canShoot()) return;
+    game->meleeAttack(95.0f, 2.5f, 0.40f, true);
+    cooldownTimer = kHeavyCooldown;
+}
+
+// Lunge mine: a single forward blast, then the mine is spent.
+LungeMine::LungeMine()
+    : Weapon(LUNGE_MINE, 1.2f, 1, false) {
+}
+
+bool LungeMine::canShoot() const { return cooldownTimer <= 0.0f && ammo > 0; }
+
+void LungeMine::shoot(Game* game) {
+    if (!canShoot()) return;
+    ammo = 0;
+    cooldownTimer = cooldown;
+    game->lungeMineAttack();
+}
+
+void LungeMine::altAttack(Game* game) { shoot(game); }

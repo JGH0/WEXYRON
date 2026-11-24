@@ -95,13 +95,12 @@ void Game::processInput(float deltaTime) {
     // key edges and must not run on every frame.)
     const bool inMenuState = (gameState == MENU || gameState == SETTINGS ||
                               gameState == MAP_SELECTION || gameState == SERVER_CONNECT ||
-                              gameState == TEAM_SETUP || gameState == BUY_MENU);
+                              gameState == TEAM_SETUP);
     if (inMenuState && !activeMenuView().stack.current()) {
         if (gameState == MENU) openMainMenu();
         else if (gameState == SETTINGS) openSettings();
         else if (gameState == MAP_SELECTION) openMapSelection();
         else if (gameState == TEAM_SETUP) openTeamSetup();
-        else if (gameState == BUY_MENU) openBuyMenu();
         else openServerConnect();
     }
 
@@ -127,20 +126,11 @@ void Game::processInput(float deltaTime) {
             inp.escapePressed = false;
         }
         processGameInput(deltaTime);
+    } else if (gameState == BUY_MENU) {
+        processBuyMenuInput(deltaTime);
     } else if (gameState == MENU || gameState == SETTINGS ||
                gameState == MAP_SELECTION || gameState == SERVER_CONNECT ||
-               gameState == TEAM_SETUP || gameState == BUY_MENU) {
-        // B closes the buy menu like ESC. The same key opens it, so the edge
-        // flag is kept until the key is released to avoid an instant reopen.
-        if (gameState == BUY_MENU && bindingDown(keyBindings.buy)) {
-            if (!inp.gameplayBuyPressed) {
-                inp.gameplayBuyPressed = true;
-                closeBuyMenu();
-                return;
-            }
-        } else if (gameState == BUY_MENU) {
-            inp.gameplayBuyPressed = false;
-        }
+               gameState == TEAM_SETUP) {
         processMenuInput();
     } else if (gameState == MAP_EDITOR) {
         // The editor handles ESC itself so it can warn about unsaved changes.
@@ -208,6 +198,13 @@ void Game::resumeGameFromMenu() {
     // first move does not spin.
     inp.resetNavKeys();
     menuJustEntered = true;
+
+    // "PLAY GAME" from the main menu starts the single-player practice match
+    // on the map loaded behind the menu. Mark it as a real match so the pause
+    // menu and the buy menu (B) behave like they do in any started match.
+    if (!gameInProgress_ && currentMap) {
+        gameInProgress_ = true;
+    }
 
     if (pendingRoundStart_) {
         // A round ended while the menu was open. Starting it respawns
@@ -316,18 +313,6 @@ void Game::processMenuInput() {
             refreshTeamSetupRows();
         } else if (gameState == MAP_SELECTION) {
             refreshMapSelectionRows();
-        }
-    }
-
-    if (gameState == BUY_MENU) {
-        // Live updates while the page is open: a server economy packet or the
-        // buy-phase clock expiring must disable/enable rows immediately.
-        const int secondsLeft = static_cast<int>(std::max(
-            0.0f, isRoundFrozen() ? freezeTime_ - roundAge_ : buyTimeLeft_) + 0.999f);
-        const bool buyOpen = canOpenBuyMenu();
-        if (money_ != lastBuyMenuMoney_ || secondsLeft != lastBuyMenuSeconds_ ||
-            buyOpen != lastBuyMenuCanBuy_) {
-            refreshBuyMenuRows();
         }
     }
 
@@ -624,9 +609,24 @@ void Game::processGameInput(float deltaTime) {
     // while the economic buy window is open (move to leave the buy phase).
     const bool shootDown = bindingDown(gameSettings_.bindShoot);
     const bool buyPhaseBlocksShooting = isEconomyMode() && canOpenBuyMenu();
-    if (shootDown && !roundIntermission && !bombInteraction && !roundFrozen &&
+    // The pro pistol is semi-automatic: a held trigger fires nothing, every
+    // shot needs its own click. Other weapons keep firing while held.
+    const bool semiAuto = currentWeapon == PRO_PISTOL;
+    const bool shootTriggered = shootDown && (!semiAuto || !inp.gameplayShootPressed);
+    inp.gameplayShootPressed = shootDown;
+    if (shootTriggered && !roundIntermission && !bombInteraction && !roundFrozen &&
         !buyPhaseBlocksShooting) {
         shoot();
+    }
+
+    // Knife stab: the scope binding (right mouse by default) is a slower,
+    // higher-damage attack while a melee weapon is held. Firearms keep using
+    // it for the sniper scope.
+    if (isMeleeWeapon(currentWeapon) && currentWeaponInstance &&
+        bindingDown(gameSettings_.bindScope) &&
+        !roundIntermission && !bombInteraction && !roundFrozen &&
+        !buyPhaseBlocksShooting) {
+        currentWeaponInstance->altAttack(this);
     }
     
     // Weapon switching input.

@@ -33,7 +33,15 @@ int main() {
           game.debugViewmodelModelsLastFrame() > 0);
 
     // Every held weapon has a model and the HUD reports that weapon.
-    for (int weapon = 0; weapon < 6; ++weapon) {
+    for (int weapon = 0; weapon < 10; ++weapon) {
+        // Only one primary and one melee weapon are carried at a time; equip
+        // each for its viewmodel screenshot (free in this mode).
+        if (weapon == 1) game.debugBuyItemForTest(economy::ITEM_PRIMARY_SHOTGUN);
+        if (weapon == 2) game.debugBuyItemForTest(economy::ITEM_PRIMARY_SNIPER);
+        if (weapon == 6) game.debugBuyItemForTest(economy::ITEM_MELEE_AXE);
+        if (weapon == 7) game.debugBuyItemForTest(economy::ITEM_MELEE_MACE);
+        if (weapon == 8) game.debugBuyItemForTest(economy::ITEM_MELEE_LUNGE);
+        if (weapon == 9) game.debugBuyItemForTest(economy::ITEM_SIDEARM_PRO_PISTOL);
         game.debugSelectWeaponForTest(weapon);
         game.debugStepForTest(2, kDt);
         game.render();

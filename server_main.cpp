@@ -428,7 +428,7 @@ int main(int argc, char* argv[]) {
         player->gameMode = input.gameMode;
         player->matchFormat = input.matchFormat;
         player->stance = input.stance <= 2 ? input.stance : 0;
-        player->weaponId = input.weaponId % 6;
+        player->weaponId = input.weaponId % 10;
 
         // A client that joins a running bomb round did not see the round-start
         // reset; send the authoritative starting economy once so it drops the
@@ -459,7 +459,12 @@ int main(int argc, char* argv[]) {
                 (w == 1 && player->primary != 1) ||
                 (w == 2 && player->primary != 2) ||
                 (w == 3 && !player->hasHEGrenade) ||
-                (w == 4 && !player->hasFlashbang);
+                (w == 4 && !player->hasFlashbang) ||
+                (w == 6 && player->melee != economy::MELEE_AXE) ||
+                (w == 7 && player->melee != economy::MELEE_MACE) ||
+                (w == 8 && player->melee != economy::MELEE_LUNGE) ||
+                (w == 5 && player->melee != economy::MELEE_KNIFE) ||
+                (w == 9 && player->sidearm != 1);
             if (invalid) player->weaponId = 0;
         }
 
@@ -638,10 +643,13 @@ int main(int argc, char* argv[]) {
         if (victim->spawnProtection > 0.0f) return;
 
         // A sniper body shot (100) is lethal; its headshot (200) is capped at
-        // 160. Grenade blasts stay lethal but are not stacked.
+        // 160. Grenade blasts stay lethal but are not stacked. Weapon ids 5-8
+        // are melee weapons, whose heavy hits are meant to be lethal.
         if (weaponId == 4) {
             damage = std::min(damage, 160.0f);
-        } else if (weaponId >= 1) {
+        } else if (weaponId >= 5 && weaponId <= 8) {
+            damage = std::min(damage, 110.0f);
+        } else if (weaponId >= 1 && weaponId != 9) {
             damage = std::min(damage, 75.0f);
         } else {
             damage = std::min(damage, 100.0f);
@@ -761,6 +769,8 @@ int main(int argc, char* argv[]) {
         state.primary = player->primary;
         state.grenades = static_cast<uint8_t>((player->hasHEGrenade ? 1 : 0) |
                                               (player->hasFlashbang ? 2 : 0));
+        state.melee = player->melee;
+        state.sidearm = player->sidearm;
         state.economic = player->gameMode == 2 ? 1 : 0;
         state.buyAllowed = buyPhaseOpen(*player) ? 1 : 0;
         server.sendToPlayer(player->id, &state, sizeof(state));
@@ -782,10 +792,13 @@ int main(int argc, char* argv[]) {
                 player->lossStreak = 0;
                 player->economyInitialised = true;
                 player->primary = 0;
+                player->sidearm = 0;
                 player->armor = 0;
                 player->defuseKit = false;
                 player->hasHEGrenade = freshMatch;
                 player->hasFlashbang = freshMatch;
+                // The melee slot starts as the default knife.
+                player->melee = economy::MELEE_KNIFE;
             }
             // Otherwise the current loadout (primary, grenades, armor, kit)
             // carries over, even when the player did not survive the round.
@@ -831,7 +844,7 @@ int main(int argc, char* argv[]) {
 
         const economy::Item item = static_cast<economy::Item>(request.item);
         const int cost = economic ? economy::price(item) : 0;
-        if (economic && (cost <= 0 || player->money < cost)) return;
+        if (economic && (cost < 0 || player->money < cost)) return;
 
         switch (item) {
             case economy::ITEM_KEVLAR:
@@ -850,6 +863,13 @@ int main(int argc, char* argv[]) {
                 if (economic && player->primary == 2) return;
                 player->primary = 2;
                 break;
+            case economy::ITEM_SIDEARM_PISTOL:
+                player->sidearm = 0;
+                break;
+            case economy::ITEM_SIDEARM_PRO_PISTOL:
+                if (economic && player->sidearm == 1) return;
+                player->sidearm = 1;
+                break;
             case economy::ITEM_HE_GRENADE:
                 if (economic && player->hasHEGrenade) return;
                 player->hasHEGrenade = true;
@@ -857,6 +877,22 @@ int main(int argc, char* argv[]) {
             case economy::ITEM_FLASHBANG:
                 if (economic && player->hasFlashbang) return;
                 player->hasFlashbang = true;
+                break;
+            case economy::ITEM_MELEE_KNIFE:
+                if (economic && player->melee == economy::MELEE_KNIFE) return;
+                player->melee = economy::MELEE_KNIFE;
+                break;
+            case economy::ITEM_MELEE_AXE:
+                if (economic && player->melee == economy::MELEE_AXE) return;
+                player->melee = economy::MELEE_AXE;
+                break;
+            case economy::ITEM_MELEE_MACE:
+                if (economic && player->melee == economy::MELEE_MACE) return;
+                player->melee = economy::MELEE_MACE;
+                break;
+            case economy::ITEM_MELEE_LUNGE:
+                if (economic && player->melee == economy::MELEE_LUNGE) return;
+                player->melee = economy::MELEE_LUNGE;
                 break;
             default:
                 return;
@@ -870,6 +906,17 @@ int main(int argc, char* argv[]) {
                   << static_cast<int>(item)
                   << (economic ? " ($" + std::to_string(player->money) + " left)" : " (free)")
                   << std::endl;
+    };
+    // A one-use melee (lunge mine) was spent on the client. Drop it from the
+    // authoritative loadout so it cannot be used twice after a rejoin.
+    server.onMeleeUse = [&server, &sendEconomy](uint32_t playerId,
+                                               const MeleeUsePacket& request) {
+        ServerPlayer* player = server.getPlayer(playerId);
+        if (!player || !player->active) return;
+        if (player->gameMode != 2) return;   // free modes own everything anyway
+        if (request.weapon != static_cast<uint8_t>(economy::ITEM_MELEE_LUNGE)) return;
+        player->melee = economy::MELEE_KNIFE;
+        if (sendEconomy) sendEconomy(player);
     };
     server.onBombInteract = [&bombManager](uint32_t playerId, uint8_t action) {
         bombManager.onBombInteract(playerId, action);

@@ -146,7 +146,7 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
                     remotePlayers[i].active   = true;
                     remotePlayers[i].team     = packet.team;
                     remotePlayers[i].stance   = packet.stance <= 2 ? packet.stance : 0;
-                    remotePlayers[i].weaponId = packet.weaponId < 6 ? packet.weaponId : 0;
+                    remotePlayers[i].weaponId = packet.weaponId < 10 ? packet.weaponId : 0;
                     remotePlayers[i].stateSequence = packet.header.sequence;
                     // A health drop caused by anyone's shot flinches the body.
                     if (!isNew && packet.health < oldHealth - 0.5f) {
@@ -287,8 +287,22 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
             money_ = std::min<int>(economy::kMaxMoney, packet.money);
             hasPrimaryShotgun_ = packet.primary == 1;
             hasPrimarySniper_ = packet.primary == 2;
+            if (hasPrimarySniper_) lastPrimary_ = SNIPER;
+            else if (hasPrimaryShotgun_) lastPrimary_ = PUMP_SHOTGUN;
+            const bool hadProPistol = hasProPistol_;
+            hasProPistol_ = packet.sidearm == 1;
+            // A freshly accepted pro-pistol purchase equips it, like the
+            // offline buy path does.
+            if (!hadProPistol && hasProPistol_) switchWeapon(PRO_PISTOL);
             hasHEGrenade_ = (packet.grenades & 1u) != 0;
             hasFlashbang_ = (packet.grenades & 2u) != 0;
+            // Only one melee weapon is carried; the packet says which one.
+            switch (packet.melee) {
+                case economy::MELEE_AXE:   meleeWeapon_ = BATTLE_AXE; break;
+                case economy::MELEE_MACE:  meleeWeapon_ = MACE; break;
+                case economy::MELEE_LUNGE: meleeWeapon_ = LUNGE_MINE; break;
+                default:                   meleeWeapon_ = KNIFE; break;
+            }
             // Newly bought grenades get one round; an already-owned grenade
             // keeps its current count (round-1 freebies start full).
             if (grenade) {
@@ -310,7 +324,7 @@ bool Game::connectToServer(const std::string& address, uint16_t port) {
             currentWeapon = PISTOL;
             currentWeaponInstance = pistol;
         }
-        if (gameState == BUY_MENU) refreshBuyMenuRows();
+        if (gameState == BUY_MENU) buildBuyMenuEntries();
     };
 
     networkClient->onBombState = [this](const BombStatePacket& packet) {

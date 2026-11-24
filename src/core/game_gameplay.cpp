@@ -835,11 +835,13 @@ void Game::shoot() {
         float kick = 0.45f;
         if (currentWeapon == PUMP_SHOTGUN)      kick = 0.95f;
         else if (currentWeapon == SNIPER)       kick = 1.0f;
-        else if (currentWeapon == KNIFE)        kick = 0.12f;
+        else if (currentWeapon == KNIFE ||
+                 currentWeapon == BATTLE_AXE ||
+                 currentWeapon == MACE)         kick = 0.12f;
+        else if (currentWeapon == LUNGE_MINE)   kick = 0.45f;
         else if (currentWeapon == GRENADE ||
                  currentWeapon == FLASHBANG)    kick = 0.25f;
         weaponRecoil_ = std::min(1.0f, weaponRecoil_ + kick);
-        if (currentWeapon == KNIFE) knifeSwing_ = kKnifeSwingDuration;
     }
 }
 
@@ -861,16 +863,26 @@ void Game::switchWeapon(WeaponType weapon) {
     weaponSwitch_ = 1.0f;   // lower the old gun / raise the new one
     weaponInspect_ = 0.0f;  // a switch always returns to the normal pose
     if (weapon == PUMP_SHOTGUN || weapon == SNIPER) lastPrimary_ = weapon;
+    if (weapon == PISTOL || weapon == PRO_PISTOL) lastSidearm_ = weapon;
 
     // Leaving the sniper cancels a queued bolt rattle from a shot.
     if (weapon != SNIPER) sniperBoltSoundPending_ = false;
-    // A weapon switch cancels a running knife slash.
-    if (weapon != KNIFE) knifeSwing_ = 0.0f;
+    // A weapon switch cancels a running melee animation.
+    if (!isMeleeWeapon(weapon)) {
+        meleeLight_ = 0.0f;
+        meleeHeavy_ = 0.0f;
+    }
 
     switch (weapon) {
         case PISTOL:
             currentWeaponInstance = pistol;
             std::cout << "Switched to Pistol! Ammo: " << (infiniteAmmoMode ? "∞" : std::to_string(pistolAmmo)) << std::endl;
+            break;
+        case PRO_PISTOL:
+            currentWeaponInstance = proPistol;
+            std::cout << "Switched to Pro Pistol! Ammo: "
+                      << (infiniteAmmoMode ? "∞" : std::to_string(proPistol ? proPistol->getAmmo() : 0))
+                      << std::endl;
             break;
         case PUMP_SHOTGUN:
             currentWeaponInstance = shotgun;
@@ -898,22 +910,35 @@ void Game::switchWeapon(WeaponType weapon) {
             currentWeaponInstance = knife;
             std::cout << "Switched to Knife!" << std::endl;
             break;
+        case BATTLE_AXE:
+            currentWeaponInstance = battleAxe;
+            std::cout << "Switched to Battle Axe!" << std::endl;
+            break;
+        case MACE:
+            currentWeaponInstance = mace;
+            std::cout << "Switched to Mace!" << std::endl;
+            break;
+        case LUNGE_MINE:
+            currentWeaponInstance = lungeMine;
+            std::cout << "Switched to Lunge Mine!" << std::endl;
+            break;
     }
 }
 
 void Game::cycleWeapon(int direction) {
-    // Mouse-wheel order: pistol, shotgun, sniper, knife, grenade, flashbang.
-    // Weapons the current loadout does not own are skipped.
-    static const WeaponType kOrder[6] = {
-        PISTOL, PUMP_SHOTGUN, SNIPER, KNIFE, GRENADE, FLASHBANG
+    // Mouse-wheel order: pistol, primaries, melee group, throwables. Weapons
+    // the current loadout does not own are skipped.
+    static const WeaponType kOrder[10] = {
+        PISTOL, PRO_PISTOL, PUMP_SHOTGUN, SNIPER, KNIFE, BATTLE_AXE, MACE,
+        LUNGE_MINE, GRENADE, FLASHBANG
     };
     int index = 0;
-    for (int i = 0; i < 6; ++i) {
+    for (int i = 0; i < 10; ++i) {
         if (kOrder[i] == currentWeapon) { index = i; break; }
     }
     const int step = direction >= 0 ? 1 : -1;
-    for (int offset = 1; offset <= 6; ++offset) {
-        const int candidate = ((index + step * offset) % 6 + 6) % 6;
+    for (int offset = 1; offset <= 10; ++offset) {
+        const int candidate = ((index + step * offset) % 10 + 10) % 10;
         if (kOrder[candidate] == currentWeapon) continue;
         if (!weaponOwned(kOrder[candidate])) continue;
         switchWeapon(kOrder[candidate]);
@@ -923,13 +948,8 @@ void Game::cycleWeapon(int direction) {
 
 void Game::selectWeaponSlot(int slot) {
     switch (slot) {
-        case 0: {   // primary: cycle owned primaries (shotgun / sniper)
-            const bool wantSniper =
-                (currentWeapon == PUMP_SHOTGUN && hasPrimarySniper_) ||
-                (!hasPrimaryShotgun_ && hasPrimarySniper_);
-            if (wantSniper) {
-                switchWeapon(SNIPER);
-            } else if (hasPrimaryShotgun_) {
+        case 0:   // one primary at a time: equip whichever is carried
+            if (hasPrimaryShotgun_) {
                 switchWeapon(PUMP_SHOTGUN);
             } else if (hasPrimarySniper_) {
                 switchWeapon(SNIPER);
@@ -937,33 +957,45 @@ void Game::selectWeaponSlot(int slot) {
                 playDryFire();
             }
             break;
-        }
-        case 1: switchWeapon(PISTOL); break;
-        case 2: switchWeapon(KNIFE); break;
+        case 1:
+            // The sidearm slot holds the pistol and (once bought) the pro
+            // pistol. Pressing 2 toggles between the two owned sidearms,
+            // otherwise it equips the last one carried.
+            if (currentWeapon == PISTOL && hasProPistol_) {
+                switchWeapon(PRO_PISTOL);
+            } else if (currentWeapon == PRO_PISTOL) {
+                switchWeapon(PISTOL);
+            } else {
+                switchWeapon(weaponOwned(lastSidearm_) ? lastSidearm_ : PISTOL);
+            }
+            break;
+        case 2: switchWeapon(meleeWeapon_); break;
         case 3: switchWeapon(GRENADE); break;
         case 4: switchWeapon(FLASHBANG); break;
         default: break;
     }
 }
 
-void Game::meleeAttack() {
-    // Short-range swing in front of the camera. One body per swing, mirrors
+void Game::meleeAttack(float damage, float range, float facingDot, bool heavy) {
+    // Short-range attack in front of the camera. One body per attack, mirrors
     // the projectile hit path (bots and remote players use the same body box).
-    constexpr float kMeleeRange = 2.2f;
     const glm::vec3 origin = playerPos + glm::vec3(0.0f, currentEyeHeight(), 0.0f);
     const glm::vec3 forward = camera.Front;
-    constexpr float kMeleeDamage = 55.0f;
+
+    // Drive the matching viewmodel animation.
+    if (heavy) meleeHeavy_ = kMeleeHeavyDuration;
+    else       meleeLight_ = kMeleeLightDuration;
 
     auto facing = [&](const glm::vec3& target) {
         glm::vec3 to = target - origin;
         const float len = glm::length(to);
-        if (len < 0.001f || len > kMeleeRange) return false;
+        if (len < 0.001f || len > range) return false;
         to /= len;
-        return glm::dot(to, forward) > 0.35f;
+        return glm::dot(to, forward) > facingDot;
     };
 
     // Remote players (online) / local bots copied into the remote slots.
-    float bestDistance = kMeleeRange + 1.0f;
+    float bestDistance = range + 1.0f;
     RemotePlayer* best = nullptr;
     for (int i = 0; i < MAX_REMOTE_PLAYERS; ++i) {
         RemotePlayer& remote = remotePlayers[i];
@@ -980,10 +1012,10 @@ void Game::meleeAttack() {
     }
     if (best) {
         if (networkClient && networkClient->isConnected()) {
-            networkClient->sendPlayerDamage(best->id, static_cast<uint16_t>(kMeleeDamage),
-                                            static_cast<uint8_t>(KNIFE));
+            networkClient->sendPlayerDamage(best->id, static_cast<uint16_t>(damage),
+                                            static_cast<uint8_t>(currentWeapon));
         } else {
-            damageLocalBot(best->id, kMeleeDamage);
+            damageLocalBot(best->id, damage);
         }
         best->anim.damage = 1.0f;
         playSoundEffect("hit_flesh", best->position +
@@ -997,13 +1029,87 @@ void Game::meleeAttack() {
         if (!enemies[i].active || !enemies[i].alive) continue;
         const glm::vec3 chest(enemies[i].x, enemies[i].y + 0.9f, enemies[i].z);
         if (!facing(chest)) continue;
-        enemies[i].health -= kMeleeDamage;
+        enemies[i].health -= damage;
         enemies[i].anim.damage = 1.0f;
         playSoundEffect("hit_flesh", chest, 0.9f);
         playUiSound("hitmarker");
         if (enemies[i].health <= 0.0f) killEnemy(enemies[i]);
         return;
     }
+}
+
+void Game::lungeMineAttack() {
+    // The lunge mine is a shaped charge on a stick: it detonates in front of
+    // the player, hurting everything in that area (including the user a bit)
+    // and is spent afterwards (the player falls back to the knife).
+    constexpr float kBlastDistance = 2.2f;
+    constexpr float kBlastRadius = 4.0f;
+    constexpr float kBlastDamage = 110.0f;
+    constexpr float kSelfDamage = 20.0f;
+
+    const glm::vec3 origin = playerPos + glm::vec3(0.0f, currentEyeHeight(), 0.0f);
+    const glm::vec3 forward = camera.Front;
+    const glm::vec3 blast = origin + forward * kBlastDistance;
+
+    meleeHeavy_ = kMeleeHeavyDuration;
+
+    // Visible explosion + sound at the charge.
+    for (int i = 0; i < MAX_EXPLOSIONS; ++i) {
+        if (explosions[i].active) continue;
+        explosions[i].position = blast;
+        explosions[i].scale = 0.4f;
+        explosions[i].maxScale = 4.0f;
+        explosions[i].lifetime = 0.7f;
+        explosions[i].active = true;
+        explosions[i].color = glm::vec3(1.0f, 0.55f, 0.10f);
+        break;
+    }
+    playSoundEffect("explosion", blast, 1.0f);
+    playSoundEffect("explosion", origin, 0.6f);
+
+    auto inBlast = [&](const glm::vec3& feet, uint8_t stance) {
+        const glm::vec3 centre = feet + glm::vec3(0.0f, stanceBodyHeight(stance) * 0.5f, 0.0f);
+        if (glm::length(centre - blast) >= kBlastRadius) return false;
+        glm::vec3 to = centre - origin;
+        const float len = glm::length(to);
+        if (len < 0.001f) return true;
+        return glm::dot(to / len, forward) > 0.0f;   // only in front
+    };
+
+    // Remote players / local bots in the blast.
+    for (int i = 0; i < MAX_REMOTE_PLAYERS; ++i) {
+        RemotePlayer& remote = remotePlayers[i];
+        if (!remote.active || remote.isDead) continue;
+        if (networkClient && remote.id == networkClient->getClientId()) continue;
+        if (!inBlast(remote.position, remote.stance)) continue;
+        if (networkClient && networkClient->isConnected()) {
+            networkClient->sendPlayerDamage(remote.id,
+                static_cast<uint16_t>(kBlastDamage), static_cast<uint8_t>(currentWeapon));
+        } else {
+            damageLocalBot(remote.id, kBlastDamage);
+        }
+        remote.anim.damage = 1.0f;
+    }
+
+    // Legacy practice targets.
+    for (int i = 0; i < MAX_ENEMIES; ++i) {
+        if (!enemies[i].active || !enemies[i].alive) continue;
+        if (!inBlast(glm::vec3(enemies[i].x, enemies[i].y, enemies[i].z), 0)) continue;
+        enemies[i].health -= kBlastDamage;
+        enemies[i].anim.damage = 1.0f;
+        if (enemies[i].health <= 0.0f) killEnemy(enemies[i]);
+    }
+
+    // A little self damage (armor / spawn protection still apply).
+    applyPlayerDamage(kSelfDamage);
+
+    // The charge is spent: fall back to the default knife.
+    meleeWeapon_ = KNIFE;
+    if (lungeMine) lungeMine->setAmmo(0);
+    if (networkClient && networkClient->isConnected()) {
+        networkClient->sendMeleeUse(static_cast<uint8_t>(economy::ITEM_MELEE_LUNGE));
+    }
+    switchWeapon(KNIFE);
 }
 
 void Game::updateScope(float deltaTime) {

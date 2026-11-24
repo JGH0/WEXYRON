@@ -27,6 +27,22 @@ int main() {
     Game game(800, 600);
     game.init();
 
+    // ── "PLAY GAME" (solo practice) opens the buy menu with B ────────────────
+    {
+        game.debugOpenMenu("main");
+        CHECK(!game.debugCanOpenBuyMenuForTest());
+        CHECK(game.debugMenuSelect("PLAY GAME"));
+        game.debugMenuKey("enter");
+        std::printf("solo practice: state=%d canBuy=%d\n", game.debugGameState(),
+                    game.debugCanOpenBuyMenuForTest() ? 1 : 0);
+        CHECK(game.debugGameState() == 1);   // PLAYING
+        CHECK(game.debugCanOpenBuyMenuForTest());
+        game.debugOpenBuyMenuForTest();
+        CHECK(game.debugBuyMenuOpenForTest());
+        game.debugCloseBuyMenuForTest();
+        CHECK(!game.debugBuyMenuOpenForTest());
+    }
+
     const char* maps[] = {"simple.map", "arena.map", "large.map", "sniper.map",
                           "complex.map", "team_arena.map", "custom.map"};
 
@@ -150,11 +166,14 @@ int main() {
     // ── Mouse-wheel weapon switching ────────────────────────────────────────
     if (game.debugStartMapForTest("large.map")) {
         game.debugStepForTest(2, kDt);
+        // Only the knife is carried in the melee slot by default, so the wheel
+        // skips the other melee weapons. Forward then back must return home.
         const int startWeapon = game.debugWeaponForTest();
         game.debugScrollWeaponForTest(1);   // one notch down -> next weapon
         game.debugStepWithKeysForTest(kDt, {});
-        std::printf("weapon wheel: %d -> %d\n", startWeapon, game.debugWeaponForTest());
-        CHECK(game.debugWeaponForTest() == (startWeapon + 1) % 6);
+        const int nextWeapon = game.debugWeaponForTest();
+        std::printf("weapon wheel: %d -> %d\n", startWeapon, nextWeapon);
+        CHECK(nextWeapon != startWeapon);
         game.debugScrollWeaponForTest(-1);  // and back
         game.debugStepWithKeysForTest(kDt, {});
         CHECK(game.debugWeaponForTest() == startWeapon);
@@ -162,6 +181,7 @@ int main() {
 
     // ── Sniper bolt-action: rack on switch, cycle after each shot ───────────
     if (game.debugStartMapForTest("large.map")) {
+        game.debugBuyItemForTest(economy::ITEM_PRIMARY_SNIPER);  // one primary
         game.debugSelectWeaponForTest(2);   // switch to sniper
         CHECK(!game.debugWeaponCanShootForTest());   // must rack first
         game.debugStepForTest(60, kDt);
@@ -237,6 +257,10 @@ int main() {
         CHECK(!game.debugWeaponOwnedForTest(2));  // sniper
         CHECK(game.debugWeaponOwnedForTest(3));   // HE (round 1)
         CHECK(game.debugWeaponOwnedForTest(4));   // flash (round 1)
+        // Bought melee weapons are not free in the economic mode.
+        CHECK(!game.debugWeaponOwnedForTest(6));
+        CHECK(!game.debugWeaponOwnedForTest(7));
+        CHECK(!game.debugWeaponOwnedForTest(8));
         CHECK(game.debugCanOpenBuyMenuForTest());
 
         // Round-start freeze: movement is blocked until the freeze expires.
@@ -306,6 +330,15 @@ int main() {
         CHECK(game.debugBuyTimeLeftForTest() > 10.0f);
         CHECK(game.debugCurrentAmmo() == ammoAtRoundStart);
 
+        // Buying a heavier melee weapon charges the price and equips it.
+        game.debugBuyItemForTest(economy::ITEM_MELEE_MACE);
+        std::printf("bought mace: money=%d weapon=%d owned=%d\n",
+                    game.debugMoneyForTest(), game.debugWeaponForTest(),
+                    game.debugWeaponOwnedForTest(7) ? 1 : 0);
+        CHECK(game.debugWeaponOwnedForTest(7));
+        CHECK(game.debugWeaponForTest() == 7);
+        CHECK(game.debugMoneyForTest() == 1650 - economy::price(economy::ITEM_MELEE_MACE));
+
         // Once the freeze has expired, the first step closes the buy window.
         for (int i = 0; i < 700; ++i) game.debugStepForTest(1, kDt);
         CHECK(game.debugCanOpenBuyMenuForTest());
@@ -319,6 +352,50 @@ int main() {
         CHECK(game.debugWeaponOwnedForTest(2));
         CHECK(game.debugMoneyForTest() == 0);
         CHECK(game.debugCanOpenBuyMenuForTest());
+
+        // The pro pistol is a sidearm: buying it equips it, and the sidearm
+        // key toggles between it and the always-owned starter pistol.
+        CHECK(!game.debugWeaponOwnedForTest(9));
+        game.debugBuyItemForTest(economy::ITEM_SIDEARM_PRO_PISTOL);
+        CHECK(game.debugWeaponOwnedForTest(9));
+        CHECK(game.debugWeaponForTest() == 9);
+        game.debugSelectWeaponSlotForTest(1);
+        CHECK(game.debugWeaponForTest() == 0);   // back to the starter pistol
+        game.debugSelectWeaponSlotForTest(1);
+        CHECK(game.debugWeaponForTest() == 9);   // and the pro pistol again
+
+        // The melee slot holds exactly one weapon: the knife by default, and a
+        // bought weapon replaces it. Each is a separate shop item.
+        CHECK(game.debugWeaponOwnedForTest(5));   // knife
+        CHECK(!game.debugWeaponOwnedForTest(6));
+        CHECK(!game.debugWeaponOwnedForTest(7));
+        CHECK(!game.debugWeaponOwnedForTest(8));
+
+        game.debugBuyItemForTest(economy::ITEM_MELEE_AXE);
+        CHECK(game.debugWeaponOwnedForTest(6));
+        CHECK(!game.debugWeaponOwnedForTest(5));   // replaced by the axe
+        CHECK(game.debugWeaponForTest() == 6);
+
+        // Key 3 equips the carried melee weapon (no cycling).
+        game.debugSelectWeaponForTest(0);
+        game.debugSelectWeaponSlotForTest(2);
+        CHECK(game.debugWeaponForTest() == 6);
+
+        game.debugBuyItemForTest(economy::ITEM_MELEE_LUNGE);
+        CHECK(game.debugWeaponForTest() == 8);
+        CHECK(!game.debugWeaponOwnedForTest(6));   // replaced by the lunge mine
+
+        // The lunge mine is single-use: it blasts, hurts the user a little and
+        // leaves the player holding the knife again.
+        const float healthBeforeLunge = game.debugPlayerHealth();
+        game.debugShootAndStepForTest();
+        std::printf("lunge mine: weapon=%d owned=%d health %.0f -> %.0f\n",
+                    game.debugWeaponForTest(), game.debugWeaponOwnedForTest(8) ? 1 : 0,
+                    healthBeforeLunge, game.debugPlayerHealth());
+        CHECK(game.debugWeaponForTest() == 5);       // back to the knife
+        CHECK(!game.debugWeaponOwnedForTest(8));     // spent
+        CHECK(game.debugWeaponOwnedForTest(5));
+        CHECK(game.debugPlayerHealth() < healthBeforeLunge);
     }
 
     std::printf(failures ? "GAMEPLAY TEST: %d FAILURES\n" : "GAMEPLAY TEST: ALL OK\n", failures);

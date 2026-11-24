@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 
 // Deterministic smoke test for the menu framework. Runs with a real GL
 // context (Xvfb or a desktop) and drives the menu with synthetic input.
@@ -31,6 +32,16 @@ static menu::MenuInput noKey() {
 }
 
 int main() {
+    // This test rebinds keys, so it must never write the player's real
+    // settings file. CUBE_SETTINGS_PATH sends it to a scratch file instead.
+    const std::string settingsPath =
+        (std::filesystem::temp_directory_path() / "wexyron_menu_smoke_settings.cfg").string();
+#ifdef _WIN32
+    _putenv_s("CUBE_SETTINGS_PATH", settingsPath.c_str());
+#else
+    setenv("CUBE_SETTINGS_PATH", settingsPath.c_str(), 1);
+#endif
+
     Game game(800, 600);
     game.init();
 

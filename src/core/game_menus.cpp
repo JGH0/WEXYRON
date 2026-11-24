@@ -139,7 +139,6 @@ menu::MenuView& Game::activeMenuView() {
         case MAP_SELECTION:   return mapMenu_;
         case SERVER_CONNECT:  return serverMenu_;
         case TEAM_SETUP:      return teamMenu_;
-        case BUY_MENU:        return buyMenu_;
         case MENU:
         default:              return mainMenu_;
     }
@@ -151,7 +150,6 @@ const menu::MenuView& Game::activeMenuViewConst() const {
         case MAP_SELECTION:   return mapMenu_;
         case SERVER_CONNECT:  return serverMenu_;
         case TEAM_SETUP:      return teamMenu_;
-        case BUY_MENU:        return buyMenu_;
         case MENU:
         default:              return mainMenu_;
     }
@@ -230,15 +228,15 @@ void Game::openBuyMenu() {
     inp.resetNavKeys();
     inp.gameplayBuyPressed = bindingDown(keyBindings.buy);
     menuJustEntered = true;
-
-    buyMenu_.theme = menu::Theme();
-    buyMenu_.legend = {{"UP/DOWN", "SELECT"}, {"ENTER", "BUY"}, {"ESC", "CLOSE"}};
-    buyMenu_.onClose = [this]() { closeBuyMenu(); };
-    buyMenu_.hits.clear();
-    buyMenu_.hoverIndex = -1;
-
-    refreshBuyMenuRows();
     gameState = BUY_MENU;
+
+    buildBuyMenuEntries();
+    // Start on the first thing that can actually be bought.
+    buySelection_ = 0;
+    for (size_t i = 0; i < buyEntries_.size(); ++i) {
+        if (buyEntries_[i].available) { buySelection_ = static_cast<int>(i); break; }
+    }
+    playUiSound("ui_select");
 }
 
 void Game::closeBuyMenu() {
@@ -252,91 +250,269 @@ void Game::closeBuyMenu() {
     capturePlayCursor(true);
 }
 
-void Game::refreshBuyMenuRows() {
+void Game::buildBuyMenuEntries() {
+    if (!window) return;
     const bool economic = isEconomyMode();
     const bool buyOpen = canOpenBuyMenu();
-    const float shownLeft = isRoundFrozen() ? (freezeTime_ - roundAge_)
-                                            : buyTimeLeft_;
-    const int secondsLeft = static_cast<int>(std::max(0.0f, shownLeft) + 0.999f);
+    buyEntries_.clear();
 
-    std::string subtitle;
-    if (economic) {
-        const char* phase = isRoundFrozen() ? "FREEZE " : "BUY ";
-        subtitle = "BOMB DEFUSAL   $" + std::to_string(money_) + "   " +
-                   (buyOpen ? phase + std::to_string(secondsLeft) + "S"
-                            : std::string("BUY WINDOW CLOSED"));
-    } else {
-        subtitle = "FREE LOADOUT   EVERY ITEM IS FREE";
-    }
-
-    menu::Page page("BUY MENU", subtitle);
-
-    auto addItem = [&](economy::Item item, const std::string& label,
-                       bool owned, const std::string& ownedText) {
+    auto add = [&](economy::Item item, const char* label, int column, int row,
+                   bool owned) {
+        BuyEntry entry;
+        entry.item = item;
+        entry.label = label;
+        entry.owned = owned;
+        entry.column = column;
+        entry.row = row;
         const int cost = economy::price(item);
-        const bool canAfford = money_ >= cost;
-        const bool available = !economic || (buyOpen && !owned && canAfford);
-
-        menu::Row row = menu::action(label, [this, item]() { buyItem(item); },
-                                     economic
-                                         ? (buyOpen
-                                                ? (canAfford ? "Buy this item"
-                                                             : "Not enough money")
-                                                : "The buy window is closed")
-                                         : "Free loadout item");
         if (!economic) {
-            row.value = cost > 0 ? "FREE" : std::string();
+            entry.value = owned ? "EQUIPPED" : (cost > 0 ? "FREE" : "ALWAYS");
+            entry.available = true;
         } else if (owned) {
-            row.value = ownedText;
+            entry.value = "OWNED";
+            entry.available = false;
         } else {
-            row.value = "$" + std::to_string(cost);
+            entry.value = "$" + std::to_string(cost);
+            entry.available = buyOpen && money_ >= cost;
         }
-        row.enabled = available;
-        page.add(std::move(row));
+        buyEntries_.push_back(std::move(entry));
     };
 
+    // Column 0: gear. Column 1: primary. Column 2: sidearm. Column 3: melee
+    // (one at a time). Column 4: grenades.
+    add(economy::ITEM_KEVLAR, "KEVLAR VEST", 0, 0, armor_ >= 100);
+    add(economy::ITEM_DEFUSE_KIT, "DEFUSE KIT", 0, 1, defuseKit_);
+
+    add(economy::ITEM_PRIMARY_SHOTGUN, "PUMP SHOTGUN", 1, 0, hasPrimaryShotgun_);
+    add(economy::ITEM_PRIMARY_SNIPER, "SNIPER RIFLE", 1, 1, hasPrimarySniper_);
+
+    add(economy::ITEM_SIDEARM_PISTOL, "PISTOL", 2, 0, lastSidearm_ == PISTOL);
+    add(economy::ITEM_SIDEARM_PRO_PISTOL, "PRO PISTOL", 2, 1, hasProPistol_);
+
+    add(economy::ITEM_MELEE_KNIFE, "KNIFE", 3, 0, meleeWeapon_ == KNIFE);
+    add(economy::ITEM_MELEE_AXE, "BATTLE AXE", 3, 1, meleeWeapon_ == BATTLE_AXE);
+    add(economy::ITEM_MELEE_MACE, "MACE", 3, 2, meleeWeapon_ == MACE);
+    add(economy::ITEM_MELEE_LUNGE, "LUNGE MINE", 3, 3, meleeWeapon_ == LUNGE_MINE);
+
+    add(economy::ITEM_HE_GRENADE, "HE GRENADE", 4, 0, hasHEGrenade_);
+    add(economy::ITEM_FLASHBANG, "FLASHBANG", 4, 1, hasFlashbang_);
+
+    // Layout on the virtual canvas: five category columns, all on screen.
+    const UIHelpers::UIBounds b = UIHelpers::getBounds(window);
+    const float margin = 26.0f;
+    const int columns = 5;
+    const float gapX = 12.0f;
+    const float colW = (b.width() - 2.0f * margin - (columns - 1) * gapX) / columns;
+    const float gridTop = b.top + 92.0f;
+    const float gridBottom = b.bottom - 44.0f;
+    const float headerH = 22.0f;
+    const float gapY = 8.0f;
+    const int maxRows = 4;
+    const float tileH = std::min(96.0f,
+        ((gridBottom - gridTop) - headerH - (maxRows - 1) * gapY) / maxRows);
+    for (BuyEntry& entry : buyEntries_) {
+        entry.x = b.left + margin + static_cast<float>(entry.column) * (colW + gapX);
+        entry.y = gridTop + headerH + gapY +
+                  static_cast<float>(entry.row) * (tileH + gapY);
+        entry.w = colW;
+        entry.h = tileH;
+    }
+}
+
+void Game::moveBuySelection(int deltaColumn, int deltaRow) {
+    if (buyEntries_.empty()) return;
+    if (buySelection_ < 0 || buySelection_ >= static_cast<int>(buyEntries_.size())) {
+        buySelection_ = 0;
+        return;
+    }
+    const BuyEntry current = buyEntries_[static_cast<size_t>(buySelection_)];
+
+    if (deltaRow != 0) {
+        const int targetRow = current.row + deltaRow;
+        int best = -1;
+        int bestRow = -1;
+        for (size_t i = 0; i < buyEntries_.size(); ++i) {
+            const BuyEntry& entry = buyEntries_[i];
+            if (entry.column != current.column) continue;
+            const bool forward = deltaRow > 0;
+            const bool inRange = forward ? entry.row >= targetRow : entry.row <= targetRow;
+            if (!inRange) continue;
+            const bool better = best < 0 || (forward ? entry.row < bestRow
+                                                     : entry.row > bestRow);
+            if (better) { best = static_cast<int>(i); bestRow = entry.row; }
+        }
+        if (best >= 0) buySelection_ = best;
+        return;
+    }
+
+    if (deltaColumn != 0) {
+        int searchColumn = current.column + deltaColumn;
+        while (searchColumn >= 0 && searchColumn <= 4) {
+            int best = -1;
+            int bestDistance = 1 << 30;
+            for (size_t i = 0; i < buyEntries_.size(); ++i) {
+                const BuyEntry& entry = buyEntries_[i];
+                if (entry.column != searchColumn) continue;
+                const int distance = std::abs(entry.row - current.row);
+                if (distance < bestDistance) {
+                    bestDistance = distance;
+                    best = static_cast<int>(i);
+                }
+            }
+            if (best >= 0) { buySelection_ = best; return; }
+            searchColumn += deltaColumn > 0 ? 1 : -1;
+        }
+    }
+}
+
+void Game::renderBuyMenu() {
+    if (!window) return;
+    buildBuyMenuEntries();
+    const UIHelpers::UIBounds b = UIHelpers::getBounds(window);
+
+    auto quad = [&](float cx, float cy, float w, float h, const glm::vec3& color) {
+        glm::mat4 m = glm::translate(glm::mat4(1.0f), glm::vec3(cx, cy, 0.0f));
+        m = glm::scale(m, glm::vec3(w, h, 1.0f));
+        renderer.drawColoredQuad(m, color);
+    };
+    auto textRight = [&](const std::string& text, float rightX, float y,
+                         float scale, const glm::vec3& color) {
+        renderer.drawTextColored(text, rightX - renderer.getTextWidth(text, scale),
+                                 y, scale, color);
+    };
+
+    const glm::vec3 kBg(0.045f, 0.055f, 0.070f);
+    const glm::vec3 kPanel(0.070f, 0.085f, 0.110f);
+    const glm::vec3 kHeader(0.11f, 0.13f, 0.17f);
+    const glm::vec3 kTile(0.13f, 0.16f, 0.21f);
+    const glm::vec3 kTileSel(0.30f, 0.24f, 0.07f);
+    const glm::vec3 kTileOwned(0.10f, 0.20f, 0.13f);
+    const glm::vec3 kTileLocked(0.085f, 0.095f, 0.115f);
+    const glm::vec3 kGold(1.0f, 0.82f, 0.30f);
+    const glm::vec3 kGreen(0.35f, 0.90f, 0.42f);
+    const glm::vec3 kMuted(0.58f, 0.63f, 0.70f);
+
+    // Full-screen opaque backdrop (the menu is its own screen, not a pause
+    // overlay over the 3D scene).
+    quad(b.centerX(), b.centerY(), b.width(), b.height(), kBg);
+
+    const bool economic = isEconomyMode();
+    renderer.drawTextColored("BUY MENU", b.left + 26.0f, b.top + 12.0f, 0.80f, kGold);
+    textRight(economic ? ("$" + std::to_string(money_)) : "FREE LOADOUT",
+              b.right - 26.0f, b.top + 16.0f, 0.62f, kGreen);
+
+    std::string info;
     if (economic) {
-        page.add(menu::info("MONEY", "$" + std::to_string(money_),
-                            "Kills and round results earn money"));
+        const bool buyOpen = canOpenBuyMenu();
+        const float shownLeft = isRoundFrozen() ? (freezeTime_ - roundAge_)
+                                                : buyTimeLeft_;
+        const int seconds = static_cast<int>(std::max(0.0f, shownLeft) + 0.999f);
+        info = isRoundFrozen() ? "FREEZE " : "BUY WINDOW ";
+        info += buyOpen ? (std::to_string(seconds) + "S") : "CLOSED";
     } else {
-        page.add(menu::info("MONEY", "FREE",
-                            "Only Bomb Defusal uses the economy"));
+        info = "EVERYTHING IS FREE";
+    }
+    renderer.drawTextColored(info, b.left + 26.0f, b.top + 50.0f, 0.36f, kMuted);
+
+    const float margin = 26.0f;
+    const int columns = 5;
+    const float gapX = 12.0f;
+    const float colW = (b.width() - 2.0f * margin - (columns - 1) * gapX) / columns;
+    const float gridTop = b.top + 92.0f;
+    const float gridBottom = b.bottom - 44.0f;
+
+    static const char* const kHeaders[5] = {"GEAR", "PRIMARY", "SIDEARM",
+                                            "MELEE", "GRENADES"};
+    for (int c = 0; c < columns; ++c) {
+        const float x = b.left + margin + static_cast<float>(c) * (colW + gapX);
+        quad(x + colW * 0.5f, (gridTop + gridBottom) * 0.5f,
+             colW, gridBottom - gridTop, kPanel);
+        quad(x + colW * 0.5f, gridTop + 11.0f, colW, 22.0f, kHeader);
+        renderer.drawTextCentered(kHeaders[c], x + colW * 0.5f, gridTop + 2.0f, 0.40f);
     }
 
-    page.add(menu::separator("ARMOR"));
-    addItem(economy::ITEM_KEVLAR, "KEVLAR VEST", armor_ >= 100,
-            armor_ >= 100 ? "EQUIPPED" : ("ARMOR " + std::to_string(armor_)));
-    addItem(economy::ITEM_DEFUSE_KIT, "DEFUSE KIT", defuseKit_,
-            defuseKit_ ? "EQUIPPED" : std::string());
+    for (size_t i = 0; i < buyEntries_.size(); ++i) {
+        const BuyEntry& entry = buyEntries_[i];
+        const bool selected = static_cast<int>(i) == buySelection_;
+        glm::vec3 fill = entry.owned ? kTileOwned : (entry.available ? kTile : kTileLocked);
+        if (selected) fill = kTileSel;
 
-    page.add(menu::separator("PRIMARY  (1)"));
-    addItem(economy::ITEM_PRIMARY_SHOTGUN, "PUMP SHOTGUN", hasPrimaryShotgun_,
-            hasPrimaryShotgun_ ? "OWNED" : std::string());
-    addItem(economy::ITEM_PRIMARY_SNIPER, "SNIPER RIFLE", hasPrimarySniper_,
-            hasPrimarySniper_ ? "OWNED" : std::string());
+        quad(entry.x + entry.w * 0.5f, entry.y + entry.h * 0.5f,
+             entry.w - 2.0f, entry.h - 2.0f, fill);
+        if (selected) {
+            quad(entry.x + 2.0f, entry.y + entry.h * 0.5f, 3.0f, entry.h - 6.0f, kGold);
+        }
 
-    page.add(menu::separator("GRENADES  (4 / 5)"));
-    addItem(economy::ITEM_HE_GRENADE, "HE GRENADE", hasHEGrenade_,
-            hasHEGrenade_ ? "OWNED" : std::string());
-    addItem(economy::ITEM_FLASHBANG, "FLASHBANG", hasFlashbang_,
-            hasFlashbang_ ? "OWNED" : std::string());
-
-    page.add(menu::separator("ALWAYS EQUIPPED"));
-    page.add(menu::info("SIDEARM  (2)", "PISTOL"));
-    page.add(menu::info("MELEE  (3)", "KNIFE"));
-
-    page.add(menu::action("CLOSE", [this]() { closeBuyMenu(); },
-                          "Return to the match"));
-    page.rows.back().value = "ESC / B";
-
-    if (!buyMenu_.stack.current()) {
-        menu::begin(buyMenu_, std::move(page));
-    } else {
-        menu::replaceCurrent(buyMenu_, std::move(page));
+        renderer.drawTextFit(entry.label, entry.x + 9.0f, entry.y + 8.0f,
+                             entry.w - 18.0f, selected ? 0.46f : 0.42f);
+        const glm::vec3 valueColor = entry.owned ? kGreen
+                                                : (entry.available ? kGold : kMuted);
+        textRight(entry.value, entry.x + entry.w - 9.0f, entry.y + entry.h - 20.0f,
+                  0.38f, valueColor);
     }
-    lastBuyMenuMoney_ = money_;
-    lastBuyMenuSeconds_ = secondsLeft;
-    lastBuyMenuCanBuy_ = buyOpen;
+
+    renderer.drawTextCentered("ARROWS / MOUSE  SELECT      ENTER  BUY      B / ESC  CLOSE",
+                              b.centerX(), b.bottom - 28.0f, 0.36f);
+}
+
+void Game::processBuyMenuInput(float deltaTime) {
+    (void)deltaTime;
+    if (!window) return;
+    if (menuJustEntered) {
+        menuJustEntered = false;
+        return;
+    }
+
+    buildBuyMenuEntries();
+    if (buyEntries_.empty()) return;
+    if (buySelection_ < 0 || buySelection_ >= static_cast<int>(buyEntries_.size())) {
+        buySelection_ = 0;
+    }
+
+    // B / ESC close the screen.
+    if (bindingDown(keyBindings.buy)) {
+        if (!inp.gameplayBuyPressed) {
+            inp.gameplayBuyPressed = true;
+            closeBuyMenu();
+            return;
+        }
+    } else {
+        inp.gameplayBuyPressed = false;
+    }
+    if (menuKeyPressed(GLFW_KEY_ESCAPE, window)) {
+        closeBuyMenu();
+        return;
+    }
+
+    if (menuKeyPressed(GLFW_KEY_UP, window))    moveBuySelection(0, -1);
+    if (menuKeyPressed(GLFW_KEY_DOWN, window))  moveBuySelection(0, 1);
+    if (menuKeyPressed(GLFW_KEY_LEFT, window))  moveBuySelection(-1, 0);
+    if (menuKeyPressed(GLFW_KEY_RIGHT, window)) moveBuySelection(1, 0);
+
+    // Mouse hover selects; a click buys the hovered tile.
+    int hovered = -1;
+    for (size_t i = 0; i < buyEntries_.size(); ++i) {
+        const BuyEntry& entry = buyEntries_[i];
+        if (mouseGUIPosX >= entry.x && mouseGUIPosX <= entry.x + entry.w &&
+            mouseGUIPosY >= entry.y && mouseGUIPosY <= entry.y + entry.h) {
+            hovered = static_cast<int>(i);
+            break;
+        }
+    }
+    if (hovered >= 0) buySelection_ = hovered;
+
+    const bool enter = menuKeyPressed(GLFW_KEY_ENTER, window) ||
+                       menuKeyPressed(GLFW_KEY_KP_ENTER, window);
+    const bool click = mouseClicked && hovered >= 0;
+    if (enter || click) {
+        const BuyEntry& entry = buyEntries_[static_cast<size_t>(buySelection_)];
+        if (entry.available) {
+            buyItem(entry.item);
+            buildBuyMenuEntries();
+        } else {
+            playDryFire();
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

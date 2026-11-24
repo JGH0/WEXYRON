@@ -527,6 +527,20 @@ void NetworkClient::sendBuyAction(uint8_t item) {
     sendPacket(&packet, sizeof(packet));
 }
 
+void NetworkClient::sendMeleeUse(uint8_t weapon) {
+    if (!connected) return;
+
+    MeleeUsePacket packet{};
+    packet.header.magic = PACKET_MAGIC;
+    packet.header.type = PACKET_MELEE_USE;
+    packet.header.sequence = sequence++;
+    packet.header.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    packet.header.clientId = clientId;
+    packet.weapon = weapon;
+    sendPacket(&packet, sizeof(packet));
+}
+
 void NetworkClient::update() {
     if ((!connected && !connecting) || socketFd == SOCKET_INVALID) return;
 
@@ -1203,6 +1217,15 @@ void NetworkServer::processPacket(const void* data, size_t size, const sockaddr_
             break;
         }
 
+        case PACKET_MELEE_USE: {
+            if (size < sizeof(MeleeUsePacket)) return;
+            const MeleeUsePacket* request = (const MeleeUsePacket*)data;
+            ServerPlayer* player = findPlayerByAddress(from);
+            if (!player || !player->active) break;
+            if (onMeleeUse) onMeleeUse(player->id, *request);
+            break;
+        }
+
         case PACKET_MAP_CHANGE: {
             if (size < sizeof(MapChangePacket)) return;
 
@@ -1284,7 +1307,7 @@ void NetworkServer::broadcastPlayerState(uint32_t playerId, const glm::vec3& pos
     auto stateIt = players.find(playerId);
     packet.team = (stateIt != players.end()) ? stateIt->second.team : 0;
     packet.stance = (stateIt != players.end()) ? stateIt->second.stance : 0;
-    packet.weaponId = (stateIt != players.end()) ? (stateIt->second.weaponId % 6) : 0;
+    packet.weaponId = (stateIt != players.end()) ? (stateIt->second.weaponId % 10) : 0;
     if (stateIt != players.end()) {
         packet.header.sequence = ++stateIt->second.stateSequence;
     }
@@ -1432,7 +1455,7 @@ void NetworkServer::broadcastPlayerStateToMap(uint32_t playerId, const std::stri
     auto stateIt = players.find(playerId);
     packet.team = (stateIt != players.end()) ? stateIt->second.team : 0;
     packet.stance = (stateIt != players.end()) ? stateIt->second.stance : 0;
-    packet.weaponId = (stateIt != players.end()) ? (stateIt->second.weaponId % 6) : 0;
+    packet.weaponId = (stateIt != players.end()) ? (stateIt->second.weaponId % 10) : 0;
     if (stateIt != players.end()) {
         packet.header.sequence = ++stateIt->second.stateSequence;
     }

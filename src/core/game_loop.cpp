@@ -377,9 +377,19 @@ void Game::render() {
             renderer.drawText(fpsBuf, 4.0f, 8.0f, 0.46f);
         }
 
+    } else if (gameState == BUY_MENU) {
+        // Counter-Strike-style buy screen: a custom grid, not the menu stack.
+        UIHelpers::setProjection(renderer, window);
+        renderBuyMenu();
+        if (showFps) {
+            char fpsBuf[32];
+            snprintf(fpsBuf, sizeof(fpsBuf), "FPS: %d", fpsDisplayValue);
+            renderer.drawText(fpsBuf, 4.0f, 8.0f, 0.46f);
+        }
+
     } else if (gameState == MENU || gameState == SETTINGS ||
                gameState == MAP_SELECTION || gameState == SERVER_CONNECT ||
-               gameState == TEAM_SETUP || gameState == BUY_MENU) {
+               gameState == TEAM_SETUP) {
         // All menu screens are drawn by the menu framework (ui/menu.hpp);
         // the view decides title, rows and footer.
         UIHelpers::setProjection(renderer, window);

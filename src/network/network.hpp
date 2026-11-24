@@ -67,7 +67,8 @@ enum PacketType : uint8_t {
     PACKET_MATCH_STATE = 24,       // Server -> clients team kill scores
     PACKET_LOBBY_START = 25,       // Server -> lobby players: match is starting
     PACKET_BUY_ACTION = 26,        // Client -> server buy-menu request (validated)
-    PACKET_ECONOMY_STATE = 27      // Server -> client authoritative money/loadout
+    PACKET_ECONOMY_STATE = 27,     // Server -> client authoritative money/loadout
+    PACKET_MELEE_USE = 28          // Client -> server: a one-use melee was spent
 };
 
 /// Client action in BombInteractPacket.
@@ -297,6 +298,15 @@ struct EconomyStatePacket {
     uint8_t grenades;          ///< bit 0 = HE, bit 1 = flashbang
     uint8_t buyAllowed;        ///< 1 = buy phase still open
     uint8_t economic;          ///< 1 = money/loadout is authoritative
+    uint8_t melee;             ///< equipped melee weapon id (economy::MeleeWeapon)
+    uint8_t sidearm;           ///< 0 = starter pistol, 1 = pro pistol owned
+};
+
+/// Client tells the server a one-use melee weapon was spent, so the
+/// authoritative loadout can drop it.
+struct MeleeUsePacket {
+    PacketHeader header;
+    uint8_t weapon;            ///< economy::Item of the melee weapon used
 };
 
 /// Server-authoritative bomb state for a map. Broadcast on changes and a few
@@ -477,6 +487,9 @@ public:
     /// Ask the server to buy one buy-menu item (economy::Item).
     void sendBuyAction(uint8_t item);
 
+    /// Tell the server a one-use melee weapon was spent.
+    void sendMeleeUse(uint8_t weapon);
+
     // Send a keepalive PING (update() does this on its own every second)
     void sendPing();
 
@@ -562,8 +575,11 @@ struct ServerPlayer {
     uint8_t armor = 0;
     bool defuseKit = false;
     uint8_t primary = 0;  ///< 0 = none, 1 = shotgun, 2 = sniper
+    /// Sidearm: 0 = starter pistol, 1 = pro pistol owned.
+    uint8_t sidearm = 0;
     bool hasHEGrenade = false;
     bool hasFlashbang = false;
+    uint8_t melee = 5;    ///< equipped melee weapon id (economy::MeleeWeapon)
     int lossStreak = 0;
     bool economyInitialised = false; ///< round-1 loadout was applied
     bool buyWindowClosed = false;    ///< moved after the freeze: no more buys
@@ -680,6 +696,8 @@ public:
     std::function<void(uint32_t, uint8_t)> onBombInteract;
     /// A client asked to buy an item (validated sender id, packet).
     std::function<void(uint32_t, const BuyActionPacket&)> onBuyAction;
+    /// A client reports a one-use melee (e.g. lunge mine) was spent.
+    std::function<void(uint32_t, const MeleeUsePacket&)> onMeleeUse;
     /// A client sent its pre-match team / bot setup.
     std::function<void(uint32_t, const LobbySetupPacket&)> onLobbySetup;
     

@@ -17,7 +17,11 @@ public:
         SNIPER,
         GRENADE,
         FLASHBANG,
-        KNIFE
+        KNIFE,           ///< melee slot: always-owned starter knife
+        BATTLE_AXE,      ///< melee slot: bought heavy axe
+        MACE,            ///< melee slot: bought heavy mace
+        LUNGE_MINE,      ///< melee slot: one-use forward blast
+        PRO_PISTOL       ///< sidearm: semi-automatic pistol (one shot per click)
     };
 
 protected:
@@ -35,6 +39,8 @@ public:
     
     virtual bool canShoot() const;
     virtual void shoot(Game* game) = 0;
+    /// Secondary attack (right mouse while a melee weapon is held).
+    virtual void altAttack(Game* game) {}
     virtual void updateCooldown(float deltaTime);
     virtual void reload() {}
     
@@ -60,6 +66,20 @@ public:
 class Pistol : public Weapon {
 public:
     Pistol(bool infiniteAmmo = false);
+    void shoot(Game* game) override;
+};
+
+/**
+ * @brief Pro pistol: a bought sidearm with pistol bullets.
+ *
+ * Semi-automatic: every left click fires exactly one round. There is no
+ * automatic fire while the button is held and no rate limit beyond the
+ * player's clicking speed. Ammo, projectile type and damage match the
+ * starter pistol.
+ */
+class ProPistol : public Weapon {
+public:
+    ProPistol(bool infiniteAmmo = false);
     void shoot(Game* game) override;
 };
 
@@ -103,13 +123,54 @@ public:
  * @brief Plain close-range knife (melee slot).
  *
  * The melee slot is meant to hold several purchasable melee weapons later;
- * this is the always-owned starter knife.
+ * this is the always-owned starter knife. Left mouse slashes quickly, the
+ * scope/right-mouse binding performs a slower, harder stab.
  */
 class Knife : public Weapon {
 public:
+    /// Left-click slash: quick, moderate damage.
+    static constexpr float kSlashCooldown = 0.55f;
+    /// Right-click stab: slower recovery, much higher damage.
+    static constexpr float kStabCooldown = 1.15f;
+
     Knife();
     bool canShoot() const override;
     void shoot(Game* game) override;
+    /// Slower, higher-damage stab (right mouse while the knife is held).
+    void altAttack(Game* game) override;
+};
+
+/// Heavy battle axe: slow swings, high damage.
+class BattleAxe : public Weapon {
+public:
+    static constexpr float kSwingCooldown = 0.95f;
+    static constexpr float kHeavyCooldown = 1.6f;
+
+    BattleAxe();
+    bool canShoot() const override;
+    void shoot(Game* game) override;
+    void altAttack(Game* game) override;
+};
+
+/// Heavy mace: slow blunt swings.
+class Mace : public Weapon {
+public:
+    static constexpr float kSwingCooldown = 0.85f;
+    static constexpr float kHeavyCooldown = 1.5f;
+
+    Mace();
+    bool canShoot() const override;
+    void shoot(Game* game) override;
+    void altAttack(Game* game) override;
+};
+
+/// One-use lunge mine: detonates forward and hurts the user a little.
+class LungeMine : public Weapon {
+public:
+    LungeMine();
+    bool canShoot() const override;
+    void shoot(Game* game) override;
+    void altAttack(Game* game) override;
 };
 
 #endif

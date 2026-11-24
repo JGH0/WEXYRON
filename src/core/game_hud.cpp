@@ -374,11 +374,13 @@ void Game::renderGameHUD() {
     }
 
     // ── Weapon + ammo (bottom-right) ────────────────────────────────────────
-    static const char* const kWeaponNames[6] = {"PISTOL", "SHOTGUN", "SNIPER",
-                                                "GRENADE", "FLASHBANG", "KNIFE"};
-    static const char* const kSlotNames[5]   = {"PRIMARY", "SIDEARM", "KNIFE",
+    static const char* const kWeaponNames[10] = {"PISTOL", "SHOTGUN", "SNIPER",
+                                                 "GRENADE", "FLASHBANG", "KNIFE",
+                                                 "BATTLE AXE", "MACE", "LUNGE MINE",
+                                                 "PRO PISTOL"};
+    static const char* const kSlotNames[5]   = {"PRIMARY", "SIDEARM", "MELEE",
                                                 "GRENADE", "FLASH"};
-    const int weaponIndex = glm::clamp(static_cast<int>(currentWeapon), 0, 5);
+    const int weaponIndex = glm::clamp(static_cast<int>(currentWeapon), 0, 9);
 
     // Three rows of two slots (the fifth slot sits alone in the last row).
     const float weaponW = 250.0f, weaponH = 152.0f;
@@ -391,11 +393,14 @@ void Game::renderGameHUD() {
                          weaponW - 24.0f, 0.46f);
 
     std::string ammoStr;
-    if (weaponIndex == static_cast<int>(KNIFE)) {
+    if (weaponIndex == static_cast<int>(LUNGE_MINE)) {
+        ammoStr = "x" + std::to_string(currentWeaponInstance ? currentWeaponInstance->getAmmo() : 0);
+    } else if (isMeleeWeapon(currentWeapon)) {
         ammoStr = "--";
     } else if (infiniteAmmoMode) {
         ammoStr = "INF";
     } else if (weaponIndex == static_cast<int>(PISTOL) ||
+               weaponIndex == static_cast<int>(PRO_PISTOL) ||
                weaponIndex == static_cast<int>(PUMP_SHOTGUN) ||
                weaponIndex == static_cast<int>(SNIPER)) {
         ammoStr = std::to_string(currentWeaponInstance ? currentWeaponInstance->getAmmo() : 0);
@@ -409,8 +414,8 @@ void Game::renderGameHUD() {
     // cycles between the owned shotgun / sniper).
     const int selectedSlot =
         (currentWeapon == PUMP_SHOTGUN || currentWeapon == SNIPER) ? 0 :
-        (currentWeapon == PISTOL)  ? 1 :
-        (currentWeapon == KNIFE)   ? 2 :
+        (currentWeapon == PISTOL || currentWeapon == PRO_PISTOL) ? 1 :
+        isMeleeWeapon(currentWeapon) ? 2 :
         (currentWeapon == GRENADE) ? 3 : 4;
     for (int i = 0; i < 5; ++i) {
         const float slotW = 112.0f, slotH = 18.0f;
@@ -584,8 +589,12 @@ void Game::updateWeaponViewmodel(float deltaTime) {
         weaponInspect_ = std::max(0.0f, weaponInspect_ - deltaTime);
     }
     // Knife slash runs on its own clock as well.
-    if (knifeSwing_ > 0.0f) {
-        knifeSwing_ = std::max(0.0f, knifeSwing_ - deltaTime);
+    if (meleeLight_ > 0.0f) {
+        meleeLight_ = std::max(0.0f, meleeLight_ - deltaTime);
+    }
+    // Knife stab (right mouse) is slower and has its own clock.
+    if (meleeHeavy_ > 0.0f) {
+        meleeHeavy_ = std::max(0.0f, meleeHeavy_ - deltaTime);
     }
 
     // Walk bob follows the actual horizontal speed, and only while grounded.
@@ -647,23 +656,49 @@ void Game::renderWeaponViewmodel() {
     const float inspectEnv = std::sin(3.14159265358979f *
                                       glm::clamp(inspectP, 0.0f, 1.0f));
 
-    // Knife slash: a quick sweep across the view instead of the muzzle kick
-    // used by firearms. The envelope is zero at both ends, so the blade returns
-    // to the idle pose without snapping.
-    float knifeSlash = 0.0f;
-    if (currentWeapon == KNIFE && knifeSwing_ > 0.0f) {
-        const float p = glm::clamp(1.0f - knifeSwing_ / kKnifeSwingDuration, 0.0f, 1.0f);
-        knifeSlash = std::sin(3.14159265358979f * p);
+    // Melee: the light attack is a short cut/chop, the heavy attack is a
+    // slower thrust/overhead. Both envelopes are zero at the ends, so the
+    // weapon returns to the idle pose without snapping.
+    float lightEnv = 0.0f;
+    float heavyEnv = 0.0f;
+    if (isMeleeWeapon(currentWeapon)) {
+        if (meleeLight_ > 0.0f) {
+            const float p = glm::clamp(1.0f - meleeLight_ / kMeleeLightDuration, 0.0f, 1.0f);
+            lightEnv = std::sin(3.14159265358979f * p);
+        }
+        if (meleeHeavy_ > 0.0f) {
+            const float p = glm::clamp(1.0f - meleeHeavy_ / kMeleeHeavyDuration, 0.0f, 1.0f);
+            heavyEnv = std::sin(3.14159265358979f * p);
+        }
+    }
+
+    // Per-weapon melee idle/attack angles and forward travel.
+    float idlePitch = 60.0f;
+    float lightPitch = -46.0f, lightYaw = -9.0f, lightRoll = 6.0f, lightPush = 0.14f;
+    float heavyPitch = -60.0f, heavyYaw = 0.0f, heavyRoll = 5.0f, heavyPush = 0.33f;
+    if (currentWeapon == BATTLE_AXE) {
+        idlePitch = 55.0f;
+        lightPitch = -62.0f; lightYaw = -18.0f; lightRoll = 10.0f; lightPush = 0.10f;
+        heavyPitch = -88.0f; heavyYaw = 0.0f;   heavyRoll = 4.0f;  heavyPush = 0.08f;
+    } else if (currentWeapon == MACE) {
+        idlePitch = 58.0f;
+        lightPitch = -55.0f; lightYaw = -12.0f; lightRoll = 8.0f; lightPush = 0.10f;
+        heavyPitch = -82.0f; heavyYaw = 0.0f;   heavyRoll = 3.0f; heavyPush = 0.08f;
+    } else if (currentWeapon == LUNGE_MINE) {
+        idlePitch = 32.0f;
+        lightPitch = -32.0f; lightYaw = 0.0f; lightRoll = 0.0f; lightPush = 0.26f;
+        heavyPitch = -32.0f; heavyYaw = 0.0f; heavyRoll = 0.0f; heavyPush = 0.30f;
     }
 
     // The gun sits in the lower-right quadrant but above the weapon HUD panel,
     // so both stay readable. The slight inward yaw shows the side of the model
     // instead of looking straight down the barrel.
     const glm::vec3 base(
-        0.23f + bobX + weaponSwayX_ - inspectEnv * 0.175f - knifeSlash * 0.02f,
+        0.23f + bobX + weaponSwayX_ - inspectEnv * 0.175f - lightEnv * 0.02f,
         -0.11f + bobY + weaponSwayY_ - weaponSwitch_ * 0.18f + inspectEnv * 0.075f
-            - knifeSlash * 0.13f,
-        -0.64f + weaponRecoil_ * 0.07f + inspectEnv * 0.075f - knifeSlash * 0.20f);
+            - lightEnv * 0.05f + heavyEnv * 0.01f,
+        -0.64f + weaponRecoil_ * 0.07f + inspectEnv * 0.075f
+            - lightEnv * lightPush - heavyEnv * heavyPush);
 
     glm::mat4 model = glm::translate(glm::mat4(1.0f), base);
     model = glm::rotate(model, glm::radians(18.0f + inspectEnv * 105.0f),
@@ -672,14 +707,22 @@ void Game::renderWeaponViewmodel() {
                         glm::vec3(1.0f, 0.0f, 0.0f));
     model = glm::rotate(model, glm::radians(weaponRecoil_ * 2.5f + inspectEnv * 20.0f),
                         glm::vec3(0.0f, 0.0f, 1.0f));
-    if (knifeSlash > 0.0f) {
-        // Forward-down chop: the blade pitches down and thrusts forward rather
-        // than sweeping sideways.
-        model = glm::rotate(model, glm::radians(-8.0f * knifeSlash),
-                            glm::vec3(0.0f, 1.0f, 0.0f));
-        model = glm::rotate(model, glm::radians(-80.0f * knifeSlash),
+    if (isMeleeWeapon(currentWeapon)) {
+        // Idle: upright, lightly angled forward. Firearms never get here.
+        model = glm::rotate(model, glm::radians(idlePitch), glm::vec3(1.0f, 0.0f, 0.0f));
+        // Light attack.
+        model = glm::rotate(model, glm::radians(lightPitch * lightEnv),
                             glm::vec3(1.0f, 0.0f, 0.0f));
-        model = glm::rotate(model, glm::radians(12.0f * knifeSlash),
+        model = glm::rotate(model, glm::radians(lightYaw * lightEnv),
+                            glm::vec3(0.0f, 1.0f, 0.0f));
+        model = glm::rotate(model, glm::radians(lightRoll * lightEnv),
+                            glm::vec3(0.0f, 0.0f, 1.0f));
+        // Heavy attack.
+        model = glm::rotate(model, glm::radians(heavyPitch * heavyEnv),
+                            glm::vec3(1.0f, 0.0f, 0.0f));
+        model = glm::rotate(model, glm::radians(heavyYaw * heavyEnv),
+                            glm::vec3(0.0f, 1.0f, 0.0f));
+        model = glm::rotate(model, glm::radians(heavyRoll * heavyEnv),
                             glm::vec3(0.0f, 0.0f, 1.0f));
     }
     // The model is authored roughly at world scale; shrink it as a whole so it
@@ -717,20 +760,23 @@ void Game::renderWeaponViewmodel() {
     };
 
     const int weaponIndex = static_cast<int>(currentWeapon);
-    const bool useModel = weaponIndex >= 0 && weaponIndex < 5 &&
-                          weaponModels_[weaponIndex] &&
-                          weaponModels_[weaponIndex]->isLoaded();
+    // The pro pistol shares the starter pistol's viewmodel asset.
+    const int modelIndex = (currentWeapon == PRO_PISTOL) ? 0 : weaponIndex;
+    const bool useModel = modelIndex >= 0 && modelIndex < 5 &&
+                          weaponModels_[modelIndex] &&
+                          weaponModels_[modelIndex]->isLoaded();
 
     if (useModel) {
-        GltfInstance& instance = weaponModelAnims_[weaponIndex];
+        GltfInstance& instance = weaponModelAnims_[modelIndex];
         instance.setPose(-1, 0.0f, 0.0f);
         instance.update();
-        renderer.submitViewModelModel(weaponModels_[weaponIndex].get(), &instance, model);
+        renderer.submitViewModelModel(weaponModels_[modelIndex].get(), &instance, model);
 
         // The weapon asset is the gun only (no hands/arms); only the muzzle
         // flash is dynamic.
         switch (currentWeapon) {
             case PISTOL:
+            case PRO_PISTOL:
                 if (weaponRecoil_ > 0.40f) {
                     add(glm::vec3(0.0f, 0.025f, -0.43f), glm::vec3(0.10f, 0.10f, 0.12f),
                         glm::vec3(1.0f, 0.78f, 0.22f));
@@ -755,7 +801,8 @@ void Game::renderWeaponViewmodel() {
     // Fallback: the original procedural viewmodel, used when an asset is
     // missing or fails to load.
     switch (currentWeapon) {
-        case PISTOL: {
+        case PISTOL:
+        case PRO_PISTOL: {
             const glm::vec3 metal(0.40f, 0.42f, 0.46f);
             const glm::vec3 dark(0.20f, 0.20f, 0.22f);
             add(glm::vec3(0.0f, 0.025f, -0.16f), glm::vec3(0.075f, 0.065f, 0.36f), metal);
@@ -867,19 +914,54 @@ void Game::renderWeaponViewmodel() {
             break;
         }
         case KNIFE: {
-            const glm::vec3 steel(0.62f, 0.65f, 0.70f);
-            const glm::vec3 edge(0.82f, 0.85f, 0.90f);
+            const glm::vec3 steel(0.66f, 0.69f, 0.74f);
             const glm::vec3 grip(0.12f, 0.11f, 0.10f);
-            // Blade: a flat, slightly tapered block pointing forward.
-            add(glm::vec3(0.0f, 0.020f, -0.34f), glm::vec3(0.022f, 0.075f, 0.42f), steel,
-                glm::vec3(0.0f, 0.0f, 2.0f));
-            add(glm::vec3(0.0f, 0.020f, -0.55f), glm::vec3(0.018f, 0.040f, 0.08f), edge);
-            // Guard + handle + pommel.
-            add(glm::vec3(0.0f, -0.005f, -0.12f), glm::vec3(0.110f, 0.022f, 0.035f), steel);
-            add(glm::vec3(0.0f, -0.010f, -0.02f), glm::vec3(0.055f, 0.060f, 0.20f), grip,
-                glm::vec3(0.0f, 0.0f, 0.0f));
-            add(glm::vec3(0.0f, -0.010f, 0.090f), glm::vec3(0.070f, 0.075f, 0.035f), steel);
-            // No hands/arms: the knife is just a blade and a handle.
+            // Deliberately simple: one rectangular handle and one thinner,
+            // longer rectangular blade. No hands, guard or pommel.
+            add(glm::vec3(0.0f, -0.010f, 0.020f),
+                glm::vec3(0.055f, 0.060f, 0.20f), grip);
+            add(glm::vec3(0.0f, 0.010f, -0.315f),
+                glm::vec3(0.028f, 0.080f, 0.47f), steel);
+            break;
+        }
+        case BATTLE_AXE: {
+            const glm::vec3 wood(0.42f, 0.27f, 0.14f);
+            const glm::vec3 steel(0.66f, 0.69f, 0.75f);
+            // One rectangular prism as the stick.
+            add(glm::vec3(0.0f, -0.010f, 0.030f),
+                glm::vec3(0.042f, 0.042f, 0.62f), wood);
+            // One thin blade, turned 90 degrees around the handle and running
+            // longer along it (a single piece, no separate edge strip).
+            add(glm::vec3(0.0f, 0.000f, -0.290f),
+                glm::vec3(0.022f, 0.210f, 0.340f), steel);
+            break;
+        }
+        case MACE: {
+            const glm::vec3 shaft(0.20f, 0.19f, 0.18f);
+            const glm::vec3 steel(0.45f, 0.47f, 0.50f);
+            const glm::vec3 spike(0.58f, 0.60f, 0.64f);
+            // Handle, a heavy head, and four short spikes.
+            add(glm::vec3(0.0f, -0.010f, 0.030f),
+                glm::vec3(0.040f, 0.040f, 0.58f), shaft);
+            add(glm::vec3(0.0f, 0.010f, -0.320f),
+                glm::vec3(0.14f, 0.14f, 0.14f), steel);
+            add(glm::vec3(0.0f, 0.010f, -0.425f), glm::vec3(0.055f, 0.055f, 0.07f), spike);
+            add(glm::vec3(0.0f, 0.010f, -0.215f), glm::vec3(0.055f, 0.055f, 0.06f), spike);
+            add(glm::vec3(0.095f, 0.010f, -0.320f), glm::vec3(0.07f, 0.055f, 0.055f), spike);
+            add(glm::vec3(-0.095f, 0.010f, -0.320f), glm::vec3(0.07f, 0.055f, 0.055f), spike);
+            break;
+        }
+        case LUNGE_MINE: {
+            const glm::vec3 rod(0.30f, 0.30f, 0.32f);
+            const glm::vec3 charge(0.55f, 0.16f, 0.12f);
+            const glm::vec3 nose(0.14f, 0.14f, 0.15f);
+            // A stick with a shaped charge on the front.
+            add(glm::vec3(0.0f, -0.010f, 0.040f),
+                glm::vec3(0.036f, 0.036f, 0.58f), rod);
+            add(glm::vec3(0.0f, 0.010f, -0.320f),
+                glm::vec3(0.15f, 0.15f, 0.18f), charge);
+            add(glm::vec3(0.0f, 0.010f, -0.440f),
+                glm::vec3(0.10f, 0.10f, 0.08f), nose);
             break;
         }
     }
@@ -888,6 +970,8 @@ void Game::renderWeaponViewmodel() {
 
 void Game::renderActorWeapon(const glm::mat4& actorRoot, GltfInstance& actorPose,
                              uint8_t weaponId, float yaw, float pitch) {
+    // The pro pistol reuses the starter pistol's model on other actors.
+    if (weaponId == 9) weaponId = 0;
     if (weaponId >= 5 || !weaponModels_[weaponId] ||
         !weaponModels_[weaponId]->isLoaded()) {
         return;

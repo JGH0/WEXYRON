@@ -11,8 +11,8 @@ the game, open an issue describing the idea and how it would improve gameplay.
 
 ### Single Player
 - 3D first-person shooter gameplay
-- Weapon slots: 1 primary (shotgun / sniper), 2 sidearm (pistol), 3 knife,
-  4 HE grenade, 5 flashbang
+- Weapon slots: 1 primary (shotgun / sniper), 2 sidearm (pistol / pro pistol), 3 melee
+  (knife / battle axe / mace / lunge mine), 4 HE grenade, 5 flashbang
 - Bomb Defusal economy: money for kills and round results, loss bonus, a
   time-limited buy phase (B), kevlar armor, defuse kits and primary/grenade
   purchases; every other mode uses the same menu with free items
@@ -117,12 +117,12 @@ make clean && make
 - **C**: Lie down / get up (crawl while lying down; toggle or hold in Settings)
 
 ### Weapons
-- **Left Mouse**: Shoot / swing / throw
-- **Right Mouse (hold)**: Scope with the sniper rifle
+- **Left Mouse**: Shoot / slash / throw
+- **Right Mouse (hold)**: Scope with the sniper rifle; heavy attack with melee
 - **Mouse wheel**: Previous / next weapon (the wheel no longer zooms)
-- **1**: Primary (cycles the owned shotgun / sniper)
-- **2**: Sidearm (pistol)
-- **3**: Knife (melee)
+- **1**: Primary (the carried shotgun or sniper — only one at a time)
+- **2**: Sidearm (pistol / pro pistol — press again to toggle)
+- **3**: Melee (equips the carried melee weapon: knife, axe, mace or lunge mine)
 - **4**: HE Grenade
 - **5**: Flashbang
 - **G**: Toggle Grenade / Flashbang

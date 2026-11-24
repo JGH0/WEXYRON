@@ -22,7 +22,22 @@ enum Item : uint8_t {
     ITEM_PRIMARY_SHOTGUN = 3, ///< pump shotgun in the primary slot
     ITEM_PRIMARY_SNIPER = 4,  ///< sniper rifle in the primary slot
     ITEM_HE_GRENADE = 5,      ///< one HE grenade in slot 4
-    ITEM_FLASHBANG = 6        ///< one flashbang in slot 5
+    ITEM_FLASHBANG = 6,       ///< one flashbang in slot 5
+    ITEM_MELEE_AXE = 7,       ///< battle axe in the melee slot (3)
+    ITEM_MELEE_MACE = 8,      ///< mace in the melee slot (3)
+    ITEM_MELEE_LUNGE = 9,     ///< one-use lunge mine in the melee slot (3)
+    ITEM_MELEE_KNIFE = 10,    ///< equip the default knife again (free)
+    ITEM_SIDEARM_PISTOL = 11, ///< equip the always-owned starter pistol (free)
+    ITEM_SIDEARM_PRO_PISTOL = 12 ///< pro pistol in the sidearm slot (semi-auto)
+};
+
+/// Equipped melee weapon ids, matching the Game / Weapon WeaponType values.
+/// Only one melee weapon is carried at a time; the knife is the fallback.
+enum MeleeWeapon : uint8_t {
+    MELEE_KNIFE = 5,
+    MELEE_AXE = 6,
+    MELEE_MACE = 7,
+    MELEE_LUNGE = 8
 };
 
 /// Starting money for a fresh match.
@@ -53,6 +68,12 @@ inline int price(Item item) {
         case ITEM_PRIMARY_SNIPER:  return 4750;
         case ITEM_HE_GRENADE:      return 300;
         case ITEM_FLASHBANG:       return 200;
+        case ITEM_MELEE_AXE:       return 600;
+        case ITEM_MELEE_MACE:      return 800;
+        case ITEM_MELEE_LUNGE:     return 1000;
+        case ITEM_MELEE_KNIFE:     return 0;      // always free to re-equip
+        case ITEM_SIDEARM_PISTOL:  return 0;      // always owned
+        case ITEM_SIDEARM_PRO_PISTOL: return 800;
         default:                   return 0;
     }
 }
